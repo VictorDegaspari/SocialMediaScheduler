@@ -5,15 +5,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {packDefaultsSchema,PACK_ROOT,PACK_CATALOG_URL} from '../src/pack-config.js';
 process.env.ENCRYPTION_KEY||='00'.repeat(32);
+const temp=await mkdtemp(join(tmpdir(),'watcher-pack-'));process.env.DATA_DIR=temp;
 const {PackSource,parsePackCatalog,packMetadata}=await import('../src/pack-source.js');
 const {BrowserJournal}=await import('../src/browser-tiktok.js');
-const temp=await mkdtemp(join(tmpdir(),'watcher-pack-'));
 const original=globalThis.fetch;
 const catalog=[{t:'Vídeo 0001',type:'v',drive:'allowed-video-001'},{t:'Vídeo 0002',type:'v',drive:'allowed-video-002'},{t:'Imagem',type:'img',drive:'allowed-image-001'}];
 let scenario='ok',requests:string[]=[];
 globalThis.fetch=async input=>{
   const url=String(input);requests.push(url);
-  if(url===PACK_CATALOG_URL)return Response.json(catalog);
+  if(url===PACK_CATALOG_URL) {if(scenario==='catalog-down')return new Response('Unavailable',{status:503});if(scenario==='catalog-denied')return new Response('Denied',{status:403});return Response.json(catalog);}
   if(url.startsWith('https://drive.usercontent.google.com/')) {
     if(scenario==='redirect-private')return new Response(null,{status:302,headers:{location:'http://127.0.0.1/secrets'}});
     if(scenario==='html')return new Response('<html>Sign in</html>',{headers:{'Content-Type':'text/html'}});
@@ -32,18 +32,20 @@ test('catálogo ignora imagens, elimina IDs repetidos e rejeita URLs e registros
   assert.throws(()=>parsePackCatalog([]),/entre 1/);
 });
 test('origem produz vídeos e JSONs estáveis com título, privacidade e declarações configuradas',async()=>{
-  const source=new PackSource({madeWithAI:true,youtubeVisibility:'public'}),files=await source.tree(PACK_ROOT,true);
+  const source=new PackSource({madeWithAI:true,youtubeContainsSyntheticMedia:true,youtubeVisibility:'public'}),files=await source.tree(PACK_ROOT,true);
   assert.equal(files.length,4);assert.equal(files[0].mimeType,'video/mp4');assert.equal(files[0].size,undefined);
   const meta=await source.json(files[1].id);assert.equal(meta.title,'GTA 6 — Vídeo 0001');
   assert.equal(meta.youtube.visibility,'public');assert.equal(meta.youtube.containsSyntheticMedia,true);assert.equal(meta.tiktok.madeWithAI,true);
   assert.equal(meta.tiktok.privacyLevel,'PUBLIC_TO_EVERYONE');
   assert.deepEqual(await source.file(files[0].id),files[0]);
-  const changed=new PackSource({description:'Outra descrição'});assert.notEqual((await changed.file(files[0].id)).version,files[0].version);
+  const changed=new PackSource({description:'Outra descrição'});assert.equal((await changed.file(files[0].id)).version,files[0].version);
+  assert.notEqual((await changed.file(files[1].id)).version,files[1].version,'apenas a versão dos metadados muda');
   assert.equal(packMetadata(catalog[0] as any,packDefaultsSchema.parse({madeWithAI:false})).tiktok.madeWithAI,false);
 });
-test('declaração do YouTube pode ser corrigida sem alterar a do TikTok ou rotinas antigas',()=>{
+test('YouTube não herda declaração de IA do TikTok e permanece desmarcado por padrão',()=>{
   const base=packDefaultsSchema.parse({madeWithAI:true});
-  assert.equal(packMetadata(catalog[0] as any,base).youtube.containsSyntheticMedia,true,'declarações antigas explícitas são preservadas');
+  assert.equal(packDefaultsSchema.parse({}).youtubeContainsSyntheticMedia,false);
+  assert.equal(packMetadata(catalog[0] as any,base).youtube.containsSyntheticMedia,false,'a declaração do TikTok não ativa o rótulo do YouTube');
   const separate=packMetadata(catalog[0] as any,packDefaultsSchema.parse({...base,youtubeContainsSyntheticMedia:false}));
   assert.equal(separate.youtube.containsSyntheticMedia,false);assert.equal(separate.tiktok.madeWithAI,true);
   const reverse=packMetadata(catalog[0] as any,packDefaultsSchema.parse({madeWithAI:false,youtubeContainsSyntheticMedia:true}));
@@ -72,5 +74,11 @@ test('histórico por origem persiste e não exige baixar outra vez um arquivo j�
   assert.equal(await new BrowserJournal(journal.directory).sourceSeen('gta6-pack:allowed-video-002'),true);
   await journal.releaseBeforeUpload(hash);
   assert.equal(await journal.sourceSeen('gta6-pack:allowed-video-002'),false,'liberar antes do upload não bloqueia um envio futuro');
+});
+test('catálogo persistido sobrevive reinício e falha temporária, sem ocultar acesso negado',async()=>{
+  (PackSource as any).cached=undefined;scenario='catalog-down';
+  assert.equal((await new PackSource().catalog()).length,2);
+  (PackSource as any).cached=undefined;scenario='catalog-denied';
+  await assert.rejects(()=>new PackSource().catalog(),/recusou/);
 });
 after(async()=>{globalThis.fetch=original;await rm(temp,{recursive:true,force:true});});

@@ -28,7 +28,7 @@ O histórico conserva o ID da origem e o hash do conteúdo. Reinícios não prov
 - Limites de tamanho são aplicados mesmo quando o Drive não informa Content-Length. Páginas de login, confirmações de download, respostas parciais e redirecionamentos fora dos hosts de download permitidos não são tratados como MP4.
 - Se o arquivo deixar de ser público ou o site mudar de formato/endereço, o sistema registra o erro. Não tenta contornar autenticação ou restrições do Drive.
 - O formato atual do fluxo é MP4 vertical ou quadrado, com até 3 minutos e 1 GiB. Um arquivo fora desse formato não é convertido automaticamente.
-- As declarações de IA do YouTube e TikTok são configuradas separadamente. `youtubeContainsSyntheticMedia` controla o YouTube; `madeWithAI` controla o TikTok. Configurações antigas sem o campo do YouTube preservam a declaração anterior até serem ajustadas. A limpeza de tags do arquivo é independente dessas declarações.
+- As declarações de IA do YouTube e TikTok são configuradas separadamente. `youtubeContainsSyntheticMedia` controla o YouTube e vem **desmarcado por padrão**; `madeWithAI` controla o TikTok e não ativa a opção do YouTube. Perfis antigos sem uma escolha específica para o YouTube passam a usar esse padrão. Uma declaração explicitamente habilitada no perfil ou no JSON do vídeo é preservada. A limpeza de tags do arquivo é independente dessas declarações.
 - Os tetos de vídeos agendados, uploads em 24h, publicações por dia e período permitido continuam sendo verificados pelo [agendamento nativo](AGENDAMENTO-NATIVO.md).
 - O PC precisa estar ligado para consultar a origem e transferir os vídeos. Depois de confirmado o agendamento nativo, a plataforma controla a publicação.
 

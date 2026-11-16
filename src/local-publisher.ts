@@ -51,8 +51,9 @@ export class LocalPublisher {
     if(!video)return;
     const original=join(dataDir,video.id+'.mp4'),cleaned=join(dataDir,video.id+'.clean.mp4');
     try {
-      const meta=metadataSchema.parse(video.metadata);
-      const reviewed=await titleReview(video.id,video.version);
+      const source=await sourceFor(watch);
+      const meta=metadataSchema.parse(watch.source_type==='gta6_pack'&&video.json_file_id?await source.json(video.json_file_id):video.metadata);
+      const reviewed=await titleReview(video.id,video.version,watch.source_type==='gta6_pack');
       if(reviewed)meta.title=reviewed.title;
       else if(watch.source_type==='gta6_pack'&&genericVideoTitle(meta.title)) {
         const message='Revise o conteúdo de '+video.name+' e defina um título descritivo antes do envio.';
@@ -66,12 +67,13 @@ export class LocalPublisher {
       const targets=selected.filter(c=>c && (!meta.targets || meta.targets.includes((c.identifier==='tiktok-browser'?'tiktok':c.identifier) as never)));
       if(!targets.length)throw new AppError('Os destinos do JSON não correspondem aos canais desta rotina.');
       await mkdir(dataDir,{recursive:true});
-      const source=await sourceFor(watch);
+      const sourceVersion=await source.file(video.file_id);
+      const currentVersion=sourceVersion.version||sourceVersion.modifiedTime||'';
       const stripMetadata=watch.strip_metadata!==false;
       // Reuse only an already retained, verified copy of this exact source/version
       // and transformation. No persistent cache or extra retention is introduced.
       let reused:NativePayload|undefined;
-      if(video.sha256) {
+      if(video.sha256&&currentVersion===video.version) {
         const {rows:copies}=await pool.query(`SELECT local_file,payload FROM deliveries WHERE video_id=$1 AND local_file IS NOT NULL
           AND payload->>'stripMetadata'=$2 ORDER BY created_at DESC LIMIT 5`,[video.id,String(stripMetadata)]);
         for(const copy of copies) {
@@ -89,13 +91,26 @@ export class LocalPublisher {
       }
       await validateVideo(original);
       const latest=await source.file(video.file_id);
-      if((latest.version||latest.modifiedTime||'')!==video.version)throw new AppError('O vídeo mudou durante a leitura. Aguarde uma nova verificação.');
-      if(video.json_file_id) {
-        const json=await source.file(video.json_file_id);
-        if((json.version||json.modifiedTime||'')!==video.json_version)throw new AppError('O JSON mudou durante a leitura. Aguarde uma nova verificação.');
-      }
       const hash=reused?video.sha256:await sha256(original);
       if(reviewed&&reviewed.sha256!==hash)throw new AppError('O conteúdo mudou desde a revisão do título. Revise novamente antes de enviar.',409);
+      if((latest.version||latest.modifiedTime||'')!==currentVersion)throw new AppError('O vídeo mudou durante a leitura. Aguarde uma nova verificação.');
+      let jsonVersion=video.json_version;
+      if(video.json_file_id) {
+        const json=await source.file(video.json_file_id);
+        jsonVersion=json.version||json.modifiedTime||'';
+      }
+      if(currentVersion!==video.version||jsonVersion!==video.json_version||(reviewed&&reviewed.source_version!==currentVersion)) {
+        // Legacy pack versions included publication settings. Rebind only after
+        // checking the original bytes against a persisted hash or title review.
+        if(watch.source_type!=='gta6_pack'||!(video.sha256===hash||reviewed?.sha256===hash))throw new AppError('A origem mudou. Aguarde uma nova verificação.');
+        const db=await pool.connect();
+        try {
+          await db.query('BEGIN');
+          await db.query('UPDATE videos SET version=$2,json_version=$3,metadata=$4 WHERE id=$1 AND version=$5',[video.id,currentVersion,jsonVersion,JSON.stringify(meta),video.version]);
+          if(reviewed)await db.query('UPDATE video_title_reviews SET source_version=$2 WHERE video_id=$1 AND source_version=$3 AND sha256=$4',[video.id,currentVersion,reviewed.source_version,hash]);
+          await db.query('COMMIT');
+        }catch(error){await db.query('ROLLBACK');throw error;}finally{db.release();}
+      }
       let asset=original;
       if(stripMetadata&&!reused) {
         await stripVideoMetadata(original,cleaned);asset=cleaned;

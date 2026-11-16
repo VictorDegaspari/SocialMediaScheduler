@@ -30,7 +30,7 @@ try {
   assert.equal(sent.quantity,17);assert.deepEqual(sent.platforms,['youtube']);assert.deepEqual(sent.times,['09:00','18:00']);assert(sent.requestKey);
   await page.getByRole('button',{name:'Cancelar restante do pedido',exact:true}).click();await page.getByText('Cancelado',{exact:true}).waitFor();
   await page.getByText('Adicionar perfil de conteúdo',{exact:true}).click();await page.getByLabel('Nome do perfil',{exact:true}).fill('Outro canal');await page.getByLabel('Origem do perfil').selectOption('gta6_pack');
-  await page.getByRole('checkbox',{name:'YouTube: conteúdo realista alterado ou sintético',exact:true}).uncheck();
+  assert.equal(await page.getByRole('checkbox',{name:'YouTube: conteúdo realista alterado ou sintético',exact:false}).isChecked(),false,'declaração do YouTube inicia desmarcada');
   await page.getByRole('button',{name:'Salvar perfil',exact:true}).click();await page.getByText('Outro canal',{exact:true}).first().waitFor();
   assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.sourceType,'gta6_pack');
   assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.packDefaults.youtubeContainsSyntheticMedia,false);

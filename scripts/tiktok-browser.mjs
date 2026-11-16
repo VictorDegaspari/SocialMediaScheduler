@@ -1,6 +1,6 @@
 import { chromium } from 'playwright-core';
 import { parseArgs } from 'node:util';
-import { mkdir, chmod, open, readFile, rm, realpath } from 'node:fs/promises';
+import { mkdir, chmod, open, readFile, rm, realpath, writeFile } from 'node:fs/promises';
 import { resolve, join, dirname, relative, isAbsolute } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {browserProfileDirectory} from '../src/browser-profiles.ts';
@@ -9,20 +9,21 @@ import {sha256} from '../src/media.ts';
 import { logger } from '../src/config.ts';
 import { nextRun, watchSchema } from '../src/domain.ts';
 import { manualBrowserLogin, sharedProfileOptions } from '../src/browser-login.ts';
-import { BrowserJournal, BrowserActionRequired, tiktokCaption, nextBrowserVideo, nextPackVideo, prepareTikTokUpload, scheduleTikTokUpload, browserJobLabel, TIKTOK_UPLOAD_URL } from '../src/browser-tiktok.ts';
+import { BrowserJournal, BrowserActionRequired, tiktokCaption, nextBrowserVideo, nextPackVideo, prepareTikTokUpload, scheduleTikTokUpload, publishTikTokUpload, browserJobLabel, TIKTOK_UPLOAD_URL } from '../src/browser-tiktok.ts';
 
 const {values:args}=parseArgs({options:{
   login:{type:'boolean'},watch:{type:'boolean'},once:{type:'boolean'},status:{type:'boolean'},
-  'run-now':{type:'boolean'},'keep-metadata':{type:'boolean'},help:{type:'boolean'},
+  'run-now':{type:'boolean'},'publish-now':{type:'boolean'},'keep-metadata':{type:'boolean'},help:{type:'boolean'},
   'profile-id':{type:'string'},'prepared-file':{type:'string'},'prepared-info':{type:'string'},'prepared-sha':{type:'string'},
   'schedule-at':{type:'string'},source:{type:'string'},'pack-defaults':{type:'string'},folder:{type:'string'},at:{type:'string'},'every-minutes':{type:'string'}
 },strict:true});
 if(args.help){
-  console.log(`TikTok pelo navegador — experimental, com revisão final\n\n  npm run tiktok:login                     Login manual no Chrome, sem Playwright\n  npm run tiktok:browser -- --once           Selecionar próximo MP4 e enviar agora\n  npm run tiktok:browser -- --watch --run-now Monitorar agora e depois às 08:00/20:00\n  npm run tiktok:browser -- --watch --every-minutes 120\n  npm run tiktok:browser -- --status         Histórico local dos uploads\n\nOpções: --folder caminho (padrão: media/), --at 08:00,20:00, --keep-metadata\nNo login, prefira o QR code do TikTok e feche as janelas desse perfil ao terminar.\nNo upload, confira conta, legenda, rótulos e publique manualmente.\nNão há clique automático em Publicar.`);
+  console.log(`TikTok pelo navegador — experimental, com revisão final\n\n  npm run tiktok:login                     Login manual no Chrome, sem Playwright\n  npm run tiktok:browser -- --once           Selecionar próximo MP4 e enviar agora\n  npm run tiktok:browser -- --watch --run-now Monitorar agora e depois às 08:00/20:00\n  npm run tiktok:browser -- --watch --every-minutes 120\n  npm run tiktok:browser -- --status         Histórico local dos uploads\n\nOpções: --folder caminho (padrão: media/), --at 08:00,20:00, --keep-metadata\nNo login, prefira o QR code do TikTok e feche as janelas desse perfil ao terminar.\nNo upload, confira conta, legenda, rótulos e publique manualmente.\nNo modo padrão, a publicação depende da sua revisão. Uma publicação imediata automática exige mídia previamente preparada e autorização específica.`);
   process.exit(0);
 }
 if([args.login,args.watch,args.once,args.status].filter(Boolean).length>1)throw new Error('Escolha somente --login, --watch, --once ou --status.');
 if(args['schedule-at']&&(!args.once||!/^\d{4}-\d{2}-\d{2}T/.test(args['schedule-at'])||!Number.isFinite(Date.parse(args['schedule-at']))))throw new Error('Use --schedule-at com uma data ISO válida e --once.');
+if(args['publish-now']&&(!args.once||!args['prepared-file']||args['schedule-at']))throw new Error('Publicação imediata exige --once, mídia previamente revisada e ausência de agendamento.');
 if(args.source&&!['local','gta6_pack'].includes(args.source))throw new Error('Origem de vídeos inválida.');
 const packDefaults=args['pack-defaults']?JSON.parse(args['pack-defaults']):{};
 if(args.at&&args['every-minutes'])throw new Error('Escolha horários diários ou intervalo.');
@@ -84,21 +85,30 @@ async function attempt(){
   if(stopped){await rm(candidate.directory,{recursive:true,force:true});return false;}
   let job,started=false,current;
   try{
-    if(args['schedule-at']&&(candidate.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||candidate.metadata.tiktok.commercialContent||candidate.metadata.tiktok.ownBrand))throw new BrowserActionRequired('page_changed','Este vídeo exige revisão manual: o agendamento automático precisa de privacidade pública explícita e declarações comerciais conferidas.');
+    if((args['schedule-at']||args['publish-now'])&&(candidate.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||candidate.metadata.tiktok.commercialContent||candidate.metadata.tiktok.ownBrand))throw new BrowserActionRequired('page_changed','Este vídeo exige revisão manual: a publicação automática precisa de privacidade pública explícita e declarações comerciais conferidas.');
     current=await browser();
     const page=current.pages()[0]||await current.newPage();
     await page.goto(TIKTOK_UPLOAD_URL,{waitUntil:'domcontentloaded',timeout:60_000});
     await prepareTikTokUpload(page,candidate.path,candidate.caption,{
+      knownDraftCaptions:(await journal.list()).flatMap(job=>typeof job.caption==='string'&&job.caption.length<=2200?[job.caption]:[]),
       onBeforeUpload:async()=>{
         if(stopped)throw new Error('Rotina interrompida antes do upload.');
-        job=await journal.claim(candidate.hash,candidate.name,candidate.metadata.tiktok.madeWithAI,candidate.sourceId);
+        job=await journal.claim(candidate.hash,candidate.name,candidate.metadata.tiktok.madeWithAI,candidate.sourceId,candidate.caption);
         if(!job)throw new Error('Este conteúdo já está no histórico. Confira antes de repetir.');
       },onUploadStarted:()=>{started=true;logger.info({event:'browser_upload_started',file:candidate.name,hash:candidate.hash},'Arquivo selecionado no TikTok Studio.');}
     });
+    if(args['publish-now']) {
+      await publishTikTokUpload(page,candidate.metadata);
+      await journal.update(job,'published');
+      logger.info({event:'browser_published',file:candidate.name,hash:candidate.hash},'Publicação confirmada pelo TikTok Studio.');
+      await page.waitForTimeout(1500);
+      await current.close();return true;
+    }
     if(args['schedule-at']) {
       const result=await scheduleTikTokUpload(page,new Date(args['schedule-at']),candidate.metadata);
       await journal.update(job,'scheduled',result.publishAt);
       logger.info({event:'browser_scheduled',file:candidate.name,hash:candidate.hash},'Agendamento confirmado pelo TikTok Studio.');
+      await page.waitForTimeout(1500);
       await current.close();return true;
     }
     await journal.update(job,'review');
@@ -108,9 +118,18 @@ async function attempt(){
     return true;
   }catch(error){
     if(job){if(started)await journal.update(job,'unknown');else await journal.releaseBeforeUpload(job.hash);}
+    if(started&&current) {
+      const page=current.pages()[0];
+      if(page) {
+        await page.screenshot({path:join(privateDirectory,'last-upload-error.png')}).catch(()=>{});
+        const text=await page.locator('body').innerText().catch(()=>'');
+        const inputs=await page.locator('input[readonly]').evaluateAll(es=>es.map(e=>({value:e.value,type:e.type}))).catch(()=>[]);
+        await writeFile(join(privateDirectory,'last-upload-error.json'),JSON.stringify({at:new Date().toISOString(),reason:error.message,text:text.slice(0,20000),inputs},null,2),{mode:0o600}).catch(()=>{});
+      }
+    }
     logger.warn({event:error instanceof BrowserActionRequired?error.code:'browser_attempt_failed',file:candidate.name,uploadMayHaveStarted:started},
       error instanceof BrowserActionRequired?error.message:'A preparação não foi confirmada. Confira o navegador e o histórico antes de tentar novamente.');
-    if(current&&!args['schedule-at']){logger.info({event:'browser_manual_action'},'A janela permanece aberta para sua conferência. Feche-a após resolver a pendência.');await waitForClose(current);}
+    if(current){logger.info({event:'browser_manual_action'},'A janela permanece aberta para sua conferência. Feche-a após resolver a pendência.');await waitForClose(current);}
     return true;
   }finally{
     await current?.close().catch(()=>{});context=undefined;

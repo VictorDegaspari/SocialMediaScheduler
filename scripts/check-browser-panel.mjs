@@ -83,7 +83,7 @@ try{
   assert.equal(actions.at(-1).body.nativeSchedule.endAt,'2026-11-25T23:00:00.000Z');
   await page.getByLabel('Origem dos vídeos do TikTok').selectOption('gta6_pack');
   await page.getByLabel('Prefixo do título').fill('Meu GTA 6');
-  await page.getByRole('checkbox',{name:'YouTube: conteúdo realista alterado ou sintético',exact:false}).uncheck();
+  assert.equal(await page.getByRole('checkbox',{name:'YouTube: conteúdo realista alterado ou sintético',exact:false}).isChecked(),false,'declaração do YouTube inicia desmarcada');
   await page.getByRole('button',{name:'Salvar rotina do navegador',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#browser-source')?.value==='gta6_pack'&&!document.querySelector('#browser-config-form [type="submit"]').disabled);
   assert.equal(actions.at(-1).body.sourceType,'gta6_pack');

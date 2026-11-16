@@ -59,6 +59,8 @@ Se outro destino já mantém uma cópia preparada do mesmo vídeo e da mesma op�
 
 A limpeza das tags do MP4 e a declaração `containsSyntheticMedia` enviada ao YouTube são independentes. O arquivo pode estar limpo e, ainda assim, receber o rótulo porque a declaração foi ativada. Nos perfis de conteúdo, a opção do YouTube é separada da declaração do TikTok; deve refletir o conteúdo real de cada origem. A gravação normal de gameplay, por si só, não exige a declaração do YouTube. [Orientação oficial](https://support.google.com/youtube/answer/14328491?hl=pt-BR).
 
+Por padrão, novos envios usam `containsSyntheticMedia=false`. A opção do YouTube inicia desmarcada e não herda a declaração do TikTok, inclusive nos perfis antigos que não tinham uma escolha específica. Uma marcação explicitamente aprovada no perfil ou no JSON do vídeo continua sendo respeitada.
+
 O helper de manutenção `updateYoutubeDisclosure` verifica o dono do vídeo, atualiza somente `part=status`, preserva privacidade, agendamento, licença, incorporação, estatísticas e público infantil, e recusa uma data vencida. Algumas respostas da API omitem `containsSyntheticMedia`; nesse caso o retorno distingue o pedido aceito da leitura da propriedade. Confirme o rótulo na interface do YouTube.
 
 ### YouTube

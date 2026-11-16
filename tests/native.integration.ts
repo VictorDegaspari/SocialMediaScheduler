@@ -20,6 +20,7 @@ const {pool,redis,initDb,setSetting,getSetting}=await import('../src/db.js');
 const {Worker}=await import('../src/worker.js');
 const {PackSource}=await import('../src/pack-source.js');
 const {PACK_ROOT,PACK_URL}=await import('../src/pack-config.js');
+const {nativeScheduleSchema}=await import('../src/native-schedule.js');
 const {LocalFiles}=await import('../src/local.js');
 const {publicationRequests,requestRoutes}=await import('../src/publication-requests.js');
 const {saveTitleReviews,syncYoutubeTitles}=await import('../src/video-titles.js');
@@ -247,6 +248,8 @@ test('limite móvel do TikTok é revalidado ao entregar um trabalho ao agente',a
   await publicationRequests.tick(worker.native);
   job=(await browserBridge.poll({instanceId,desktop:true,profileSaved:true,externalBusy:false,activeJobId:null})).job;assert.equal(job,null);
   const {rows}=await pool.query('SELECT status FROM deliveries WHERE request_id=$1',[result.requests[0].id]);assert.equal(rows.filter(r=>r.status==='scheduled').length,1);assert.equal(rows.filter(r=>r.status==='pending').length,1);
+  assert.equal((await pool.query("SELECT id FROM browser_commands WHERE status IN ('pending','running')")).rowCount,0,'o limite de uma conta não reserva o agente ocioso');
+  const login=await browserBridge.request('login');assert.equal((await browserBridge.poll({instanceId,desktop:true,profileSaved:true,externalBusy:false,activeJobId:null})).job?.id,login);
 });
 test('pack do site encontra vídeos sem OAuth Drive e agenda sem pasta ou JSON manual',async()=>{
   await new PackSource().catalog(true);
@@ -262,8 +265,36 @@ test('pack do site encontra vídeos sem OAuth Drive e agenda sem pasta ou JSON m
   await worker.native.prepareNext(watch);
   const {rows:[delivery]}=await pool.query('SELECT * FROM deliveries WHERE video_id=$1',[videos[0].id]);assert(delivery?.planned_at);
   await worker.native.process(delivery.id);assert.equal(ytInit,1);assert.equal(sentBody.status.publishAt,new Date(delivery.planned_at).toISOString());
-  assert.equal(sentBody.status.containsSyntheticMedia,true);
+  assert.equal(sentBody.status.containsSyntheticMedia,false,'upload do pack deixa o rótulo desmarcado quando não há declaração explícita');
   assert.equal(sentBody.snippet.title,'Cena azul de teste em formato vertical');
+});
+test('pack já enviado ao YouTube reutiliza revisão por hash após mudar os padrões do TikTok',async()=>{
+  await new PackSource().catalog(true);
+  const id=randomUUID();
+  await pool.query(`INSERT INTO watches(id,name,folder_id,folder_url,source_type,integration_ids,import_existing,mode) VALUES($1,'Pack para duas contas',$2,$3,'gta6_pack','["native:youtube:youtube-channel"]',true,'draft')`,[id,PACK_ROOT,PACK_URL]);
+  let {rows:[watch]}=await pool.query('SELECT * FROM watches WHERE id=$1',[id]);
+  const worker=new Worker();await worker.scan(watch);
+  const {rows:[video]}=await pool.query('SELECT * FROM videos WHERE watch_id=$1',[id]);
+  await pool.query("UPDATE videos SET stable_since=now()-interval '1 minute' WHERE id=$1",[video.id]);
+  await saveTitleReviews({reviews:[{videoId:video.id,title:'Gameplay azul revisado para as duas contas',sha256:createHash('sha256').update(bytes).digest('hex'),evidence:'Inspeção do mesmo MP4 vertical azul nos dois destinos.'}]});
+  await worker.native.prepareNext(watch);
+  // Simulate versions persisted by the old catalog, which mixed asset and defaults.
+  await pool.query("UPDATE videos SET version='legacy-pack-version',json_version='legacy-json-version' WHERE id=$1",[video.id]);
+  await pool.query("UPDATE video_title_reviews SET source_version='legacy-pack-version' WHERE video_id=$1",[video.id]);
+  // A scan may already have rebound a ready asset while its hash review keeps
+  // the old version; the reviewed bytes must still be checked before upload.
+  await pool.query('UPDATE videos SET version=$2 WHERE id=$1',[video.id,video.version]);
+  await pool.query(`UPDATE watches SET pack_defaults='{"madeWithAI":false,"youtubeContainsSyntheticMedia":false}' WHERE id=$1`,[id]);
+  ({rows:[watch]}=await pool.query('SELECT * FROM watches WHERE id=$1',[id]));
+  await worker.native.prepareNext(watch,{provider:'tiktok',integrationId:'browser:tiktok:default',channelName:'GTA 6',policy:nativeScheduleSchema.parse({}),cadence:watch});
+  const {rows}=await pool.query('SELECT * FROM deliveries WHERE video_id=$1',[video.id]);assert.equal(rows.length,2);
+  const tt=rows.find(d=>d.provider==='tiktok');assert(tt);assert.equal(tt.payload.metadata.tiktok.madeWithAI,false);
+  assert.equal(tt.payload.metadata.title,'Gameplay azul revisado para as duas contas');assert.equal(tt.payload.stripMetadata,true);
+  const {rows:[rebound]}=await pool.query('SELECT v.version,t.source_version FROM videos v JOIN video_title_reviews t ON t.video_id=v.id WHERE v.id=$1',[video.id]);
+  assert.equal(rebound.version,rebound.source_version);assert.notEqual(rebound.version,'legacy-pack-version');assert.equal(ytInit,0);
+  await pool.query("UPDATE video_title_reviews SET source_version='stale-review',sha256=$2 WHERE video_id=$1",[video.id,'f'.repeat(64)]);
+  await worker.native.prepareNext(watch,{provider:'tiktok',integrationId:'browser:tiktok:other',channelName:'Outra conta',policy:nativeScheduleSchema.parse({}),cadence:watch});
+  assert.equal((await pool.query('SELECT id FROM deliveries WHERE video_id=$1',[video.id])).rowCount,2,'hash diferente da revisão impede outra entrega');
 });
 test('títulos revisados aguardam a permissão de edição e sincronizam sem novos uploads ou alteração de data',async()=>{
   const {worker,result}=await requestFixture(1);await publicationRequests.tick(worker.native);
@@ -331,6 +362,20 @@ test('perfil guarda declarações independentes do YouTube e TikTok',async()=>{
   const {id}=await publicationRequests.saveProfile({name:'Declarações independentes',sourceType:'gta6_pack',youtubeId:'native:youtube:youtube-channel',packDefaults:{madeWithAI:true,youtubeContainsSyntheticMedia:false}});
   const {rows:[watch]}=await pool.query('SELECT w.* FROM watches w JOIN publishing_profiles p ON p.watch_id=w.id WHERE p.id=$1',[id]);
   assert.equal(watch.metadata_defaults.youtube.containsSyntheticMedia,false);assert.equal(watch.metadata_defaults.tiktok.madeWithAI,true);
+});
+test('padrão do YouTube desmarca a antiga herança sem apagar uma declaração explícita',async()=>{
+  const input={name:'Padrão de declaração',sourceType:'gta6_pack',youtubeId:'native:youtube:youtube-channel',packDefaults:{madeWithAI:true}};
+  const {id}=await publicationRequests.saveProfile(input);
+  await pool.query(`UPDATE watches SET pack_defaults=pack_defaults-'youtubeContainsSyntheticMedia',
+    metadata_defaults=jsonb_set(metadata_defaults,'{youtube,containsSyntheticMedia}','true'::jsonb)
+    WHERE id=(SELECT watch_id FROM publishing_profiles WHERE id=$1)`,[id]);
+  await initDb();
+  let {rows:[watch]}=await pool.query('SELECT w.* FROM watches w JOIN publishing_profiles p ON p.watch_id=w.id WHERE p.id=$1',[id]);
+  assert.equal(watch.pack_defaults.youtubeContainsSyntheticMedia,false);assert.equal(watch.metadata_defaults.youtube.containsSyntheticMedia,false);assert.equal(watch.metadata_defaults.tiktok.madeWithAI,true);
+  await publicationRequests.saveProfile({...input,packDefaults:{...input.packDefaults,youtubeContainsSyntheticMedia:true}},id);
+  await initDb();
+  ({rows:[watch]}=await pool.query('SELECT w.* FROM watches w JOIN publishing_profiles p ON p.watch_id=w.id WHERE p.id=$1',[id]));
+  assert.equal(watch.pack_defaults.youtubeContainsSyntheticMedia,true);assert.equal(watch.metadata_defaults.youtube.containsSyntheticMedia,true,'uma declaração selecionada explicitamente é preservada após reiniciar');
 });
 test('lote nativo reserva datas distintas no mesmo canal e para no teto global',async()=>{
   const first=await prepare('native_schedule',['native:youtube:youtube-channel'],{maxScheduled:2});

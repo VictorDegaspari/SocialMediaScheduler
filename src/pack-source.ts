@@ -1,10 +1,11 @@
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {createWriteStream} from 'node:fs';
-import {rm} from 'node:fs/promises';
+import {rm,readFile,writeFile,mkdir,rename,stat} from 'node:fs/promises';
+import {join} from 'node:path';
 import {Readable,Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {z} from 'zod';
-import {AppError,retryAfter} from './config.js';
+import {AppError,retryAfter,dataDir} from './config.js';
 import {metadataSchema,type Metadata} from './domain.js';
 import type {DriveFile} from './clients.js';
 import {PACK_ROOT,PACK_CATALOG_URL,packDefaultsSchema,packYoutubeSynthetic,type PackDefaults} from './pack-config.js';
@@ -50,12 +51,32 @@ export class PackSource {
   constructor(defaults:unknown={}){this.defaults=packDefaultsSchema.parse(defaults);}
   async catalog(force=false) {
     if(force||!PackSource.cached||Date.now()-PackSource.cached.at>60_000) {
+      try {
       const response=await request(PACK_CATALOG_URL);
       if(response.status!==200||!response.headers.get('content-type')?.includes('application/json')){await response.body?.cancel();throw new AppError('O catálogo do pack não está disponível. Abra o site e confira seu acesso.');}
       const parts:Buffer[]=[];let size=0;
       for await(const part of Readable.fromWeb(response.body as never)) {size+=part.length;if(size>2*1024*1024)throw new AppError('O catálogo do pack excedeu o tamanho permitido.');parts.push(part);}
       let data:unknown;try{data=JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw new AppError('O catálogo do pack não retornou JSON válido.');}
-      PackSource.cached={at:Date.now(),videos:parsePackCatalog(data)};
+      const videos=parsePackCatalog(data),at=Date.now();
+      const directory=join(dataDir,'source-cache'),path=join(directory,'gta6-catalog.json');
+      const temporary=path+'.'+randomUUID()+'.tmp';
+      // Persistence is a best-effort optimization; read-only CLI installations
+      // can still use a successfully fetched catalog in memory.
+      try {await mkdir(directory,{recursive:true,mode:0o700});await writeFile(temporary,JSON.stringify({source:PACK_CATALOG_URL,fetchedAt:at,videos}),{mode:0o600});await rename(temporary,path);}
+      catch {} finally {await rm(temporary,{force:true}).catch(()=>{});}
+      PackSource.cached={at,videos};
+      } catch(error) {
+        // A previous authorized catalog keeps known downloads available during
+        // transient hosting outages. Never mask access denial or format changes.
+        if(force||!(error instanceof AppError)||!(error.status===429||error.status>=500))throw error;
+        try {
+          const path=join(dataDir,'source-cache','gta6-catalog.json');
+          if((await stat(path)).size>2*1024*1024)throw error;
+          const saved=JSON.parse(await readFile(path,'utf8'));
+          if(saved.source!==PACK_CATALOG_URL||!Number.isFinite(saved.fetchedAt)||Date.now()-saved.fetchedAt>7*86400_000||saved.fetchedAt>Date.now())throw error;
+          PackSource.cached={at:Date.now(),videos:parsePackCatalog(saved.videos)};
+        }catch{throw error;}
+      }
     }
     return PackSource.cached.videos;
   }
@@ -73,7 +94,7 @@ export class PackSource {
   }
   private info(video:PackVideo,json=false):DriveFile {
     return {id:this.id(video,json),name:video.t.replace(/[\/\\\x00-\x1f]/g,' ').slice(0,100)+'--'+video.drive+(json?'.json':'.mp4'),parents:[PACK_ROOT],mimeType:json?'application/json':'video/mp4',
-      version:this.details(video).version,capabilities:{canDownload:true}};
+      version:json?this.details(video).version:digest(video),capabilities:{canDownload:true}};
   }
   async file(id:string):Promise<DriveFile> {
     if(id===PACK_ROOT)return {id:PACK_ROOT,name:'Pack GTA 6',mimeType:'application/vnd.google-apps.folder'};

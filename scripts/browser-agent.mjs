@@ -31,7 +31,7 @@ try{lock=await open(lockPath,'wx',0o600);}catch(error){
 }
 await lock.writeFile(String(process.pid));
 const instanceId=randomUUID(),abort=new AbortController();
-const jobSchema=z.object({id:z.string().uuid(),kind:z.enum(['login','upload']),folder:z.string().min(1).max(4096),stripMetadata:z.boolean(),profileId:z.union([z.literal('default'),z.string().uuid()]).optional(),media:z.object({metadata:metadataSchema,assetSha256:z.string().regex(/^[a-f0-9]{64}$/),hash:z.string().regex(/^[a-f0-9]{64}$/),name:z.string().max(500),sourceId:z.string().max(1000)}).strict().optional(),sourceType:z.enum(['local','gta6_pack']).optional(),packDefaults:packDefaultsSchema.optional(),publishAt:z.iso.datetime({offset:true}).optional()}).strict();
+const jobSchema=z.object({id:z.string().uuid(),kind:z.enum(['login','upload']),folder:z.string().min(1).max(4096),stripMetadata:z.boolean(),profileId:z.union([z.literal('default'),z.string().uuid()]).optional(),media:z.object({metadata:metadataSchema,assetSha256:z.string().regex(/^[a-f0-9]{64}$/),hash:z.string().regex(/^[a-f0-9]{64}$/),name:z.string().max(500),sourceId:z.string().max(1000)}).strict().optional(),sourceType:z.enum(['local','gta6_pack']).optional(),packDefaults:packDefaultsSchema.optional(),publishAt:z.iso.datetime({offset:true}).optional(),publishNow:z.literal(true).optional()}).strict();
 let active,stopped=false,lastSeen=Date.now(),connected=false,lastWarning=0;
 async function request(path,body){
   const response=await fetch(appUrl+'/api/browser-agent'+path,{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),
@@ -51,7 +51,7 @@ function interrupt(){
 function stop(){stopped=true;abort.abort();interrupt();}
 process.on('SIGINT',stop);process.on('SIGTERM',stop);
 async function execute(job){
-  const task={id:job.id,child:null,started:false,scheduled:false,duplicate:false,review:false,empty:false,opened:false,failed:false,cancelled:false,progress:Promise.resolve(),done:null};
+  const task={id:job.id,child:null,started:false,published:false,scheduled:false,duplicate:false,review:false,empty:false,opened:false,failed:false,cancelled:false,progress:Promise.resolve(),done:null};
   active=task;
   try{
     if(job.kind==='upload'&&!job.media&&job.sourceType!=='gta6_pack')await new LocalFiles(localMediaDir,localMediaDir).folder(job.folder);
@@ -61,7 +61,7 @@ async function execute(job){
       const response=await fetch(appUrl+'/api/browser-agent/jobs/'+job.id+'/media',{headers:{Authorization:'Bearer '+token},redirect:'error',signal:AbortSignal.timeout(15*60_000)});if(!response.ok)throw new Error('media_unavailable');let bytes=0;
       await pipeline(Readable.fromWeb(response.body),new Transform({transform(chunk,_encoding,done){bytes+=chunk.length;done(bytes>1024*1024*1024?new Error('media_limit'):null,chunk);}}),createWriteStream(path,{mode:0o600}));if(await sha256(path)!==job.media.assetSha256)throw new Error('media_changed');
     }
-    const args=job.kind==='login'?['--login']:['--once','--folder',job.folder,...(job.stripMetadata?[]:['--keep-metadata']),...(job.publishAt?['--schedule-at',job.publishAt]:[]),...(job.sourceType==='gta6_pack'?['--source','gta6_pack','--pack-defaults',JSON.stringify(job.packDefaults||{})]:[])];
+    const args=job.kind==='login'?['--login']:['--once','--folder',job.folder,...(job.stripMetadata?[]:['--keep-metadata']),...(job.publishAt?['--schedule-at',job.publishAt]:[]),...(job.publishNow?['--publish-now']:[]),...(job.sourceType==='gta6_pack'?['--source','gta6_pack','--pack-defaults',JSON.stringify(job.packDefaults||{})]:[])];
     if(job.profileId)args.push('--profile-id',job.profileId);
     if(prepared)args.push('--prepared-file',join(prepared,'video.mp4'),'--prepared-sha',job.media.assetSha256,'--prepared-info',JSON.stringify(job.media));
     const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs'),...args],
@@ -77,6 +77,7 @@ async function execute(job){
         if(progress.stage==='browser_upload_started')task.started=true;
         if(progress.stage==='browser_duplicate')task.duplicate=true;
         if(progress.stage==='browser_scheduled')task.scheduled=true;
+        if(progress.stage==='browser_published')task.published=true;
         if(progress.stage==='browser_review_required')task.review=true;
         if(progress.stage==='browser_no_video')task.empty=true;
         if(progress.stage==='browser_manual_login')task.opened=true;
@@ -87,7 +88,7 @@ async function execute(job){
     });
     const code=await new Promise((done,reject)=>{child.once('error',reject);child.once('close',done);});
     await task.progress;
-    const result=task.scheduled?'scheduled':task.duplicate?'duplicate':task.cancelled?(task.started?'unknown':'cancelled'):code!==0||task.failed?(task.started?'unknown':'failed'):
+    const result=task.published?'published':task.scheduled?'scheduled':task.duplicate?'duplicate':task.cancelled?(task.started?'unknown':'cancelled'):code!==0||task.failed?(task.started?'unknown':'failed'):
       job.kind==='login'?(task.opened?'done':'failed'):task.review?'review':task.empty?'empty':task.started?'unknown':'failed';
     if(result==='failed'&&!task.failed)await request('/jobs/'+job.id+'/progress',{stage:'browser_agent_failed'}).catch(()=>{});
     for(let attempt=0;attempt<3;attempt++){

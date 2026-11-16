@@ -133,6 +133,13 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS deliveries_upload_calendar ON deliveries(integration_id,upload_started_at) WHERE upload_started_at IS NOT NULL;
     CREATE INDEX IF NOT EXISTS browser_native_calendar ON browser_commands((COALESCE(config->>'profileId','default')),planned_at) WHERE kind='upload' AND delivery_id IS NULL;
     CREATE INDEX IF NOT EXISTS browser_upload_calendar ON browser_commands((COALESCE(config->>'profileId','default')),started_at) WHERE kind='upload' AND delivery_id IS NULL AND started_at IS NOT NULL;
+    -- Remove the former implicit inheritance from TikTok. An explicit YouTube
+    -- declaration and per-video JSON metadata remain authoritative.
+    UPDATE watches SET pack_defaults=jsonb_set(pack_defaults,'{youtubeContainsSyntheticMedia}','false'::jsonb),
+      metadata_defaults=CASE WHEN controlled_by_requests THEN metadata_defaults||jsonb_build_object('youtube',
+        COALESCE(metadata_defaults->'youtube','{}'::jsonb)||'{"containsSyntheticMedia":false}'::jsonb) ELSE metadata_defaults END,
+      next_scan_at=now()
+      WHERE (source_type='gta6_pack' OR controlled_by_requests) AND NOT(pack_defaults?'youtubeContainsSyntheticMedia');
   `);
   const {migrateConnectedAccounts}=await import('./connected-accounts.js');await migrateConnectedAccounts();
   await redis.connect().catch(() => {});

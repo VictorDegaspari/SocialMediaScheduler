@@ -59,3 +59,12 @@ Para TikTok em pedidos finitos, o backend prepara a mídia da origem escolhida e
 - `POST /api/browser/profiles` e `/api/browser/profiles/:id/login`: criar um perfil de Chrome isolado e abrir seu login.
 
 As três pastas bíblicas podem ser cadastradas juntas. O adaptador reúne os arquivos recursivamente e elimina IDs repetidos, inclusive quando uma das pastas já está dentro de outra. A autorização Drive é necessária para confirmar acesso e ler os arquivos; cadastrar os links não comprova acesso.
+
+
+## Publicação imediata e contingência do pack
+
+Uma publicação imediata automática pelo navegador exige uma entrega única já preparada, aprovada e vinculada ao perfil escolhido. O modo normal de revisão continua aguardando a ação no Chrome. O agente aplica a privacidade pública e as permissões explícitas, confere o estado da declaração de IA (inclusive desmarcada) e só registra publicação após uma confirmação nova do Studio. Ausência dessa confirmação conserva o resultado desconhecido e bloqueia repetição automática.
+
+O catálogo autorizado do pack é salvo em `data/source-cache/gta6-catalog.json`. Durante falhas transitórias de hospedagem, uma cópia de até sete dias permite consultar os mesmos IDs conhecidos; negativa de acesso e mudança de formato continuam interrompendo a leitura. Os downloads seguem pelos IDs do Drive presentes nesse catálogo. Ajustar legenda ou declaração muda apenas a versão dos metadados. Para registros antigos, o vínculo da revisão só é atualizado após conferir os bytes originais contra o hash persistido.
+
+No Studio atual, a confirmação pode aparecer diretamente na lista de conteúdo. O agente confere a legenda completa, o indicador de agendamento, a data, o horário e o fuso antes de concluir. A legenda é escrita após o processamento para evitar que o nome do arquivo seja inserido no título. Rascunhos de edição só são limpos automaticamente quando a legenda completa consta no histórico daquele perfil do agente; um rascunho desconhecido permanece aberto para conferência. O esgotamento do orçamento mantém a mídia na fila sem ocupar o agente nem impedir login em outros perfis.

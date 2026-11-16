@@ -181,3 +181,17 @@ test('origem pack persiste sem pasta manual e é enviada ao agente com as declar
 });
 
 after(async()=>{await new Promise<void>(resolve=>server.close(()=>resolve()));await pool.end();await redis.quit();await rm(temp,{recursive:true,force:true});});
+
+
+test('publicação imediata exige consentimento específico e confirmação nova com upload iniciado',async()=>{
+  await bridge.poll(report());
+  const id=await bridge.request('upload');await bridge.poll(report());
+  await assert.rejects(()=>bridge.finish(id,{instanceId,result:'published'}),/não confirmou/);
+  await pool.query(`UPDATE browser_commands SET config=config||'{"publishNow":true,"requestManaged":true}'::jsonb WHERE id=$1`,[id]);
+  await assert.rejects(()=>bridge.finish(id,{instanceId,result:'published'}),/não confirmou/);
+  await bridge.progress(id,{instanceId,stage:'browser_upload_started'});
+  await assert.rejects(()=>bridge.finish(id,{instanceId,result:'published'}),/não confirmou/);
+  await bridge.progress(id,{instanceId,stage:'browser_published'});
+  assert.equal(await bridge.finish(id,{instanceId,result:'published'}),'completed');
+  assert.equal((await bridge.state()).jobs[0].status,'completed');
+});

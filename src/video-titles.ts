@@ -12,8 +12,8 @@ export function genericVideoTitle(title:string) {
 const titleSchema=z.string().trim().min(5).max(100).refine(title=>!genericVideoTitle(title),'Descreva o assunto do vídeo; números de arquivo não são títulos.');
 const reviewsSchema=z.object({reviews:z.array(z.object({videoId:z.string().uuid(),title:titleSchema,sha256:z.string().regex(/^[a-f0-9]{64}$/),evidence:z.string().trim().min(10).max(2000)}).strict()).min(1).max(100)}).strict();
 
-export async function titleReview(videoId:string,version:string) {
-  const {rows:[review]}=await pool.query('SELECT title,sha256,evidence FROM video_title_reviews WHERE video_id=$1 AND source_version=$2',[videoId,version]);
+export async function titleReview(videoId:string,version:string,verifyPackHash=false) {
+  const {rows:[review]}=await pool.query('SELECT title,sha256,evidence,source_version FROM video_title_reviews WHERE video_id=$1 AND (source_version=$2 OR $3)',[videoId,version,verifyPackHash]);
   return review;
 }
 export async function saveTitleReviews(body:unknown) {
