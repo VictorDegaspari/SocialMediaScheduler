@@ -1,0 +1,278 @@
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright-core';
+import { execFileSync, execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, rm, writeFile, utimes, symlink, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+
+process.env.ENCRYPTION_KEY ||= '00'.repeat(32);
+const { BrowserJournal, nextBrowserVideo, nextPackVideo, prepareTikTokUpload, scheduleTikTokUpload, BrowserActionRequired } = await import('../src/browser-tiktok.js');
+const {metadataSchema}=await import('../src/domain.js');
+const { sha256 } = await import('../src/media.js');
+const { manualBrowserLogin, sharedProfileOptions } = await import('../src/browser-login.js');
+const directory = await mkdtemp(join(tmpdir(), 'watcher-browser-integration-'));
+const media = join(directory, 'media'), work = join(directory, 'work');
+await mkdir(media); await mkdir(work);
+const journal = new BrowserJournal(join(directory, 'jobs')); await journal.init();
+const first = join(media, 'mais-antigo.mp4');
+execFileSync('ffmpeg', ['-v','error','-f','lavfi','-i','color=c=green:s=64x96:d=1','-c:v','libx264','-pix_fmt','yuv420p',first]);
+await writeFile(join(media, 'mais-antigo.json'), JSON.stringify({title:'Teste local',tiktok:{madeWithAI:true}}));
+const old = new Date(Date.now()-90_000);
+await utimes(first, old, old); await utimes(join(media, 'mais-antigo.json'),old,old);
+const browser = await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
+
+test('seleciona MP4 estável, conserva origem e IA, ignora links e conteúdo já preparado', async () => {
+  const before = await sha256(first);
+  await symlink(first, join(media,'link.mp4'));
+  const candidate = (await nextBrowserVideo(media, work, journal))!;
+  assert.equal(candidate.name, 'mais-antigo.mp4');
+  assert.equal(candidate.metadata.tiktok.madeWithAI, true);
+  assert.notEqual(candidate.path, first);
+  assert.equal(await sha256(first), before);
+  await journal.claim(candidate.hash, candidate.name, true);
+  assert.equal(await nextBrowserVideo(media,work,journal),undefined);
+  await rm(candidate.directory,{recursive:true,force:true});
+  await writeFile(join(media,'novo.mp4'),await readFile(first)); // Still being copied: no stability yet.
+  assert.equal(await nextBrowserVideo(media,work,journal),undefined);
+});
+
+test('se o JSON ainda não está pronto, nenhum arquivo é preparado', async () => {
+  await writeFile(join(media,'mais-antigo.json'),JSON.stringify({title:'Aguardando',ready:false}));
+  await utimes(join(media,'mais-antigo.json'),old,old);
+  assert.equal(await nextBrowserVideo(media,work,journal),undefined);
+});
+test('pack baixa apenas o próximo vídeo válido, pula incompatíveis e não baixa novamente após reinício',async()=>{
+  const {PackSource}=await import('../src/pack-source.js');
+  const {PACK_CATALOG_URL}=await import('../src/pack-config.js');
+  const original=globalThis.fetch,bytes=await readFile(first),ids=['pack-invalid-001','pack-valid-0002','pack-copy-00003'];
+  const downloads:string[]=[];
+  globalThis.fetch=async input=>{
+    const url=new URL(String(input));
+    if(url.href===PACK_CATALOG_URL)return Response.json(ids.map((drive,i)=>({drive,t:'Vídeo '+i,type:'v'})));
+    assert.equal(url.hostname,'drive.usercontent.google.com');const id=url.searchParams.get('id')!;downloads.push(id);
+    return new Response(id===ids[0]?Buffer.from('invalid media'):bytes,{headers:{'Content-Type':'video/mp4'}});
+  };
+  const packJournal=new BrowserJournal(join(directory,'pack-jobs'));await packJournal.init();
+  try {
+    await new PackSource().catalog(true);
+    const candidate=await nextPackVideo(work,packJournal);assert(candidate);
+    assert.equal(candidate.sourceId,'gta6-pack:'+ids[1]);assert.deepEqual(downloads,ids.slice(0,2));
+    assert.equal(candidate.metadata.tiktok.madeWithAI,true);
+    const job=await packJournal.claim(candidate.hash,candidate.name,true,candidate.sourceId);assert(job);await packJournal.update(job,'scheduled');
+    await rm(candidate.directory,{recursive:true,force:true});
+    const restarted=new BrowserJournal(packJournal.directory);
+    assert.equal(await nextPackVideo(work,restarted),undefined);assert.deepEqual(downloads,ids,'a cópia idêntica é baixada uma vez e deduplicada por hash');
+    assert.equal(await nextPackVideo(work,restarted),undefined);assert.deepEqual(downloads,ids,'nenhum arquivo conhecido é baixado novamente');
+  }finally{globalThis.fetch=original;}
+});
+
+test('upload e legenda funcionam pelo DOM sem clicar em Publicar', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`<input type="file" accept="video/*" hidden><div id="form"></div><script>
+      window.published=0; window.files=[];
+      document.querySelector('input').onchange=e=>{
+        window.files=[...e.target.files].map(f=>f.name);
+        document.querySelector('#form').innerHTML='<div contenteditable="true" role="textbox"></div><button disabled onclick="window.published++">Publicar</button>';
+        setTimeout(()=>document.querySelector('button').disabled=false,100);
+      };
+    </script>`);
+    const order: string[] = [];
+    const result = await prepareTikTokUpload(page, first, 'Legenda do vídeo', {
+      timeout:5000,onBeforeUpload:async()=>{order.push('claim');},onUploadStarted:()=>{order.push('transfer');}
+    });
+    assert.equal(result.status,'review');
+    assert.deepEqual(order,['claim','transfer']);
+    assert.deepEqual(await page.evaluate(()=>({files:(window as any).files,published:(window as any).published})), {files:['mais-antigo.mp4'],published:0});
+    assert.equal(await page.getByRole('textbox').innerText(),'Legenda do vídeo');
+  } finally {await page.close();}
+});
+
+test('CAPTCHA e login interrompem a rotina antes da seleção do arquivo', async () => {
+  const page = await browser.newPage();
+  try {
+    let claims = 0;
+    const options = {timeout:500,onBeforeUpload:async()=>{claims++;},onUploadStarted:()=>{throw new Error('Não deve iniciar.');}};
+    await page.setContent('<input type="file" accept="video/*"><iframe title="captcha" srcdoc="Verifique para continuar"></iframe>');
+    await assert.rejects(()=>prepareTikTokUpload(page,first,'Teste',options),error=>error instanceof BrowserActionRequired && error.code==='security_check');
+    await page.setContent('<input type="file" accept="video/*"><div role="dialog"><h2>Entrar no TikTok</h2></div>');
+    await assert.rejects(()=>prepareTikTokUpload(page,first,'Teste',options),error=>error instanceof BrowserActionRequired && error.code==='login_required');
+    assert.equal(claims,0);
+  } finally {await page.close();}
+});
+
+test('uma interface diferente não é confundida com upload pronto', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<input type="file" accept="video/*"><p>Processamento não confirmado</p>');
+    let started=false;
+    await assert.rejects(()=>prepareTikTokUpload(page,first,'Teste',{timeout:400,onBeforeUpload:async()=>{},onUploadStarted:()=>{started=true;}}),error=>error instanceof BrowserActionRequired && error.code==='page_changed');
+    assert.equal(started,true); // Controller must retain an unknown claim, not retry.
+  } finally {await page.close();}
+});
+
+test('agendamento nativo seleciona a data reservada, aplica IA e exige confirmação após o clique',async()=>{
+  const page=await browser.newPage();
+  const date=new Date(Math.ceil((Date.now()+86400_000)/60_000)*60_000),meta=metadataSchema.parse({title:'Lote',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:true}});
+  try {
+    await page.setContent(`<label><input type="radio" name="timing">Schedule</label><select aria-label="Who can watch this video"><option>Only me</option><option>Everyone</option></select><input type="date"><input type="time"><label><input type="checkbox" checked>Allow comments</label><label><input type="checkbox" checked>Allow duet</label><label><input type="checkbox" checked>Allow stitch</label><label><input type="checkbox">AI-generated content</label><button onclick="document.querySelector('#result').textContent='Video scheduled successfully'">Schedule</button><p id="result"></p>`);
+    const result=await scheduleTikTokUpload(page,date,meta,2000);
+    assert.equal(result.status,'scheduled');assert.equal(result.publishAt,date.toISOString());
+    const {DateTime}=await import('luxon');
+    assert.equal(await page.locator('input[type=date]').inputValue(),DateTime.fromJSDate(date).setZone('America/Sao_Paulo').toISODate());
+    assert.equal(await page.locator('input[type=time]').inputValue(),DateTime.fromJSDate(date).setZone('America/Sao_Paulo').toFormat('HH:mm'));
+    assert(await page.getByRole('checkbox',{name:'AI-generated content'}).isChecked());
+    assert.equal(await page.getByRole('checkbox',{name:'Allow comments'}).isChecked(),false);
+    assert.equal(await page.getByRole('combobox',{name:'Who can watch this video'}).inputValue(),'Everyone');
+    await page.locator('#result').evaluate(el=>el.textContent='');
+    await page.getByRole('button',{name:'Schedule',exact:true}).evaluate(el=>el.removeAttribute('onclick'));
+    await assert.rejects(()=>scheduleTikTokUpload(page,date,meta,400),error=>error instanceof BrowserActionRequired&&error.code==='upload_unconfirmed');
+  }finally{await page.close();}
+});
+test('limite remoto, data vencida e seletor desconhecido impedem confirmação de agendamento',async()=>{
+  const page=await browser.newPage(),meta=metadataSchema.parse({title:'Teste',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE'}});
+  try {
+    await page.setContent('<p>Daily upload limit reached</p>');
+    await assert.rejects(()=>scheduleTikTokUpload(page,new Date(Math.ceil((Date.now()+86400_000)/60_000)*60_000),meta,400),error=>error instanceof BrowserActionRequired&&error.code==='platform_limit');
+    await page.setContent('<button>Publicar</button>');
+    await assert.rejects(()=>scheduleTikTokUpload(page,new Date(Date.now()-1000),meta,400),/janela/);
+    await assert.rejects(()=>scheduleTikTokUpload(page,new Date(Math.ceil((Date.now()+86400_000)/60_000)*60_000),meta,400),/privacidade|controle de agendamento/);
+  }finally{await page.close();}
+});
+
+test('recusa do Google, inclusive em popup, interrompe o upload antes de selecionar o arquivo', async () => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    let started = false;
+    const options = {timeout:500,onBeforeUpload:async()=>{started=true;},onUploadStarted:()=>{started=true;}};
+    await page.setContent('<input type="file" accept="video/*"><p>This browser or app may not be secure.</p>');
+    await assert.rejects(()=>prepareTikTokUpload(page,first,'Teste',options),error=>error instanceof BrowserActionRequired && error.code==='login_required');
+    await page.setContent('<input type="file" accept="video/*">');
+    const popup = await page.context().newPage();
+    await popup.route('https://accounts.google.com/**',route=>route.fulfill({contentType:'text/html',body:'Login de teste, sem chamadas ao Google'}));
+    await popup.goto('https://accounts.google.com/signin');
+    await assert.rejects(()=>prepareTikTokUpload(page,first,'Teste',options),error=>error instanceof BrowserActionRequired && error.code==='login_required');
+    assert.equal(started,false);
+  } finally {await page.context().close();}
+});
+
+test('perfil autenticado pelo Chrome comum pode ser reaberto para upload sem exportar cookies', async () => {
+  // A local server stands in for completed manual authentication; no real account is accessed.
+  let loginVisited = false;
+  const server = createServer((req,res)=>{
+    res.setHeader('Content-Type','text/html; charset=utf-8');
+    if(req.url==='/login'){
+      loginVisited = true;
+      res.setHeader('Set-Cookie','fixture_session=local-test; HttpOnly; SameSite=Lax; Max-Age=3600; Path=/');
+      res.end('<p>Sessão local de teste estabelecida.</p>');
+    }else res.end((req.headers.cookie||'').includes('fixture_session=local-test')?'<p>Sessão preservada</p>':'<p>Sem sessão</p>');
+  });
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port = (server.address() as {port:number}).port;
+  const profile = join(directory,'manual-profile');
+  const executable = join(directory,'test-chrome.mjs');
+  // Only the test adds headless/dump-dom so native Chrome closes without user interaction.
+  await writeFile(executable,`#!/usr/bin/env node
+import {spawn} from 'node:child_process';
+const child=spawn(process.env.CHROME_PATH||'/usr/bin/google-chrome',['--headless','--dump-dom','--no-sandbox',...process.argv.slice(2)],{stdio:'ignore'});
+process.once('SIGTERM',()=>child.kill('SIGTERM'));
+child.once('error',()=>process.exit(1));
+child.once('close',code=>process.exit(code||0));
+`,{mode:0o700});
+  let resumed;
+  try {
+    await manualBrowserLogin(profile,{executablePath:executable,url:`http://127.0.0.1:${port}/login`,signal:AbortSignal.timeout(15_000)});
+    assert.equal(loginVisited,true,'o Chrome comum deve carregar a página de autenticação local');
+    resumed=await chromium.launchPersistentContext(profile,{...sharedProfileOptions,executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
+    const page=resumed.pages()[0]||await resumed.newPage();
+    await page.goto(`http://127.0.0.1:${port}/account`);
+    assert.equal(await page.locator('body').innerText(),'Sessão preservada');
+  } finally {await resumed?.close();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+test('CLI sem vídeo não abre navegador e Ctrl+C encerra a espera sem aguardar 30 segundos', async () => {
+  const cliDirectory = join(directory, 'cli'), empty = join(cliDirectory,'empty');
+  await mkdir(empty,{recursive:true});
+  const command = ['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs')];
+  const options = {cwd:cliDirectory,env:{...process.env,ENCRYPTION_KEY:'00'.repeat(32)}};
+  const {stdout} = await promisify(execFile)(process.execPath,[...command,'--once','--folder',empty],{...options,timeout:5000});
+  assert.match(stdout,/browser_no_video/);
+  let interruptedAt = 0;
+  const child = spawn(process.execPath,[...command,'--watch','--run-now','--folder',empty],{...options,timeout:5000});
+  child.stdout.on('data',chunk=>{if(String(chunk).includes('browser_no_video')&&!interruptedAt){interruptedAt=Date.now();child.kill('SIGINT');}});
+  const code = await new Promise<number|null>((resolve,reject)=>{child.on('error',reject);child.on('close',resolve);});
+  assert(interruptedAt>0,'a rotina deve chegar à espera por vídeo');
+  assert.equal(code,0);
+  assert(Date.now()-interruptedAt<2000,'a interrupção deve ser imediata');
+});
+
+test('agente executa tarefa do painel e rejeita origem fora da pasta local autorizada',async()=>{
+  const {randomUUID}=await import('node:crypto');
+  const root=join(directory,'agent-workspace'),empty=join(root,'media');
+  await mkdir(empty,{recursive:true});await symlink(resolve('scripts'),join(root,'scripts'));
+  const jobs=[{id:randomUUID(),kind:'upload',folder:empty,stripMetadata:true},{id:randomUUID(),kind:'upload',folder:directory,stripMetadata:true}];
+  const results:string[]=[],stages:string[]=[],testKey='2'.repeat(64);
+  let sent=0,finishAll:()=>void;
+  const completed=new Promise<void>(resolve=>{finishAll=resolve;});
+  const server=createServer(async(req,res)=>{
+    try{
+      assert.equal(req.headers.authorization,'Bearer '+testKey);
+      assert.equal(req.headers['x-watcher-request'],'1');
+      let text='';for await(const chunk of req)text+=chunk;
+      const body=JSON.parse(text);let response:unknown={ok:true};
+      if(req.url==='/api/browser-agent/profiles')response=[{id:'default'}];
+      else if(req.url==='/api/browser-agent/poll')response={job:!body.activeJobId&&sent<jobs.length?jobs[sent++]:null,cancel:false};
+      else if(req.url?.endsWith('/progress'))stages.push(body.stage);
+      else if(req.url?.endsWith('/finish')){results.push(body.result);if(results.length===2)finishAll();}
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify(response));
+    }catch{res.writeHead(400).end();}
+  });
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=(server.address() as {port:number}).port;
+  const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/browser-agent.mjs')],{
+    cwd:root,env:{...process.env,APP_URL:`http://127.0.0.1:${port}`,BROWSER_AGENT_TOKEN:testKey,ENCRYPTION_KEY:'00'.repeat(32),
+      LOCAL_MEDIA_DIR:empty,LOCAL_MEDIA_HOST_DIR:empty,LOG_LEVEL:'silent'},stdio:'ignore'});
+  const closed=new Promise<number|null>((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
+  const timer=setTimeout(()=>child.kill('SIGTERM'),12_000);
+  try{
+    await Promise.race([completed,closed.then(()=>{throw new Error('O agente encerrou antes de concluir as tarefas.');})]);
+    assert.deepEqual(results,['empty','failed']);assert(stages.includes('browser_no_video'));assert(stages.includes('browser_agent_failed'));
+  }finally{
+    clearTimeout(timer);child.kill('SIGINT');await closed;await new Promise<void>(resolve=>server.close(()=>resolve()));
+  }
+});
+
+test('agente recebe cópia privada do backend, confere hash e usa diretório do perfil correto',async()=>{
+  const {randomUUID,createHash}=await import('node:crypto');const {browserProfileDirectory}=await import('../src/browser-profiles.js');
+  const root=join(directory,'prepared-agent'),media=join(root,'media'),profileId=randomUUID(),jobId=randomUUID(),key='5'.repeat(64),bytes=await readFile(first),hash=createHash('sha256').update(bytes).digest('hex');
+  await mkdir(media,{recursive:true});await symlink(resolve('scripts'),join(root,'scripts'));
+  let sent=false,downloaded=false,finished:()=>void;const stages:string[]=[],completed=new Promise<void>(done=>{finished=done;});
+  const server=createServer(async(req,res)=>{
+    try {
+      assert.equal(req.headers.authorization,'Bearer '+key);
+      if(req.url==='/api/browser-agent/jobs/'+jobId+'/media'){assert.equal(req.method,'GET');downloaded=true;res.setHeader('Content-Type','video/mp4');res.end(bytes);return;}
+      let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);let response:unknown={ok:true};
+      if(req.url==='/api/browser-agent/profiles')response=[{id:profileId}];
+      else if(req.url==='/api/browser-agent/poll'){
+        response={job:!sent&&!body.activeJobId?{id:jobId,kind:'upload',folder:media,stripMetadata:true,profileId,publishAt:new Date(Date.now()+86400000).toISOString(),media:{metadata:metadataSchema.parse({title:'Teste privado',tiktok:{privacyLevel:null}}),hash,assetSha256:hash,name:'video.mp4',sourceId:'source-video-01'}}:null,cancel:false};sent=true;
+      }else if(req.url?.endsWith('/progress'))stages.push(body.stage);
+      else if(req.url?.endsWith('/finish')){assert.equal(body.result,'failed');finished();}
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify(response));
+    }catch{res.writeHead(400).end();}
+  });
+  await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));
+  const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/browser-agent.mjs')],{cwd:root,env:{...process.env,APP_URL:'http://127.0.0.1:'+(server.address() as {port:number}).port,BROWSER_AGENT_TOKEN:key,ENCRYPTION_KEY:'00'.repeat(32),LOCAL_MEDIA_DIR:media,LOCAL_MEDIA_HOST_DIR:media,LOG_LEVEL:'silent'},stdio:'ignore'});
+  const closed=new Promise<number|null>((done,reject)=>{child.once('close',done);child.once('error',reject);});const timer=setTimeout(()=>child.kill('SIGTERM'),12000);
+  try {
+    await Promise.race([completed,closed.then(()=>{throw new Error('O agente não concluiu a conferência.');})]);
+    assert(downloaded);assert(stages.includes('page_changed'),'a cópia deve passar pelo hash antes de recusar os metadados de privacidade, sem abrir TikTok');
+    assert(stages.includes('browser_preparing_source'));
+    const files=await import('node:fs/promises');assert((await files.stat(browserProfileDirectory(profileId,join(root,'.browser-data/tiktok')))).isDirectory());
+  }finally{clearTimeout(timer);child.kill('SIGINT');await closed;await new Promise<void>(done=>server.close(()=>done()));}
+});
+
+after(async()=>{await browser.close();await rm(directory,{recursive:true,force:true});});

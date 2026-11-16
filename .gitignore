@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+data/
+media/
+artifacts/
+.vercel/
+.browser-data/
+.playwright-mcp/
+*.log

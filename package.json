@@ -1,0 +1,45 @@
+{
+  "name": "drive-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
+    "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:integration": "bash scripts/test-integration.sh",
+    "test:ui": "bash scripts/test-ui.sh",
+    "test:browser": "node --env-file-if-exists=.env --import tsx --test tests/browser.browser.ts",
+    "up": "bash scripts/start.sh",
+    "down": "docker compose stop",
+    "logs": "docker compose logs -f --tail=100 app",
+    "status": "docker compose ps",
+    "scan": "node scripts/run-now.mjs",
+    "tiktok:login": "node --env-file-if-exists=.env --import tsx scripts/tiktok-browser.mjs --login",
+    "tiktok:browser": "node --env-file-if-exists=.env --import tsx scripts/tiktok-browser.mjs"
+  },
+  "dependencies": {
+    "bullmq": "^6.7.6",
+    "express": "^5.1.0",
+    "google-auth-library": "^11.3.4",
+    "ioredis": "^5.6.1",
+    "luxon": "^3.6.1",
+    "pg": "^8.16.0",
+    "pino": "^9.7.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/luxon": "^3.6.2",
+    "@types/node": "^22.15.0",
+    "@types/pg": "^8.15.0",
+    "playwright-core": "^1.52.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

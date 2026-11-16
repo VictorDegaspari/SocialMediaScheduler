@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ready": true,
+  "title": "Uma dica para o seu dia",
+  "description": "Descrição do vídeo.",
+  "hashtags": ["dicas", "rotina"],
+  "targets": ["youtube", "tiktok"],
+  "youtube": {
+    "visibility": "private",
+    "madeForKids": false,
+    "containsSyntheticMedia": false,
+    "tags": ["rotina"]
+  },
+  "tiktok": {
+    "contentPostingMethod": "UPLOAD",
+    "privacyLevel": null,
+    "allowComment": false,
+    "allowDuet": false,
+    "allowStitch": false,
+    "commercialContent": false,
+    "ownBrand": false,
+    "madeWithAI": false
+  }
+}

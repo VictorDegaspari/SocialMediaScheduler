@@ -1,0 +1,72 @@
+name: drive-watcher
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 90s
+    ports:
+      - "127.0.0.1:${PORT:-4317}:4317"
+    environment:
+      APP_URL: ${APP_URL:-http://localhost:4317}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Execute scripts/start.sh primeiro}
+      DATABASE_URL: postgres://watcher:${POSTGRES_PASSWORD}@postgres:5432/watcher
+      REDIS_URL: redis://redis:6379
+      LOCAL_MEDIA_DIR: /media/local
+      LOCAL_MEDIA_HOST_DIR: ${LOCAL_MEDIA_DIR:?Execute scripts/start.sh primeiro}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      BROWSER_AGENT_TOKEN: ${BROWSER_AGENT_TOKEN:-}
+    volumes:
+      - spool:/app/data
+      - type: bind
+        source: ${LOCAL_MEDIA_DIR:?Execute scripts/start.sh primeiro}
+        target: /media/local
+        read_only: true
+        bind:
+          create_host_path: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4317/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: watcher
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Execute scripts/start.sh primeiro}
+      POSTGRES_DB: watcher
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U watcher -d watcher"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  database:
+  redis:
+  spool:

@@ -1,0 +1,8 @@
+# Apenas para desenvolvimento local. O Compose padrão mantém os bancos privados.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5438:5432"
+  redis:
+    ports:
+      - "127.0.0.1:6388:6379"

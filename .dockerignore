@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.git
+data
+media
+artifacts
+.browser-data
+.playwright-mcp
+website

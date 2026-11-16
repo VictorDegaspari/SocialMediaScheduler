@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Como funciona | SocialMediaScheduler</title>
+  <meta name="description" content="Conheça a preparação dos arquivos, a configuração de rotinas, a revisão e os requisitos para executar o SocialMediaScheduler.">
+  <meta name="theme-color" content="#244e3b">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="pt_BR">
+  <meta property="og:site_name" content="SocialMediaScheduler">
+  <meta property="og:title" content="Como funciona">
+  <meta property="og:description" content="Conheça a preparação dos arquivos, a configuração de rotinas, a revisão e os requisitos para executar o SocialMediaScheduler.">
+  <link rel="icon" type="image/svg+xml" href="/assets/logo.svg">
+  <link rel="apple-touch-icon" href="/assets/app-icon.png">
+  <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+<a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+<header class="site-header"><div class="wrap header-inner"><a class="brand" href="/" aria-label="SocialMediaScheduler — início"><img src="/assets/logo.svg" width="38" height="38" alt="">SocialMediaScheduler</a>
+  <nav class="desktop-nav" aria-label="Navegação principal"><a href="/como-funciona/" aria-current="page">Como funciona</a><a href="/integracoes/">Integrações</a><a href="/privacidade/">Privacidade</a><a href="/suporte/">Suporte</a><a class="button small" href="/como-funciona/#comecar">Conhecer o app <span aria-hidden="true">↗</span></a></nav>
+  <details class="mobile-nav"><summary>Menu <span aria-hidden="true">☰</span></summary><nav aria-label="Navegação móvel"><a href="/como-funciona/" aria-current="page">Como funciona</a><a href="/integracoes/">Integrações</a><a href="/privacidade/">Privacidade</a><a href="/suporte/">Suporte</a><a href="/termos/">Termos de uso</a></nav></details>
+</div></header>
+<main id="conteudo"><div class="page-intro"><div class="wrap"><span class="eyebrow">O FLUXO, SEM MISTÉRIO</span><h1>Da pasta para uma rotina organizada.</h1><p>Você prepara os arquivos e escolhe o destino. O aplicativo monitora a origem, evita cópias repetidas e acompanha os próximos envios.</p></div></div><div class="wrap page-layout"><aside class="toc" aria-label="Nesta página"><p>Nesta página</p><a href="#comecar">1. Prepare a instalação</a><a href="#pastas">2. Organize vídeos e metadados</a><a href="#conectar">3. Conecte as contas</a><a href="#horarios">4. Configure a rotina</a><a href="#acompanhar">5. Revise e acompanhe</a><a href="#arquivos">6. Cuide dos originais e das declarações</a></aside><article class="document"><section id="comecar"><h2>1. Prepare a instalação</h2><p>O SocialMediaScheduler é um aplicativo de instalação própria para Ubuntu, com painel local chamado <strong>Drive Watcher</strong>. A instalação usa Docker Compose e mantém a fila e os dados no ambiente do operador. Este site apresenta o produto e suas políticas; a conexão das contas acontece no aplicativo instalado.</p><p>A operação atual é de uma conta por plataforma em cada instalação. Não há cadastro público de usuários nem serviço de publicação hospedado neste site. Para orientações de instalação e disponibilidade, <a href="/suporte/">entre em contato</a>.</p></section><section id="pastas"><h2>2. Organize vídeos e metadados</h2><p>Escolha uma pasta local acessível à instalação ou autorize a leitura do Google Drive e informe o link da pasta. Subpastas podem ser incluídas. A versão atual aceita MP4 vertical ou quadrado, com até 3 minutos e 1 GiB por arquivo.</p><p>Para incluir título, descrição e preferências, coloque um arquivo JSON com o mesmo nome do vídeo na mesma pasta:</p><pre><code>conteudo/
+  video-001.mp4
+  video-001.json</code></pre><p>Exemplo de metadados para YouTube:</p><pre><code>{
+  "title": "Minha próxima dica",
+  "description": "Descrição do vídeo.",
+  "hashtags": ["dicas"],
+  "ready": true,
+  "youtube": {
+    "visibility": "private",
+    "madeForKids": false,
+    "containsSyntheticMedia": false
+  }
+}</code></pre><p>Preencha as declarações sobre público infantil e conteúdo sintético conforme o vídeo real. Para TikTok, a legenda fica disponível para consulta na revisão; o fluxo de caixa de entrada envia o arquivo, e você conclui o texto e as opções no aplicativo TikTok.</p></section><section id="conectar"><h2>3. Conecte as contas</h2><p>Na aba Conexões, autorize Google Drive, YouTube ou TikTok nas telas oficiais de cada plataforma. O aplicativo confere os escopos concedidos e a conta conectada. As credenciais do cliente OAuth, sozinhas, não autorizam publicações.</p><p>Google Drive é opcional para pastas locais. A integração TikTok depende da disponibilidade e da aprovação dos produtos e escopos no portal de desenvolvedores. Veja <a href="/integracoes/">as permissões de cada integração</a>.</p></section><section id="horarios"><h2>4. Configure a rotina</h2><p>Adicione uma pasta, escolha os canais, a frequência de verificação e quando cada vídeo poderá seguir para a próxima etapa. A leitura da pasta e o intervalo entre envios são configurações distintas.</p><ul><li><strong>Horários diários:</strong> por exemplo, 08:00 e 20:00, no fuso America/Sao_Paulo.</li><li><strong>Intervalos:</strong> configure uma quantidade de minutos, horas ou dias entre os envios.</li><li><strong>Revisão local:</strong> prepare os arquivos para sua confirmação antes da transferência.</li><li><strong>YouTube automático:</strong> exige o canal conectado e autorização explícita de automação em Conexões.</li></ul><p>O TikTok sempre exige revisão e confirmação individual no painel. Um horário representa a oportunidade de processamento ou início de upload; não garante o horário em que o vídeo ficará público.</p></section><section id="acompanhar"><h2>5. Revise e acompanhe</h2><p>O histórico apresenta arquivos descobertos, pendências, falhas e resultados. Uma identificação do conteúdo evita que a mesma cópia seja enviada novamente ao mesmo destino. Arquivos que mudam durante a cópia aguardam estabilidade antes de entrar no fluxo.</p><p>No YouTube, verifique também o resultado no YouTube Studio. No TikTok, abra a notificação recebida no aplicativo e finalize a publicação. Você pode pausar uma rotina, desconectar uma conta ou interromper os serviços da instalação.</p><div class="notice">O computador e os serviços precisam permanecer ligados. Ao retornar de uma parada, a rotina processa no máximo um vídeo por oportunidade e calcula o próximo horário futuro.</div></section><section id="arquivos"><h2>6. Cuide dos originais e das declarações</h2><p>Os arquivos originais permanecem na origem. A opção de remover metadados, ativada por padrão por rotina, cria uma cópia sem tags descritivas e capítulos. Ela preserva áudio, vídeo e orientação e não apaga os campos do JSON.</p><p>A limpeza não impede identificação de conteúdo de IA e não substitui as declarações exigidas. Revise e mantenha os rótulos aplicáveis no YouTube e no TikTok. Mais detalhes estão nos <a href="/termos/">termos de uso</a>.</p></section></article></div></main>
+<footer class="site-footer"><div class="wrap">
+  <div class="footer-grid"><div><a class="brand" href="/" aria-label="SocialMediaScheduler — início"><img src="/assets/logo.svg" width="38" height="38" alt="">SocialMediaScheduler</a><p>Vídeos organizados, contas autorizadas e uma rotina sob seu controle. Aplicativo de instalação própria, com painel local Drive Watcher.</p></div>
+    <nav class="footer-links" aria-label="Informações e políticas">
+      <a href="/como-funciona/">Como funciona</a><a href="/integracoes/">Integrações</a><a href="/suporte/">Suporte</a>
+      <a href="/privacidade/">Política de privacidade</a><a href="/termos/">Termos de uso</a><a href="/exclusao-de-dados/">Exclusão de dados</a>
+    </nav>
+  </div>
+  <div class="footer-meta"><span>© 2026 · Victor Degaspari</span><a href="mailto:eshoputilities@gmail.com">eshoputilities@gmail.com</a><span>Produto independente, sem afiliação às plataformas.</span></div>
+</div></footer>
+</body></html>
