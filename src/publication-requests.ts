@@ -14,6 +14,7 @@ import {nativeScheduleSchema,planNativeDate,uploadBudgetAvailable,validScheduleD
 import {browserBridge,browserConfigSchema} from './browser-bridge.js';
 import type {LocalPublisher} from './local-publisher.js';
 import {saveTitleReviews} from './video-titles.js';
+import {cursorFields,keysetClause,pageLimit,paginateRows,parsePagination,type PageOptions} from './pagination.js';
 
 const uuid=z.string().uuid(),profileId=z.union([z.literal('default'),uuid]);
 const time=z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
@@ -44,18 +45,27 @@ async function countsMany(ids:string[]):Promise<Map<string,Counts>> {
 }
 async function counts(id:string){return (await countsMany([id])).get(id)||emptyCounts();}
 export class PublicationRequests {
-  async context() {
-    const [profiles,accounts,browsers,agent,requests,actions]=await Promise.all([
+  async context(pages:{requests?:PageOptions;actions?:PageOptions}={}) {
+    const requestPage=pages.requests||parsePagination({},{scope:'requests'}),actionPage=pages.actions||parsePagination({},{scope:'actions'});
+    const requestValues:unknown[]=[],actionValues:unknown[]=[];
+    const requestFilter=keysetClause(requestPage,'r.created_at','r.id',requestValues),requestLimit=pageLimit(requestPage,requestValues);
+    const actionFilter=keysetClause(actionPage,'a.created_at','a.id',actionValues),actionLimit=pageLimit(actionPage,actionValues);
+    const [profiles,accounts,browsers,agent,requests,actions,actionCount]=await Promise.all([
       pool.query(`SELECT p.*,w.source_type,w.folder_url,w.source_roots,w.pack_defaults,w.metadata_defaults FROM publishing_profiles p LEFT JOIN watches w ON w.id=p.watch_id ORDER BY p.created_at`),nativeChannels(),
       pool.query('SELECT id,name FROM browser_profiles ORDER BY created_at'),pool.query('SELECT * FROM browser_agent WHERE id=true'),
-      pool.query('SELECT r.*,p.name AS profile_name FROM publication_requests r JOIN publishing_profiles p ON p.id=r.profile_id ORDER BY r.created_at DESC LIMIT 100'),
-      pool.query(`SELECT a.*,p.name AS profile_name,r.provider FROM manual_actions a JOIN publication_requests r ON r.id=a.request_id JOIN publishing_profiles p ON p.id=r.profile_id WHERE a.resolved_at IS NULL ORDER BY a.created_at`)]);
+      pool.query(`SELECT r.*,p.name AS profile_name,${cursorFields('r.created_at','r.id')} FROM publication_requests r JOIN publishing_profiles p ON p.id=r.profile_id
+        WHERE true${requestFilter} ORDER BY r.created_at DESC,r.id DESC${requestLimit}`,requestValues),
+      pool.query(`SELECT a.*,p.name AS profile_name,r.provider,${cursorFields('a.created_at','a.id')} FROM manual_actions a JOIN publication_requests r ON r.id=a.request_id JOIN publishing_profiles p ON p.id=r.profile_id
+        WHERE a.resolved_at IS NULL${actionFilter} ORDER BY a.created_at DESC,a.id DESC${actionLimit}`,actionValues),
+      pool.query('SELECT count(*)::int AS count FROM manual_actions WHERE resolved_at IS NULL')]);
     const report=agent.rows[0];
-    const totals=await countsMany(requests.rows.map(r=>r.id));
-    const jobs=requests.rows.map(row=>{const n=totals.get(row.id)||emptyCounts();return {...row,...n,waiting:Math.max(0,row.quantity-n.confirmed-n.reserved)};});
+    const requestResult=paginateRows(requests.rows,requestPage),actionResult=paginateRows(actions.rows,actionPage);
+    const totals=await countsMany(requestResult.items.map(r=>r.id));
+    const jobs=requestResult.items.map(row=>{const n=totals.get(row.id)||emptyCounts();return {...row,...n,waiting:Math.max(0,row.quantity-n.confirmed-n.reserved)};});
     return {profiles:profiles.rows,accounts,browserProfiles:browsers.rows.map(p=>({...p,...(report?.profiles?.[p.id]||(p.id==='default'?{profileSaved:report?.profile_saved,externalBusy:report?.external_busy}:{}))})),
       agentOnline:!!report&&new Date(report.last_seen).getTime()>Date.now()-20_000,googleConnected:!!(await getSetting<any>('googleTokens'))?.refresh_token,
-      requests:jobs,actions:actions.rows};
+      requests:jobs,actions:actionResult.items,summary:{actionCount:actionCount.rows[0].count},
+      pagination:{requests:requestResult.pagination,actions:actionResult.pagination}};
   }
   async saveProfile(body:unknown,id:string=randomUUID()) {
     const input=profileSchema.parse(body);
@@ -179,7 +189,9 @@ export class PublicationRequests {
 export const publicationRequests=new PublicationRequests();
 export const requestRoutes=Router();
 requestRoutes.post('/api/assistant/titles',async(req,res)=>res.json(await saveTitleReviews(req.body)));
-requestRoutes.get('/api/assistant/context',async(_req,res)=>res.json(await publicationRequests.context()));
+requestRoutes.get('/api/assistant/context',async(req,res)=>res.json(await publicationRequests.context({
+  requests:parsePagination(req.query,{scope:'requests',prefix:'requests'}),actions:parsePagination(req.query,{scope:'actions',prefix:'actions'})
+})));
 requestRoutes.post('/api/assistant/profiles',async(req,res)=>res.status(201).json(await publicationRequests.saveProfile(req.body)));
 requestRoutes.put('/api/assistant/profiles/:id',async(req,res)=>res.json(await publicationRequests.saveProfile(req.body,uuid.parse(req.params.id))));
 requestRoutes.post('/api/assistant/profiles/:id/accounts',async(req,res)=>{

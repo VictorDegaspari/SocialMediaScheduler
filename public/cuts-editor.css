@@ -1,0 +1,27 @@
+/* One scroll surface: keep the dialog shell and actions inside the viewport. */
+#cuts-dialog{--cuts-dialog-gap:24px;--cuts-form-inset:24px;max-height:calc(100dvh - var(--cuts-dialog-gap));max-width:calc(100vw - var(--cuts-dialog-gap));overflow:clip}
+#cuts-dialog[data-mode="edit"]{--cuts-form-inset:22px}
+#cuts-dialog[open]{display:flex;flex-direction:column}
+#cuts-dialog[open][data-mode="edit"]{height:min(1000px,calc(100dvh - var(--cuts-dialog-gap)))}
+#cuts-dialog>.dialog-head{flex:none}
+#cuts-dialog #cuts-dialog-form{flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable;scroll-padding-block:14px 110px;padding-bottom:var(--cuts-form-inset)}
+#cuts-dialog[data-mode="edit"] #cuts-cues{max-height:none;overflow:visible}
+#cuts-dialog .dialog-footer{position:sticky;bottom:calc(-1 * var(--cuts-form-inset));z-index:5;flex-wrap:wrap;gap:10px;padding:12px 0;background:#fff;box-shadow:0 -10px 14px #ffffffed}
+#cuts-dialog .cuts-dialog-feedback{flex-basis:100%;font-size:12px;line-height:1.6;color:#923c2d;white-space:normal}
+#cuts-dialog .cuts-dialog-feedback:empty{display:none}
+#cuts-dialog .cuts-transcript-state{margin:10px 0 16px;font-size:11px;color:#627665}
+#cuts-dialog .cuts-transcript-state .button{margin-top:8px}
+#cuts-dialog .cuts-cues-state{margin:10px 0;font-size:11px;color:#627665}
+#cuts-dialog .cuts-cues-state:empty{display:none}
+#cuts-dialog .cuts-cue-warning{grid-column:1/-1;margin:0 0 8px;color:#923c2d;font-size:11px;line-height:1.6}
+#cuts-dialog .cuts-cue[data-conflict] input{border-color:#b66a4e}
+#cuts-dialog .cuts-phone{width:min(100%,clamp(150px,calc((100dvh - 410px)*.5625),280px))}
+html:has(#cuts-dialog[open]),body:has(#cuts-dialog[open]){overflow:hidden;overscroll-behavior:none}
+@media(max-width:680px){
+  #cuts-dialog{--cuts-dialog-gap:12px}
+  #cuts-dialog[data-mode="edit"]{--cuts-form-inset:16px}
+  #cuts-dialog .cuts-phone{width:100%}
+  #cuts-dialog .dialog-footer .button{flex:1;min-width:0;white-space:normal}
+}
+@media(max-width:560px){#cuts-dialog:not([data-mode="edit"]){--cuts-form-inset:20px}}
+@media(max-height:600px){#cuts-dialog .cuts-editor-preview{position:relative;top:auto}}

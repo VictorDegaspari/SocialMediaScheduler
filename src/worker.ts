@@ -13,6 +13,7 @@ import { publisherEngine } from './native-auth.js';
 import {publicationRequests} from './publication-requests.js';
 import { browserBridge } from './browser-bridge.js';
 import {syncYoutubeTitles} from './video-titles.js';
+import {cleanupPublishedMedia} from './media-cleanup.js';
 
 const MAX_VIDEO_BYTES=1024*1024*1024;
 type Sidecar={file:DriveFile;data:unknown;error?:string};
@@ -26,6 +27,7 @@ export class Worker {
   readonly native=new LocalPublisher();
   private stopping=false;
   private recovered=false;
+  private lastMediaCleanup=0;
   lastTick:Date|null=null;
   private jsonCache=new Map<string,{at:number;bytes:number;data:unknown}>();
   private jsonCacheBytes=0;
@@ -49,9 +51,12 @@ export class Worker {
         if(redis.status==='ready') await redis.set('watcher:heartbeat',this.lastTick.toISOString(),'EX',60).catch(()=>{});
         await setSetting('heartbeat',this.lastTick.toISOString());
         await browserBridge.tick();
+        if(Date.now()-this.lastMediaCleanup>=60_000) {
+          await cleanupPublishedMedia();this.lastMediaCleanup=Date.now();
+        }
         if(await getSetting<boolean>('paused')) return;
         await publicationRequests.tick(this.native);
-        const {rows:watches}=await pool.query<Watch>('SELECT * FROM watches WHERE enabled=true ORDER BY created_at');
+        const {rows:watches}=await pool.query<Watch>('SELECT * FROM watches WHERE enabled=true AND managed_by_cuts=false ORDER BY created_at');
         for(const watch of watches) {
           if(this.stopping) break;
           if(new Date(watch.next_scan_at).getTime()<=Date.now()) {

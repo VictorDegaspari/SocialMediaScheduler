@@ -11,8 +11,11 @@ import { packDefaultsSchema } from './pack-config.js';
 import { LocalFiles } from './local.js';
 import { nextRun } from './domain.js';
 import { nativeScheduleSchema,planNativeDate,validScheduleDate,uploadBudgetAvailable,reservedCapacityAllowed,type Reservation } from './native-schedule.js';
+import {cleanupPublishedMedia} from './media-cleanup.js';
+import {cursorFields,keysetClause,pageLimit,paginateRows,parsePagination,type PageOptions} from './pagination.js';
 
 const ACTIVE = ['pending','running','cancel_requested'];
+const PUBLIC_JOB_FIELDS='id,kind,origin,status,phase,message,filename,upload_started,created_at,started_at,finished_at,planned_at';
 const LEASE_SECONDS = 20;
 export const browserConfigSchema = z.object({
   sourceType:z.enum(['local','gta6_pack']).default('local'),packDefaults:packDefaultsSchema.prefault({}),
@@ -86,10 +89,16 @@ async function recover(db:PoolClient){
 }
 
 export class BrowserBridge {
-  async state(){
-    const [config,agentResult,commands,calendarState]=await Promise.all([configuration(),pool.query('SELECT * FROM browser_agent WHERE id=true'),
-      pool.query(`SELECT id,kind,origin,status,phase,message,filename,upload_started,created_at,started_at,finished_at,planned_at
-        FROM browser_commands ORDER BY created_at DESC LIMIT 30`),
+  async jobs(page:PageOptions=parsePagination({},{scope:'browser'})){
+    const values:unknown[]=[],filter=keysetClause(page,'created_at','id',values),limit=pageLimit(page,values);
+    const {rows}=await pool.query(`SELECT ${PUBLIC_JOB_FIELDS},${cursorFields('created_at','id')} FROM browser_commands
+      WHERE true${filter} ORDER BY created_at DESC,id DESC${limit}`,values);
+    return paginateRows(rows,page);
+  }
+  async state(page:PageOptions=parsePagination({},{scope:'browser'})){
+    const [config,agentResult,commands,active,calendarState]=await Promise.all([configuration(),pool.query('SELECT * FROM browser_agent WHERE id=true'),
+      this.jobs(page),
+      pool.query(`SELECT ${PUBLIC_JOB_FIELDS} FROM browser_commands WHERE status=ANY($1::text[]) ORDER BY created_at DESC,id DESC LIMIT 1`,[ACTIVE]),
       pool.query(`SELECT count(*) FILTER(WHERE planned_at>now() AND status NOT IN ('empty','cancelled','failed'))::int AS reserved,
         count(*) FILTER(WHERE upload_started AND started_at>now()-interval '24 hours')::int AS uploads,
         min(planned_at) FILTER(WHERE planned_at>now() AND status NOT IN ('empty','cancelled','failed')) AS next
@@ -97,7 +106,7 @@ export class BrowserBridge {
     const agent=agentResult.rows[0];
     return {configured:/^[a-f0-9]{64}$/.test(process.env.BROWSER_AGENT_TOKEN||''),config,rootPath:localMediaHostDir,
       agent:{online:online(agent),profileSaved:!!agent?.profile_saved,externalBusy:!!agent?.external_busy,desktop:!!agent?.desktop,lastSeen:agent?.last_seen||null},
-      active:commands.rows.find(j=>ACTIVE.includes(j.status))||null,jobs:commands.rows,calendar:calendarState.rows[0]};
+      active:active.rows[0]||null,jobs:commands.items,pagination:commands.pagination,calendar:calendarState.rows[0]};
   }
   async save(body:unknown){
     const input=browserConfigSchema.parse(body);
@@ -257,7 +266,7 @@ export class BrowserBridge {
       if(job.phase==='platform_limit'){await setSetting('uploadCooldown:browser:tiktok:'+(job.config.profileId||'default'),new Date(Date.now()+86400_000).toISOString());if(!job.request_id)await db.query("UPDATE browser_settings SET blocked_until=now()+interval '24 hours' WHERE id=true");}
       return status;
     });
-    if(['scheduled','completed','duplicate'].includes(status)){const {rows:[row]}=await pool.query('SELECT delivery_id FROM browser_commands WHERE id=$1',[id]);if(row?.delivery_id){await pool.query('UPDATE deliveries SET local_file=NULL WHERE id=$1',[row.delivery_id]);const {rm}=await import('node:fs/promises');const {join}=await import('node:path');await rm(join(dataDir,row.delivery_id+'.native.mp4'),{force:true});}}
+    if(['scheduled','completed','duplicate'].includes(status)){const {rows:[row]}=await pool.query('SELECT delivery_id FROM browser_commands WHERE id=$1',[id]);if(row?.delivery_id)await cleanupPublishedMedia(row.delivery_id);}
     if(status!=='empty')await event(status==='unknown'||status==='failed'?'warning':'info',status==='completed'?'Vídeo publicado no TikTok.':status==='scheduled'?'Vídeo agendado no TikTok para a data reservada.':status==='review'?'Vídeo preparado no navegador; publicação final depende da revisão no Chrome.':status==='done'?'Janela de login do TikTok encerrada.':status==='cancelled'?'Tarefa do navegador interrompida.':'A tarefa do navegador requer conferência.');
     return status;
   }
@@ -271,6 +280,7 @@ export function browserAgentAuthorized(header:string|undefined){
 }
 export const browserBridge=new BrowserBridge();
 export const browserRoutes=Router();
+browserRoutes.get('/api/browser/jobs',async(req,res)=>res.json(await browserBridge.jobs(parsePagination(req.query,{scope:'browser'}))));
 browserRoutes.post('/api/browser/config',async(req,res)=>res.json({ok:true,config:await browserBridge.save(req.body)}));
 browserRoutes.post('/api/browser/login',async(_req,res)=>res.status(202).json({id:await browserBridge.request('login')}));
 browserRoutes.post('/api/browser/run',async(_req,res)=>res.status(202).json({id:await browserBridge.request('upload')}));

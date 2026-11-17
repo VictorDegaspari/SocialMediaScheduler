@@ -1,5 +1,6 @@
 import {packDefaultsFields,readPackDefaults} from './pack-source.js';
 import {nativeScheduleFields,readNativeSchedule} from './native-schedule.js';
+import {renderPagination,resetPagination} from './pagination.js';
 const labels={scheduled:'Agendado no TikTok',pending:'Na fila',running:'Em andamento',cancel_requested:'Interrompendo',review:'Preparado no Chrome',empty:'Sem vídeo novo',done:'Janela encerrada',failed:'Atenção',unknown:'Conferir envio',cancelled:'Interrompido'};
 
 export function renderBrowserPanel(state,{icon,badge,esc,date}){
@@ -40,7 +41,7 @@ export function renderBrowserPanel(state,{icon,badge,esc,date}){
       <p class="tip">Este fluxo usa a origem escolhida acima. O Pack GTA 6 dispensa uma pasta local. As rotinas do YouTube continuam em Minhas pastas. Evite configurar o mesmo vídeo para duas formas de envio ao TikTok.</p>
     </section>
   </div>
-  <section class="browser-history"><div class="section-head"><div><h2>Atividades do navegador</h2><p>Upload preparado e publicação confirmada são etapas diferentes.</p></div></div><div class="panel">${jobRows?`<div class="table-wrap"><table><thead><tr><th>TAREFA</th><th>SITUAÇÃO</th><th>ANDAMENTO</th><th>HORÁRIO</th></tr></thead><tbody>${jobRows}</tbody></table></div>`:'<div class="empty-state compact"><h3>Nenhuma tarefa solicitada</h3><p>Conecte sua conta e coloque um MP4 na pasta para iniciar.</p></div>'}</div></section>`;
+  <section class="browser-history"><div class="section-head"><div><h2>Atividades do navegador</h2><p>Upload preparado e publicação confirmada são etapas diferentes.</p></div></div><div class="panel">${jobRows?`<div class="table-wrap"><table><thead><tr><th>TAREFA</th><th>SITUAÇÃO</th><th>ANDAMENTO</th><th>HORÁRIO</th></tr></thead><tbody>${jobRows}</tbody></table></div>`:'<div class="empty-state compact"><h3>Nenhuma tarefa solicitada</h3><p>Conecte sua conta e coloque um MP4 na pasta para iniciar.</p></div>'}${renderPagination(b.pagination,'browser',esc)}</div></section>`;
 }
 
 export function bindBrowserPanel({api,refresh,toast}){
@@ -74,7 +75,7 @@ export function bindBrowserPanel({api,refresh,toast}){
           const form=document.querySelector('#browser-config-form');if(!form.reportValidity())return;
           await api('/browser/config',body(form));
         }
-        await api('/browser/'+action,{});await refresh(true);
+        await api('/browser/'+action,{});if(['login','run'].includes(action))resetPagination('browser');await refresh(true);
         toast({login:'Login solicitado. Confira o Chrome no seu computador.',run:'Envio solicitado. Acompanhe o andamento abaixo.',pause:'Novos envios automáticos pausados.',stop:'Interrupção solicitada. Confira o Chrome se o upload já começou.'}[action]);
       }
     }catch(error){toast(error.message,true);}finally{button.disabled=false;}

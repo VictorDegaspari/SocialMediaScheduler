@@ -69,6 +69,44 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS deliveries_status ON deliveries(status);
     CREATE INDEX IF NOT EXISTS events_date ON events(created_at DESC);
+    CREATE TABLE IF NOT EXISTS cut_jobs (
+      id uuid PRIMARY KEY,url text NOT NULL,status text NOT NULL DEFAULT 'queued',
+      title text,duration double precision,language text NOT NULL DEFAULT 'pt',
+      clip_count int NOT NULL CHECK(clip_count BETWEEN 1 AND 5),
+      target_seconds int NOT NULL CHECK(target_seconds BETWEEN 20 AND 180),
+      transcript jsonb,error text,source_removed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS cuts (
+      id uuid PRIMARY KEY,job_id uuid NOT NULL REFERENCES cut_jobs(id),
+      title text NOT NULL,start_seconds double precision NOT NULL,end_seconds double precision NOT NULL,
+      reason text NOT NULL,score double precision NOT NULL DEFAULT 0,
+      framing text NOT NULL DEFAULT 'fit',captions jsonb NOT NULL DEFAULT '[]',
+      status text NOT NULL DEFAULT 'queued',revision int NOT NULL DEFAULT 1,
+      local_file text,delivery_id uuid REFERENCES deliveries(id),error text,
+      created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT cuts_source_bounds CHECK(start_seconds>=0 AND end_seconds>start_seconds AND end_seconds<=7200.001)
+    );
+    ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS replay_data jsonb;
+    ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS pending_analysis jsonb;
+    ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS analysis_message text;
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS caption_style jsonb NOT NULL DEFAULT '{}';
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS framing_options jsonb NOT NULL DEFAULT '{}';
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS excluded_ranges jsonb NOT NULL DEFAULT '[]';
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS output_duration double precision;
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS render_warnings jsonb NOT NULL DEFAULT '[]';
+    ALTER TABLE cuts DROP CONSTRAINT IF EXISTS cuts_check;
+    UPDATE cuts SET output_duration=end_seconds-start_seconds WHERE output_duration IS NULL;
+    DO $$ BEGIN
+      IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='cuts'::regclass AND conname='cuts_source_bounds') THEN
+        ALTER TABLE cuts ADD CONSTRAINT cuts_source_bounds CHECK(start_seconds>=0 AND end_seconds>start_seconds AND end_seconds<=7200.001);
+      END IF;
+      IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='cuts'::regclass AND conname='cuts_output_duration') THEN
+        ALTER TABLE cuts ADD CONSTRAINT cuts_output_duration CHECK(output_duration IS NULL OR output_duration>0 AND output_duration<=180.001);
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS cut_jobs_queue ON cut_jobs(status,created_at);
+    CREATE INDEX IF NOT EXISTS cuts_job ON cuts(job_id,created_at);
     CREATE TABLE IF NOT EXISTS browser_settings (
       id boolean PRIMARY KEY DEFAULT true CHECK(id), folder text NOT NULL, enabled boolean NOT NULL DEFAULT false,
       cadence text NOT NULL DEFAULT 'daily', interval_minutes int NOT NULL DEFAULT 720,
@@ -104,6 +142,7 @@ export async function initDb() {
     );
     ALTER TABLE watches ADD COLUMN IF NOT EXISTS profile_id uuid;
     ALTER TABLE watches ADD COLUMN IF NOT EXISTS controlled_by_requests boolean NOT NULL DEFAULT false;
+    ALTER TABLE watches ADD COLUMN IF NOT EXISTS managed_by_cuts boolean NOT NULL DEFAULT false;
     ALTER TABLE watches ADD COLUMN IF NOT EXISTS source_roots jsonb NOT NULL DEFAULT '[]';
     ALTER TABLE watches ADD COLUMN IF NOT EXISTS metadata_defaults jsonb NOT NULL DEFAULT '{}';
     ALTER TABLE watches DROP CONSTRAINT IF EXISTS watches_folder_id_key;
@@ -133,6 +172,13 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS deliveries_upload_calendar ON deliveries(integration_id,upload_started_at) WHERE upload_started_at IS NOT NULL;
     CREATE INDEX IF NOT EXISTS browser_native_calendar ON browser_commands((COALESCE(config->>'profileId','default')),planned_at) WHERE kind='upload' AND delivery_id IS NULL;
     CREATE INDEX IF NOT EXISTS browser_upload_calendar ON browser_commands((COALESCE(config->>'profileId','default')),started_at) WHERE kind='upload' AND delivery_id IS NULL AND started_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS cut_jobs_visible_page ON cut_jobs(created_at DESC,id DESC) WHERE status<>'discarded';
+    CREATE INDEX IF NOT EXISTS watches_visible_page ON watches(created_at DESC,id DESC) WHERE controlled_by_requests=false AND managed_by_cuts=false;
+    CREATE INDEX IF NOT EXISTS events_page ON events(created_at DESC,id DESC);
+    CREATE INDEX IF NOT EXISTS videos_page ON videos(updated_at DESC,id DESC);
+    CREATE INDEX IF NOT EXISTS publication_requests_page ON publication_requests(created_at DESC,id DESC);
+    CREATE INDEX IF NOT EXISTS manual_actions_open_page ON manual_actions(created_at DESC,id DESC) WHERE resolved_at IS NULL;
+    CREATE INDEX IF NOT EXISTS browser_commands_page ON browser_commands(created_at DESC,id DESC);
     -- Remove the former implicit inheritance from TikTok. An explicit YouTube
     -- declaration and per-video JSON metadata remain authoritative.
     UPDATE watches SET pack_defaults=jsonb_set(pack_defaults,'{youtubeContainsSyntheticMedia}','false'::jsonb),

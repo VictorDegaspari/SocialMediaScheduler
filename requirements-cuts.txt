@@ -1,0 +1,3 @@
+# Versions reviewed with the upstream projects; rebuild to apply updates.
+faster-whisper==1.2.1
+yt-dlp[default]==2026.10.26

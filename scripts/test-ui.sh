@@ -16,10 +16,14 @@ SQL
 }
 trap cleanup EXIT
 cleanup
-node scripts/check-ui.mjs
+./scripts/node-local.sh scripts/check-ui.mjs
 mkdir -p artifacts
 docker compose exec -T app ffmpeg -loglevel error -f lavfi -i color=c=green:s=64x96:d=1 -c:v libx264 -pix_fmt yuv420p -f mp4 -movflags frag_keyframe+empty_moov pipe:1 > artifacts/ui-native.mp4
-node scripts/check-native-ui.mjs
-node scripts/check-browser-panel.mjs
-node scripts/check-requests-ui.mjs
+./scripts/node-local.sh scripts/check-native-ui.mjs
+./scripts/node-local.sh scripts/check-browser-panel.mjs
+./scripts/node-local.sh scripts/check-requests-ui.mjs
+./scripts/node-local.sh scripts/check-cuts-ui.mjs
+./scripts/node-local.sh scripts/check-cuts-editor-regressions.mjs
+./scripts/node-local.sh scripts/check-cuts-panel-sessions.mjs
+./scripts/node-local.sh scripts/check-pagination-ui.mjs
 rmdir "$watcher_media_dir/.qa-ui-local-001"

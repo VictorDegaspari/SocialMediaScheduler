@@ -14,6 +14,9 @@ import { LocalScheduler } from './scheduler.js';
 import {requestRoutes,publicationRequests} from './publication-requests.js';
 import { nativeRoutes } from './native-routes.js';
 import { browserRoutes, browserBridge } from './browser-bridge.js';
+import { cutsRoutes, cutsService } from './cuts.js';
+import { dashboardRoutes, listWatches, listEvents, listVideos, dashboardStats } from './dashboard-lists.js';
+import { parsePagination } from './pagination.js';
 import { publisherEngine,nativeConnectionState,publishingChannels } from './native-auth.js';
 import type { Credentials } from 'google-auth-library';
 
@@ -40,6 +43,8 @@ app.use(express.json({limit:'128kb'}));
 app.use(nativeRoutes);
 app.use(requestRoutes);
 app.use(browserRoutes);
+app.use(cutsRoutes);
+app.use(dashboardRoutes);
 const uuid=z.string().uuid();
 
 app.get('/api/health',async(_req,res)=>{
@@ -48,22 +53,27 @@ app.get('/api/health',async(_req,res)=>{
   res.status(ready?200:503).json({ok:ready,worker:!!worker.lastTick,redis:redis.status==='ready'});
 });
 
-app.get('/api/state',async(_req,res)=>{
-  const [google,tokens,postiz,paused,heartbeat,watches,stats,activities,videos]=await Promise.all([
-    getSetting<GoogleConfig>('google'), getSetting<Credentials>('googleTokens'), getSetting<PostizConfig>('postiz'),
+app.get('/api/state',async(req,res)=>{
+  const watchesPage=parsePagination(req.query,{scope:'watches',prefix:'watches'});
+  const eventsPage=parsePagination(req.query,{scope:'events',prefix:'events',idType:'bigint'});
+  const videosPage=parsePagination(req.query,{scope:'videos',prefix:'videos'});
+  const cutsPage=parsePagination(req.query,{scope:'cuts',prefix:'cuts',defaultLimit:10});
+  const requestsPage=parsePagination(req.query,{scope:'requests',prefix:'requests'});
+  const actionsPage=parsePagination(req.query,{scope:'actions',prefix:'actions'});
+  const browserPage=parsePagination(req.query,{scope:'browser',prefix:'browser'});
+  const [google,tokens,postiz,paused,heartbeat,watches,stats,activities,videos,publishing,browser,cuts,native,queue]=await Promise.all([
+    getSetting<GoogleConfig>('google'),getSetting<Credentials>('googleTokens'),getSetting<PostizConfig>('postiz'),
     getSetting<boolean>('paused'),getSetting<string>('heartbeat'),
-    pool.query(`SELECT w.*, (SELECT count(*)::int FROM videos v WHERE v.watch_id=w.id AND v.status IN ('ready','waiting','retry')) +
-      (SELECT count(*)::int FROM deliveries d JOIN videos v ON v.id=d.video_id WHERE v.watch_id=w.id AND d.engine='local' AND d.status IN ('review','pending','retry','submitting')) AS pending_count FROM watches w WHERE controlled_by_requests=false ORDER BY created_at DESC`),
-    pool.query(`SELECT (SELECT count(*)::int FROM videos WHERE status IN ('ready','waiting','retry','uploading')) +
-      (SELECT count(*)::int FROM deliveries WHERE engine='local' AND status IN ('review','pending','retry','submitting')) AS pending,
-      (SELECT count(*)::int FROM deliveries WHERE status IN ('draft','scheduled','published','processing','private','unlisted','inbox','completed')) AS sent,
-      (SELECT count(*)::int FROM deliveries WHERE status IN ('unknown','failed')) AS attention`),
-    pool.query('SELECT e.id,e.level,e.message,e.created_at,w.name AS watch_name FROM events e LEFT JOIN watches w ON w.id=e.watch_id ORDER BY e.id DESC LIMIT 40'),
-    pool.query(`SELECT v.id,v.name,v.status,v.error,v.created_at,w.name AS watch_name,
-      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',d.id,'engine',d.engine,'provider',d.provider,'status',d.status,'postId',d.post_id,'url',d.release_url,'error',d.error,'plannedAt',d.planned_at)) FROM deliveries d WHERE d.video_id=v.id),'[]') AS deliveries
-      FROM videos v JOIN watches w ON w.id=v.watch_id ORDER BY v.updated_at DESC LIMIT 50`)
+    listWatches(watchesPage),dashboardStats(),listEvents(eventsPage),listVideos(videosPage),
+    publicationRequests.context({requests:requestsPage,actions:actionsPage}),browserBridge.state(browserPage),cutsService.state(cutsPage),
+    nativeConnectionState(),scheduler.state()
   ]);
-  res.json({publishing:await publicationRequests.context(),browser:await browserBridge.state(),connections:{native:await nativeConnectionState(),local:{rootPath:localMediaHostDir},google:{configured:!!google,connected:!!tokens?.refresh_token,clientId:google?.clientId || '',callbackUrl:`${appUrl}/auth/google/callback`},postiz:{configured:!!postiz,baseUrl:postiz?.baseUrl || '',youtubeSchedulingApproved:postiz?.youtubeSchedulingApproved || false}},scheduler:{paused:!!paused,heartbeat,timezone:'America/Sao_Paulo',queue:await scheduler.state()},watches:watches.rows,stats:stats.rows[0],events:activities.rows,videos:videos.rows});
+  res.json({publishing,browser,cuts,
+    connections:{native,local:{rootPath:localMediaHostDir},google:{configured:!!google,connected:!!tokens?.refresh_token,clientId:google?.clientId || '',callbackUrl:`${appUrl}/auth/google/callback`},postiz:{configured:!!postiz,baseUrl:postiz?.baseUrl || '',youtubeSchedulingApproved:postiz?.youtubeSchedulingApproved || false}},
+    scheduler:{paused:!!paused,heartbeat,timezone:'America/Sao_Paulo',queue},
+    watches:watches.items,stats,events:activities.items,videos:videos.items,
+    pagination:{watches:watches.pagination,events:activities.pagination,videos:videos.pagination}
+  });
 });
 
 app.post('/api/settings/google',async(req,res)=>{
@@ -263,11 +273,13 @@ const handler:ErrorRequestHandler=(error,_req,res,_next)=>{
 app.use(handler);
 const server=app.listen(port,process.env.HOST || '127.0.0.1',()=>logger.info({url:appUrl},'Drive Watcher disponível.'));
 void scheduler.start().catch(()=>logger.error({event:'scheduler_start_failed'},'Não foi possível iniciar o scheduler Redis. Reinicie o serviço após recuperar o Redis.'));
+cutsService.start();
 let closing=false;
 async function shutdown(){
   if(closing) return;
   closing=true;
   server.close();
+  await cutsService.stop();
   await scheduler.stop();
   await worker.stop();
   await redis.quit().catch(()=>{});

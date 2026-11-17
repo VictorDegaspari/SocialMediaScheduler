@@ -15,6 +15,8 @@ services:
       LOCAL_MEDIA_DIR: /media/local
       LOCAL_MEDIA_HOST_DIR: ${LOCAL_MEDIA_DIR:?Execute scripts/start.sh primeiro}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      CUTS_WHISPER_MODEL: ${CUTS_WHISPER_MODEL:-small}
+      CUTS_CPU_THREADS: ${CUTS_CPU_THREADS:-4}
       BROWSER_AGENT_TOKEN: ${BROWSER_AGENT_TOKEN:-}
     volumes:
       - spool:/app/data

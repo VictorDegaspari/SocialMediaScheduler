@@ -1,0 +1,387 @@
+import {formatTimecode,parseTimecode} from './cuts-time.js';
+import {previewTimeToSource,sourceTimeToPreview} from './cuts-playback.js';
+import {projectCaptionRows,mergeCaptionRows} from './cuts-captions.js';
+import {replayGraph,replayTimeAt,selectionFromReplay} from './cuts-replay.js';
+export {replayGraph} from './cuts-replay.js';
+const defaults={fontSize:42,color:'#FFFFFF',highlightColor:'#FFE600',outlineColor:'#101010',background:'none',position:'bottom',animation:'none'};
+const layoutDefaults={mode:'fit',focusX:.5,focusY:.5,zoom:1};
+const seconds=value=>Number(Number(value).toFixed(3));
+const clock=value=>formatTimecode(value,{precision:2});
+
+
+function cueRow(cue,index,esc){return `<div class="cuts-cue" data-caption-row="${esc(cue.id)}"${cue.conflict?' data-conflict="true"':''}><label><span class="cuts-cue-time-label">Começa em</span><input aria-label="Início da legenda ${index+1}" name="cueStart" type="text" data-timecode required autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" value="${formatTimecode(cue.start)}"></label><label><span class="cuts-cue-time-label">Termina em</span><input aria-label="Fim da legenda ${index+1}" name="cueEnd" type="text" data-timecode required autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" value="${formatTimecode(cue.end)}"></label><label><span class="sr-only">Texto da legenda ${index+1}</span><textarea aria-label="Texto da legenda ${index+1}" name="cueText" rows="2" required maxlength="500">${esc(cue.text)}</textarea></label><button class="icon-button danger" type="button" data-cut-editor-action="remove-cue" aria-label="Remover legenda ${index+1}">×</button>${cue.conflict?'<p class="cuts-cue-warning">Esta legenda atravessa um limite ou trecho removido. Ajuste os tempos e o texto, divida a linha ou use a transcrição original.</p>':''}</div>`;}
+
+function cutTimeField(name,label,value){
+  const start=name==='start',kind=start?'início':'fim';
+  return `<div class="form-field cuts-time-field"><label for="cut-edit-${name}">${label}</label><input id="cut-edit-${name}" name="${name}" type="text" data-timecode autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" aria-describedby="cut-time-help" value="${formatTimecode(value)}" required><div class="cuts-time-actions"><button class="button small" type="button" data-cut-editor-action="step-time" data-field="${name}" data-step="-1" aria-label="Voltar ${kind} em 1 segundo">−1 s</button><button class="button small" type="button" data-cut-editor-action="step-time" data-field="${name}" data-step="1" aria-label="Adiantar ${kind} em 1 segundo">+1 s</button><button class="button ghost small" type="button" data-cut-editor-action="set-${name}">Marcar ${kind} aqui</button></div></div>`;
+}
+
+function retainedParts(start,end,gaps){
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Escolha um início e um fim válidos no vídeo original.');
+  const parts=[];let cursor=start,output=0;
+  for(const gap of [...gaps].sort((a,b)=>a.start-b.start)){
+    if(!Number.isFinite(gap.start)||!Number.isFinite(gap.end)||gap.start<start||gap.end>end||gap.end<=gap.start||gap.start<cursor)throw new Error('Revise os tempos da remoção. Use minutos:segundos e mantenha os trechos dentro do corte, sem sobreposição.');
+    if(gap.start>cursor){parts.push({start:cursor,end:gap.start,outputStart:output});output+=gap.start-cursor;}
+    cursor=gap.end;
+  }
+  if(cursor<end){parts.push({start:cursor,end,outputStart:output});output+=end-cursor;}
+  if(output<.5||output>180.001)throw new Error('A duração final deve ser entre 0,5 e 180 segundos. Remova mais trechos ou ajuste os limites.');
+  return {parts,duration:output};
+}
+
+/** The source clock stays absolute. The phone preview skips discarded intervals. */
+export function createCutEditor({clip,job,esc,api}){
+  const form=document.querySelector('#cuts-dialog-form'),controller=new AbortController(),signal=controller.signal;
+  const style={...defaults,...clip.caption_style},framing={...layoutDefaults,mode:clip.framing||'fit',...clip.framing_options};
+  const state={gaps:structuredClone(clip.excluded_ranges||[]),original:null,originalLoading:false,originalError:null,parts:[],duration:0,frame:0,alive:true,seek:Number(clip.start_seconds),dragging:false,replayPointer:null,cueCache:structuredClone(clip.captions||[]),captionBase:structuredClone(clip.captions||[]),captionRows:[],captionParts:[],captionPlan:null,captionError:null,edgesApplied:false,nextCue:0,captionsDirty:false,previewPlaying:false,framePending:true,seekVersion:0,videoFrame:null};
+  const input=(id,name,label,value,min,max,step='1')=>`<div class="form-field cuts-editor-range"><label for="${id}">${label} <output data-cut-output="${name}">${value}</output></label><input id="${id}" name="${name}" type="range" min="${min}" max="${max}" step="${step}" value="${value}"></div>`;
+  const select=(id,name,label,options,value)=>`<div class="form-field"><label for="${id}">${label}</label><select id="${id}" name="${name}">${options.map(([v,t])=>`<option value="${v}" ${v===value?'selected':''}>${t}</option>`).join('')}</select></div>`;
+  form.innerHTML=`<div class="cuts-editor-workspace"><aside class="cuts-editor-preview"><div class="cuts-editor-preview-heading"><span class="eyebrow">PRÉVIA PARA CELULAR</span><span class="badge gray">9:16</span></div><div class="cuts-phone"><div class="cuts-phone-screen"><canvas id="cut-phone-canvas" width="720" height="1280" tabindex="0" role="button" data-cut-editor-action="play-preview" data-seeking="true" aria-label="Reproduzir ou pausar a prévia no celular"></canvas><div id="cut-phone-caption" class="cuts-phone-caption"><span id="cut-phone-caption-text"></span></div><div class="cuts-phone-safe" aria-hidden="true"></div><output id="cut-phone-source-time" class="cuts-phone-source-time">Original ${formatTimecode(clip.start_seconds)}</output><div id="cut-phone-loading" class="cuts-phone-loading" role="status">Buscando ${formatTimecode(clip.start_seconds)}…</div></div><div class="cuts-phone-controls"><output id="cut-phone-time"><span id="cut-preview-time">00:00 / 00:00</span></output><input id="cut-phone-seek" type="range" min="0" max="0" step="0.001" value="0" aria-label="Posição na prévia do celular"><div class="cuts-phone-buttons"><button id="cut-phone-back" type="button" data-cut-editor-action="phone-back" aria-label="Voltar 5 segundos na prévia" title="Voltar 5 segundos">−5 s</button><button id="cut-phone-play" type="button" data-cut-editor-action="play-preview" aria-label="Reproduzir prévia no celular" title="Reproduzir prévia"><span aria-hidden="true">▶</span></button><button id="cut-phone-forward" type="button" data-cut-editor-action="phone-forward" aria-label="Avançar 5 segundos na prévia" title="Avançar 5 segundos">+5 s</button><button id="cut-phone-mute" type="button" data-cut-editor-action="phone-mute" aria-label="Silenciar prévia" aria-pressed="false" title="Silenciar prévia"><span aria-hidden="true">♪</span></button></div></div></div><p class="tip">Use os controles dentro do celular para conferir a montagem. O tempo “Original” acompanha a posição selecionada no vídeo.</p><p id="cut-editor-message" class="cuts-editor-message" role="status"></p></aside><section class="cuts-editor-tools"><div class="form-field"><label for="cut-edit-title">Título do corte</label><input id="cut-edit-title" name="title" value="${esc(clip.title)}" required maxlength="100"></div><section class="cuts-tool-section"><div class="cuts-tool-heading"><div><h3>1. Escolha o que fica</h3><p>Use a fonte para marcar os limites e retirar partes que não interessam.</p></div><strong id="cut-final-duration" class="cuts-duration-pill"></strong></div><video id="cut-source-player" controls playsinline preload="metadata" aria-label="Vídeo original para selecionar os trechos" src="/api/cuts/jobs/${encodeURIComponent(job.id)}/source"></video><div class="cuts-source-readout">No vídeo original: <strong id="cut-source-time">${clock(clip.start_seconds)}</strong></div><p id="cut-time-help" class="cuts-time-help">Use minutos:segundos, como <strong>09:11</strong>. Para marcar sem digitar, pause o vídeo e clique em “Marcar aqui”.</p><div class="field-row cuts-main-times">${cutTimeField('start','Começo do corte',clip.start_seconds)}${cutTimeField('end','Fim do corte',clip.end_seconds)}</div><div class="cuts-removal-box"><h4>Remover um trecho do meio</h4><div class="cuts-removal-inputs"><div class="form-field"><label for="cut-remove-start">Remover a partir de</label><input id="cut-remove-start" type="text" data-timecode autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" value="${formatTimecode(clip.start_seconds)}"><button class="button ghost small" type="button" data-cut-editor-action="mark-remove-start">Marcar início</button></div><div class="form-field"><label for="cut-remove-end">Remover até</label><input id="cut-remove-end" type="text" data-timecode autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" value="${formatTimecode(clip.start_seconds)}"><button class="button ghost small" type="button" data-cut-editor-action="mark-remove-end">Marcar fim</button></div><button class="button small" type="button" data-cut-editor-action="add-removal">Remover este trecho</button></div><ul id="cut-removed-ranges" class="cuts-removed-ranges"></ul><p class="tip">Imagem, áudio e legendas dos trechos removidos ficam fora do vídeo final. A prévia pula essas partes.</p></div><details class="cuts-replay-details"><summary>Consultar momentos mais revistos</summary><p class="cuts-replay-instruction">Clique ou arraste na linha do gráfico para marcar o começo do corte.</p><div class="cuts-replay-selection-readout"><span>Início selecionado</span><output id="cut-replay-selected">${formatTimecode(clip.start_seconds)}</output></div><div id="cut-editor-replay">${replayGraph(job.replay_data,job.duration,esc,{interactive:true})}</div><label for="cut-replay-position">Ajuste fino do início · <output id="cut-replay-time">${clock(clip.start_seconds)}</output></label><input id="cut-replay-position" type="range" min="0" max="${Math.max(0,(Number(job.duration)||7200)-.5)}" step="0.001" value="${Number(clip.start_seconds)}"><button class="button small" type="button" data-cut-editor-action="use-replay-window">Usar 60 segundos a partir daqui</button></details></section><section class="cuts-tool-section"><div class="cuts-tool-heading"><div><h3>2. Enquadre para celular</h3><p>Mova o foco e aproxime a imagem sem perder o que importa.</p></div></div>${select('cut-framing','framingMode','Enquadramento vertical',[['fit','Imagem completa · faixas pretas'],['blur','Imagem completa · fundo desfocado'],['crop','Preencher vertical · ajustar foco']],framing.mode)}<div id="cut-crop-controls" class="cuts-crop-controls">${input('cut-focus-x','focusX','Foco horizontal',Math.round(framing.focusX*100),0,100)}${input('cut-focus-y','focusY','Foco vertical',Math.round(framing.focusY*100),0,100)}${input('cut-zoom','zoom','Aproximação',framing.zoom,1,3,.05)}<button class="button ghost small" type="button" data-cut-editor-action="reset-focus">Centralizar imagem</button></div></section><section class="cuts-tool-section"><div class="cuts-tool-heading"><div><h3>3. Dê estilo à legenda</h3><p>O texto continua sendo a fala original.</p></div></div><div class="cuts-style-presets"><button class="button small" type="button" data-cut-editor-action="preset" data-preset="classic">Clássica</button><button class="button small" type="button" data-cut-editor-action="preset" data-preset="highlight">Destaque amarelo</button><button class="button small" type="button" data-cut-editor-action="preset" data-preset="clean">Fundo escuro</button></div>${input('cut-font-size','fontSize','Tamanho da legenda',style.fontSize,24,80)}<div class="cuts-color-grid"><div class="form-field"><label for="cut-caption-color">Cor do texto</label><input id="cut-caption-color" name="color" type="color" value="${esc(style.color)}"></div><div class="form-field"><label for="cut-highlight-color">Cor de destaque</label><input id="cut-highlight-color" name="highlightColor" type="color" value="${esc(style.highlightColor)}"></div><div class="form-field"><label for="cut-outline-color">Cor do contorno</label><input id="cut-outline-color" name="outlineColor" type="color" value="${esc(style.outlineColor)}"></div></div><div class="field-row">${select('cut-caption-position','position','Posição da legenda',[['bottom','Parte inferior · área segura'],['middle','Centro'],['top','Parte superior']],style.position)}${select('cut-caption-background','background','Fundo da legenda',[['none','Sem caixa'],['box','Caixa escura']],style.background)}</div>${select('cut-caption-animation','animation','Animação da legenda',[['none','Sem animação'],['fade','Entrada e saída suaves'],['pop','Entrada com destaque'],['karaoke','Destacar palavra falada']],style.animation)}<p id="cut-karaoke-note" class="tip" hidden>O destaque por palavra usa os tempos reconhecidos no áudio. Linhas corrigidas sem esse alinhamento aparecem sem destaque por palavra.</p></section><section class="cuts-tool-section"><div class="cuts-caption-heading"><div><h3>4. Confira cada palavra</h3><p>Os tempos acompanham o corte no celular, começando em 00:00 e descontando os trechos removidos. Use minutos:segundos; para ajuste fino, digite 00:01,720.</p></div><button class="button small" type="button" data-cut-editor-action="add-cue">Adicionar linha</button></div><label class="checkbox cuts-original-caption"><input type="checkbox" name="originalCaptions"><span>Usar a transcrição original para o intervalo escolhido<small>Substitui as alterações das linhas abaixo ao gerar a nova prévia.</small></span></label><div class="cuts-transcript-state"><p id="cut-transcript-status" role="status"></p><button id="cut-retry-transcript" class="button small" type="button" data-cut-editor-action="retry-transcript" hidden>Tentar carregar transcrição</button></div><div class="cuts-cue-labels" aria-hidden="true"><span>Começa em</span><span>Termina em</span><span>Texto falado</span><span></span></div><p id="cuts-cues-state" class="cuts-cues-state" role="status"></p><div id="cuts-cues"></div></section></section></div><div class="dialog-footer"><button class="button" type="button" data-cuts-action="close-dialog">Cancelar</button><button class="button primary" type="submit">Salvar e gerar prévia</button></div>`;
+  const video=form.querySelector('#cut-source-player'),canvas=form.querySelector('#cut-phone-canvas'),ctx=canvas.getContext('2d'),caption=form.querySelector('#cut-phone-caption'),captionText=form.querySelector('#cut-phone-caption-text'),message=form.querySelector('#cut-editor-message');
+  const get=name=>form.elements.namedItem(name),readStyle=()=>({fontSize:Number(get('fontSize').value),color:get('color').value,highlightColor:get('highlightColor').value,outlineColor:get('outlineColor').value,background:get('background').value,position:get('position').value,animation:get('animation').value});
+  const readTime=name=>parseTimecode(get(name).value);
+  const playerTime=()=>video.readyState>=1&&Number.isFinite(video.currentTime)?video.currentTime:state.seek||0;
+  const timeHint='Use minutos:segundos, como 09:11. Para ajuste fino, use 09:11,720.';
+  function validateTimeField(field){
+    const ignored=field.closest('#cuts-cues')&&get('originalCaptions').checked;
+    field.setCustomValidity(!field.name||ignored||Number.isFinite(parseTimecode(field.value))?'':timeHint);
+  }
+  function setTimeField(field,value){field.value=formatTimecode(value);validateTimeField(field);}
+  const readLayout=()=>({mode:get('framingMode').value,focusX:Number(get('focusX').value)/100,focusY:Number(get('focusY').value)/100,zoom:Number(get('zoom').value)});
+  function editedCues(){
+    if(!state.captionParts.length)return structuredClone(state.cueCache);
+    const edits=[...form.querySelectorAll('.cuts-cue')].map(row=>({id:row.dataset.captionRow,start:parseTimecode(row.querySelector('[name="cueStart"]').value),end:parseTimecode(row.querySelector('[name="cueEnd"]').value),text:row.querySelector('[name="cueText"]').value.trim()}));
+    return mergeCaptionRows(state.captionBase,state.captionRows,edits,state.captionParts);
+  }
+  function currentCues(){return get('originalCaptions').checked?state.original||[]:state.cueCache;}
+  function cacheCues(){
+    try{state.cueCache=editedCues();state.captionError=null;return true;}
+    catch(error){state.captionError=error;return false;}
+  }
+  function numberCaptionRows(){
+    [...form.querySelectorAll('.cuts-cue')].forEach((row,index)=>{
+      for(const [name,label] of [['cueStart','Início'],['cueEnd','Fim'],['cueText','Texto']])row.querySelector('[name="'+name+'"]').setAttribute('aria-label',label+' da legenda '+(index+1));
+      row.querySelector('[data-cut-editor-action="remove-cue"]').setAttribute('aria-label','Remover legenda '+(index+1));
+      row.querySelector('.sr-only').textContent='Texto da legenda '+(index+1);
+    });
+  }
+  function renderCaptionRows(parts){
+    const active=document.activeElement,row=active?.closest('.cuts-cue');
+    const focus=row?{name:active.name,start:parseTimecode(row.querySelector('[name="cueStart"]').value),end:parseTimecode(row.querySelector('[name="cueEnd"]').value),text:row.querySelector('[name="cueText"]').value,selection:[active.selectionStart,active.selectionEnd]}:null;
+    const projection=projectCaptionRows(state.cueCache,parts);
+    state.captionBase=structuredClone(state.cueCache);state.captionRows=projection.rows;state.captionParts=structuredClone(parts);state.captionPlan=JSON.stringify(parts);
+    form.querySelector('#cuts-cues').innerHTML=projection.rows.map((cue,index)=>cueRow(cue,index,esc)).join('');
+    form.querySelector('#cuts-cues-state').textContent=projection.rows.length?'':'Nenhuma legenda nos trechos mantidos. Ajuste o intervalo ou adicione uma linha.';
+    if(focus){
+      const index=projection.rows.findIndex(cue=>Math.abs(cue.start-focus.start)<.001&&Math.abs(cue.end-focus.end)<.001&&cue.text===focus.text);
+      const field=index>=0?form.querySelectorAll('.cuts-cue')[index].querySelector('[name="'+focus.name+'"]'):null;
+      if(field){field.focus({preventScroll:true});if(focus.selection.every(value=>value!==null))field.setSelectionRange(...focus.selection);}
+    }
+  }
+  function applyTranscriptEdges(){
+    if(state.edgesApplied||!state.original||get('originalCaptions').checked||!cacheCues())return false;
+    let outside=[];
+    for(const [start,end] of [[0,Number(clip.start_seconds)],[Number(clip.end_seconds),Number(job.duration)]]){
+      if(end>start)outside.push({start,end});
+    }
+    // A manual line authored while the transcript loads overrides only its
+    // interval; retain the recognized words on either side of that line.
+    for(const cue of state.cueCache)outside=outside.flatMap(part=>{
+      if(cue.end<=part.start||cue.start>=part.end)return [part];
+      return [...(cue.start>part.start?[{start:part.start,end:cue.start}]:[]),...(cue.end<part.end?[{start:cue.end,end:part.end}]:[])];
+    });
+    let output=0;
+    const parts=outside.map(part=>{const result={...part,outputStart:output};output+=part.end-part.start;return result;});
+    const projection=parts.length?projectCaptionRows(state.original,parts):{rows:[],conflicts:[]};
+    if(projection.conflicts.length)throw new Error('Uma legenda corrigida impede alinhar as novas bordas. Ajuste seus tempos ou use a transcrição original.');
+    state.cueCache.push(...projection.rows.map(row=>row.source));
+    state.cueCache.sort((a,b)=>a.start-b.start||a.end-b.end);state.edgesApplied=true;return true;
+  }
+  async function loadTranscript(){
+    if(state.originalLoading||!state.alive)return;
+    const status=form.querySelector('#cut-transcript-status'),retry=form.querySelector('#cut-retry-transcript');
+    state.originalLoading=true;state.originalError=null;retry.hidden=true;status.textContent='Carregando transcrição original…';
+    try{
+      const result=await api('/cuts/jobs/'+encodeURIComponent(job.id)+'/transcript');
+      if(!state.alive)return;
+      state.original=result.captions||[];
+      refreshPlan();
+      if(result.replay)form.querySelector('#cut-editor-replay').innerHTML=replayGraph(result.replay,job.duration,esc,{interactive:true});
+      status.textContent='Transcrição original disponível.';paint();
+    }catch(error){
+      if(!state.alive)return;
+      state.originalError=error.message;status.textContent='A transcrição original não carregou. Suas alterações foram mantidas.';retry.hidden=false;
+      if(get('originalCaptions').checked)message.textContent=error.message;
+    }finally{state.originalLoading=false;}
+  }
+  function curvePoint(svg,time){
+    const x=Math.max(0,Math.min(1000,time/(Number(job.duration)||1)*1000)),points=svg.querySelector('polyline')?.points;
+    if(!points?.numberOfItems)return {x,y:80};
+    let previous=points.getItem(0);
+    for(let i=1;i<points.numberOfItems;i++){
+      const next=points.getItem(i);
+      if(next.x>=x)return {x,y:previous.y+(next.y-previous.y)*(next.x===previous.x?0:(x-previous.x)/(next.x-previous.x))};
+      previous=next;
+    }
+    return {x,y:previous.y};
+  }
+  function updateReplayMarker(){
+    const start=readTime('start'),end=readTime('end'),range=form.querySelector('#cut-replay-position'),svg=form.querySelector('#cut-editor-replay svg');
+    form.querySelector('#cut-replay-selected').textContent=Number.isFinite(start)?formatTimecode(start):'Revise o início';
+    if(!Number.isFinite(start)){svg?.querySelector('.cuts-replay-marker')?.setAttribute('visibility','hidden');return;}
+    range.value=start;range.setAttribute('aria-valuetext',formatTimecode(start));form.querySelector('#cut-replay-time').textContent=formatTimecode(start);
+    if(!svg)return;
+    svg.setAttribute('aria-valuenow',String(start));svg.setAttribute('aria-valuetext',formatTimecode(start));
+    const point=curvePoint(svg,start),marker=svg.querySelector('.cuts-replay-marker'),window=svg.querySelector('.cuts-replay-window');
+    marker.setAttribute('visibility','visible');marker.setAttribute('transform',`translate(${point.x},0)`);marker.querySelector('circle').setAttribute('cy',String(point.y));
+    window.setAttribute('x',String(point.x));window.setAttribute('width',String(Math.max(0,Math.min(1000,Number.isFinite(end)?end/(Number(job.duration)||1)*1000:point.x)-point.x)));
+  }
+  function selectReplayStart(selected,{length}={}){
+    if(!Number.isFinite(selected))return;
+    const start=readTime('start'),end=readTime('end'),duration=Number(job.duration)||7200;
+    const requested=length?Math.min(duration,selected+length):end;
+    const next=selectionFromReplay(length?selected:start,requested,selected,duration,state.gaps);
+    video.pause();state.previewPlaying=false;
+    setTimeField(get('start'),next.start);setTimeField(get('end'),next.end);state.gaps=next.excludedRanges;
+    renderGaps();seekSource(next.start);updateReplayMarker();
+  }
+  function refreshPlan(){
+    try{
+      const result=retainedParts(readTime('start'),readTime('end'),state.gaps),plan=JSON.stringify(result.parts);
+      if(readTime('end')>(Number(job.duration)||7200))throw new Error('O fim do corte deve estar dentro do vídeo original.');
+      const committed=cacheCues();
+      if(!committed&&plan!==state.captionPlan&&!get('originalCaptions').checked)throw state.captionError;
+      const edges=committed&&applyTranscriptEdges();
+      state.parts=result.parts;state.duration=result.duration;
+      if(plan!==state.captionPlan||edges)renderCaptionRows(result.parts);
+      form.querySelector('#cut-final-duration').textContent=`${clock(result.duration)} de vídeo`;
+      message.textContent=state.captionError?.message||projectCaptionRows(currentCues(),state.parts).conflicts[0]?.message||'';
+    }catch(error){state.parts=[];form.querySelector('#cut-final-duration').textContent='Revise os tempos';message.textContent=error.message;}
+    form.querySelector('#cut-crop-controls').hidden=get('framingMode').value!=='crop';
+    form.querySelector('#cut-karaoke-note').hidden=get('animation').value!=='karaoke';
+    for(const label of form.querySelectorAll('[data-cut-output]'))label.textContent=get(label.dataset.cutOutput).value+(label.dataset.cutOutput==='zoom'?'×':label.dataset.cutOutput.startsWith('focus')?'%':'');
+    const original=get('originalCaptions').checked;form.querySelector('#cuts-cues').classList.toggle('cuts-cues-muted',original);for(const input of form.querySelectorAll('#cuts-cues input,#cuts-cues textarea')){input.required=!original;if(input.matches('[data-timecode]'))validateTimeField(input);}
+    paint();
+  }
+  function drawFit(sourceWidth,sourceHeight){const scale=Math.min(720/sourceWidth,1280/sourceHeight);ctx.drawImage(video,(720-sourceWidth*scale)/2,(1280-sourceHeight*scale)/2,sourceWidth*scale,sourceHeight*scale);}
+  function updatePhoneControls(time){
+    const position=sourceTimeToPreview(state.parts,time),valid=Number.isFinite(position.time),range=form.querySelector('#cut-phone-seek'),play=form.querySelector('#cut-phone-play');
+    range.max=String(seconds(state.duration));range.value=valid?String(seconds(position.time)):'0';range.disabled=!state.parts.length;
+    range.setAttribute('aria-valuetext',`${valid?formatTimecode(position.time):'00:00'} de ${formatTimecode(state.duration)}`);
+    form.querySelector('#cut-source-time').textContent=formatTimecode(time);
+    form.querySelector('#cut-preview-time').textContent=valid&&position.included?`${clock(position.time)} / ${clock(state.duration)}`:'Fora do corte atual';
+    form.querySelector('#cut-phone-source-time').textContent='Original '+formatTimecode(time);
+    play.setAttribute('aria-label',video.paused?'Reproduzir prévia no celular':'Pausar prévia no celular');play.title=video.paused?'Reproduzir prévia':'Pausar prévia';play.innerHTML=video.paused?'<span aria-hidden="true">▶</span>':'<span aria-hidden="true">Ⅱ</span>';
+    const mute=form.querySelector('#cut-phone-mute');mute.setAttribute('aria-label',video.muted?'Ativar áudio da prévia':'Silenciar prévia');mute.setAttribute('aria-pressed',String(video.muted));mute.textContent=video.muted?'⊘':'♪';
+    updateReplayMarker();
+  }
+  function waitForFrame(){
+    state.framePending=true;canvas.dataset.seeking='true';
+    const loading=form.querySelector('#cut-phone-loading');loading.hidden=false;loading.textContent=`Buscando ${formatTimecode(state.seek)}…`;
+    caption.hidden=true;
+  }
+  function commitFrame(){
+    const version=state.seekVersion;
+    requestAnimationFrame(()=>{
+      if(!state.alive||video.seeking||version!==state.seekVersion||video.readyState<2)return;
+      state.framePending=false;paint();
+    });
+  }
+  function paint(){
+    if(!state.alive)return;
+    const layout=readLayout(),textStyle=readStyle(),time=playerTime();
+    updatePhoneControls(time);
+    if(video.seeking||state.framePending||video.readyState<2){waitForFrame();return;}
+    canvas.dataset.seeking='false';form.querySelector('#cut-phone-loading').hidden=true;
+    ctx.fillStyle='#000';ctx.fillRect(0,0,720,1280);
+    if(video.readyState>=2&&video.videoWidth&&video.videoHeight){
+      const width=video.videoWidth,height=video.videoHeight;
+      if(layout.mode==='crop'){
+        const scale=Math.max(720/width,1280/height)*layout.zoom,visibleWidth=720/scale,visibleHeight=1280/scale;
+        ctx.drawImage(video,(width-visibleWidth)*layout.focusX,(height-visibleHeight)*layout.focusY,visibleWidth,visibleHeight,0,0,720,1280);
+      }else{
+        if(layout.mode==='blur'){const scale=Math.max(720/width,1280/height)*layout.zoom,visibleWidth=720/scale,visibleHeight=1280/scale;ctx.filter='blur(20px)';ctx.drawImage(video,(width-visibleWidth)*layout.focusX,(height-visibleHeight)*layout.focusY,visibleWidth,visibleHeight,0,0,720,1280);ctx.filter='none';}
+        drawFit(width,height);
+      }
+      canvas.dataset.sourceTime=String(seconds(time));
+    }
+    const part=state.parts.find(p=>time>=p.start&&time<p.end);let cue=part?currentCues().find(c=>c.start<=time&&c.end>time):null;
+    if(cue&&(cue.start<part.start||cue.end>part.end)){
+      const words=cue.words?.filter(w=>w.start>=part.start&&w.end<=part.end);
+      cue=words?.length?{start:words[0].start,end:words.at(-1).end,text:words.map(w=>w.text).join(' '),words}:null;
+    }
+    if(cue&&(time<cue.start||time>=cue.end))cue=null;
+    caption.hidden=!cue;
+    const scale=canvas.getBoundingClientRect().width/720;
+    caption.style.fontSize=(textStyle.fontSize*scale)+'px';caption.style.color=textStyle.color;
+    caption.style.textShadow=`${-2*scale}px 0 ${textStyle.outlineColor}, ${2*scale}px 0 ${textStyle.outlineColor}, 0 ${-2*scale}px ${textStyle.outlineColor}, 0 ${2*scale}px ${textStyle.outlineColor}, 0 ${2*scale}px ${2*scale}px ${textStyle.outlineColor}`;
+    caption.dataset.background=textStyle.background;caption.dataset.position=textStyle.position;
+    if(cue){
+      const words=cue.words,aligned=words?.length&&words.map(w=>w.text.trim()).join(' ').replace(/\s+/g,' ')===cue.text.replace(/\s+/g,' ').trim();
+      captionText.replaceChildren();
+      if(textStyle.animation==='karaoke'&&aligned){for(const [i,word] of words.entries()){const span=document.createElement('span');span.textContent=(i?' ':'')+word.text;span.style.color=time>=word.start&&time<word.end?textStyle.highlightColor:textStyle.color;captionText.append(span);}}
+      else captionText.textContent=cue.text;
+      const relative=Math.max(0,time-cue.start),remaining=Math.max(0,cue.end-time);
+      captionText.style.opacity=textStyle.animation==='fade'?String(Math.min(1,relative/.12,remaining/.12)):textStyle.animation==='pop'?String(Math.min(1,relative/.04,remaining/.1)):'1';
+      captionText.style.transform=textStyle.animation==='pop'?`scale(${.85+.15*Math.min(1,relative/.14)})`:'none';
+    }
+  }
+  function playbackFrame(){
+    if(!state.alive)return;
+    const time=playerTime(),start=readTime('start'),end=readTime('end'),gap=state.gaps.find(r=>time>=r.start&&time<r.end);
+    if(!video.paused&&state.previewPlaying&&!video.seeking){
+      if(time>=end){video.pause();seekSource(end);}
+      else if(gap)seekSource(gap.end);
+      else if(time<start)seekSource(start);
+    }
+    if(!video.paused&&!video.requestVideoFrameCallback)paint();
+    state.frame=requestAnimationFrame(playbackFrame);
+  }
+  function renderGaps(){form.querySelector('#cut-removed-ranges').innerHTML=state.gaps.length?state.gaps.map((range,i)=>`<li><span>${clock(range.start)} → ${clock(range.end)} <small>${(range.end-range.start).toFixed(2)} s removidos</small></span><button class="button ghost small" type="button" data-cut-editor-action="restore-range" data-index="${i}" aria-label="Restaurar trecho ${i+1}">Restaurar</button></li>`).join(''):'<li class="cuts-no-removals">Nenhum trecho removido.</li>';refreshPlan();}
+  function seekSource(time){
+    if(!Number.isFinite(Number(time)))return;
+    const available=video.readyState>=1&&Number.isFinite(video.duration)?video.duration:Number(job.duration)||7200;
+    state.seek=Math.max(0,Math.min(available,Number(time)));state.seekVersion++;
+    if(video.readyState>=2&&!video.seeking&&Math.abs(video.currentTime-state.seek)<.0005){state.framePending=false;paint();return;}
+    waitForFrame();
+    if(video.readyState>=1)video.currentTime=state.seek;
+    paint();
+  }
+  function seekPreview(time,{pause=true}={}){
+    const source=previewTimeToSource(state.parts,time);if(!Number.isFinite(source))throw new Error('Escolha um intervalo válido antes de navegar na prévia.');
+    if(pause||time>=state.duration)video.pause();state.previewPlaying=true;seekSource(source);
+  }
+  async function togglePreview(){
+    retainedParts(readTime('start'),readTime('end'),state.gaps);
+    if(!video.paused){video.pause();return;}
+    const position=sourceTimeToPreview(state.parts,playerTime());state.previewPlaying=true;
+    if(!position.included||position.time>=state.duration)seekPreview(0);
+    await video.play();
+  }
+  video.addEventListener('loadedmetadata',()=>seekSource(state.seek),{signal});
+  video.addEventListener('loadeddata',commitFrame,{signal});
+  video.addEventListener('seeking',()=>{state.seek=video.currentTime;state.seekVersion++;waitForFrame();paint();},{signal});
+  video.addEventListener('seeked',commitFrame,{signal});
+  video.addEventListener('pause',paint,{signal});video.addEventListener('play',paint,{signal});video.addEventListener('volumechange',paint,{signal});
+  video.addEventListener('pointerdown',()=>{state.previewPlaying=false;},{signal});
+  if(video.requestVideoFrameCallback){
+    const presented=()=>{if(!state.alive)return;if(!video.seeking&&video.readyState>=2){state.framePending=false;paint();}state.videoFrame=video.requestVideoFrameCallback(presented);};
+    state.videoFrame=video.requestVideoFrameCallback(presented);
+  }
+  video.addEventListener('error',()=>{message.textContent='A fonte não está disponível para a prévia ao vivo. Confira se o projeto ainda mantém o vídeo original.';},{signal});
+  form.addEventListener('input',event=>{
+    if(event.target.matches('[data-timecode]'))validateTimeField(event.target);
+    if(event.target.closest('#cuts-cues')){get('originalCaptions').checked=false;state.captionsDirty=true;cacheCues();}
+    if(event.target.id==='cut-replay-position')selectReplayStart(Number(event.target.value));
+    if(event.target.id==='cut-phone-seek'){try{seekPreview(Number(event.target.value));}catch(error){message.textContent=error.message;}}
+    refreshPlan();
+  },{signal});
+  form.addEventListener('focusin',event=>{
+    if(event.target.matches('[data-timecode]'))event.target.dataset.focusTime=String(parseTimecode(event.target.value));
+  },{signal});
+  form.addEventListener('blur',event=>{
+    if(!event.target.matches('[data-timecode]'))return;
+    const value=parseTimecode(event.target.value),changed=Number(event.target.dataset.focusTime)!==value;
+    if(Number.isFinite(value))setTimeField(event.target,value);
+    else validateTimeField(event.target);
+    if(event.target.closest('#cuts-cues'))cacheCues();refreshPlan();
+    const marking=event.relatedTarget?.dataset?.cutEditorAction;
+    if(changed&&Number.isFinite(value)&&['start','end'].includes(event.target.name)&&!['set-start','set-end'].includes(marking)){
+      video.pause();state.previewPlaying=false;seekSource(value);
+    }
+  },{capture:true,signal});
+  form.addEventListener('change',refreshPlan,{signal});
+  const graphFor=event=>event.target.closest?.('#cut-editor-replay svg');
+  const hideReplayHover=()=>form.querySelector('#cut-editor-replay .cuts-replay-hover')?.setAttribute('visibility','hidden');
+  form.addEventListener('pointerdown',event=>{
+    const svg=graphFor(event);if(!svg||event.button!==0)return;
+    event.preventDefault();state.replayPointer=event.pointerId;svg.focus({preventScroll:true});hideReplayHover();
+    try{svg.setPointerCapture(event.pointerId);}catch{/* Pointer may already have been released. */}
+    selectReplayStart(replayTimeAt(event.clientX,svg.getBoundingClientRect(),Number(job.duration)));
+  },{signal});
+  form.addEventListener('pointermove',event=>{
+    const svg=graphFor(event);if(!svg)return;
+    const time=replayTimeAt(event.clientX,svg.getBoundingClientRect(),Number(job.duration));if(!Number.isFinite(time))return;
+    if(state.replayPointer===event.pointerId){event.preventDefault();selectReplayStart(time);return;}
+    const hover=svg.querySelector('.cuts-replay-hover'),point=curvePoint(svg,time);
+    hover.setAttribute('visibility','visible');hover.setAttribute('transform',`translate(${point.x},0)`);hover.querySelector('circle').setAttribute('cy',String(point.y));
+  },{signal});
+  form.addEventListener('pointerup',event=>{
+    if(state.replayPointer!==event.pointerId)return;
+    const svg=graphFor(event);if(svg)selectReplayStart(replayTimeAt(event.clientX,svg.getBoundingClientRect(),Number(job.duration)));
+    state.replayPointer=null;hideReplayHover();
+  },{signal});
+  form.addEventListener('pointercancel',()=>{state.replayPointer=null;hideReplayHover();},{signal});
+  form.addEventListener('pointerleave',event=>{if(event.target.matches?.('#cut-editor-replay svg')&&state.replayPointer===null)hideReplayHover();},{capture:true,signal});
+  form.addEventListener('keydown',event=>{
+    if(event.target===canvas&&[' ','Enter'].includes(event.key)){event.preventDefault();void togglePreview().catch(error=>{if(error.name!=='AbortError')message.textContent=error.message;});return;}
+    const svg=graphFor(event);if(!svg)return;
+    const current=Number.isFinite(readTime('start'))?readTime('start'):Number(clip.start_seconds)||0,step=event.altKey?0.001:event.shiftKey?1:0.1;
+    const value={ArrowLeft:current-step,ArrowRight:current+step,Home:0,End:Number(job.duration)-.5}[event.key];
+    if(value===undefined)return;event.preventDefault();selectReplayStart(value);
+  },{signal});
+  form.addEventListener('click',async event=>{
+    const button=event.target.closest('[data-cut-editor-action]');
+    if(!button)return;
+    event.preventDefault();const action=button.dataset.cutEditorAction,time=seconds(playerTime());
+    try{
+      if(action==='play-preview')await togglePreview();
+      else if(action==='retry-transcript')await loadTranscript();
+      else if(action==='phone-back'||action==='phone-forward'){const position=sourceTimeToPreview(state.parts,playerTime());seekPreview(position.time+(action==='phone-back'?-5:5),{pause:false});}
+      else if(action==='phone-mute'){video.muted=!video.muted;paint();}
+      else if(action==='set-start'||action==='set-end'){setTimeField(get(action==='set-start'?'start':'end'),time);refreshPlan();}
+      else if(action==='step-time'){
+        const field=get(button.dataset.field),current=parseTimecode(field.value);if(!Number.isFinite(current))throw new Error(timeHint);
+        const next=Math.max(0,Math.min(Number(job.duration)||7200,seconds(current+Number(button.dataset.step))));setTimeField(field,next);refreshPlan();seekSource(next);
+      }
+      else if(action==='mark-remove-start'||action==='mark-remove-end')setTimeField(form.querySelector(action==='mark-remove-start'?'#cut-remove-start':'#cut-remove-end'),time);
+      else if(action==='add-removal'){
+        if(state.gaps.length>=20)throw new Error('Remova no máximo 20 trechos por vídeo.');
+        const gap={start:parseTimecode(form.querySelector('#cut-remove-start').value),end:parseTimecode(form.querySelector('#cut-remove-end').value)},gaps=[...state.gaps,gap].sort((a,b)=>a.start-b.start);
+        retainedParts(readTime('start'),readTime('end'),gaps);state.gaps=gaps;renderGaps();
+      }else if(action==='restore-range'){state.gaps.splice(Number(button.dataset.index),1);renderGaps();}
+      else if(action==='reset-focus'){get('focusX').value=50;get('focusY').value=50;get('zoom').value=1;refreshPlan();}
+      else if(action==='preset'){
+        const values=button.dataset.preset==='highlight'?{...defaults,fontSize:50,animation:'karaoke'}:button.dataset.preset==='clean'?{...defaults,fontSize:38,background:'box',animation:'fade'}:defaults;
+        for(const [key,value] of Object.entries(values))get(key).value=value;refreshPlan();
+      }else if(action==='remove-cue'){button.closest('.cuts-cue').remove();numberCaptionRows();get('originalCaptions').checked=false;state.captionsDirty=true;cacheCues();refreshPlan();}
+      else if(action==='add-cue'){
+        const container=form.querySelector('#cuts-cues'),position=sourceTimeToPreview(state.parts,time),start=Math.max(0,Math.min(position.time,state.duration-.5));
+        if(!Number.isFinite(start)||!state.parts.length)throw new Error('Escolha um intervalo válido antes de adicionar uma legenda.');
+        const part=state.parts.find(item=>start>=item.outputStart&&start<item.outputStart+item.end-item.start),end=Math.min(start+2,part.outputStart+part.end-part.start);
+        container.insertAdjacentHTML('beforeend',cueRow({id:'new:'+ ++state.nextCue,start,end,text:''},container.children.length,esc));numberCaptionRows();get('originalCaptions').checked=false;state.captionsDirty=true;container.lastElementChild.querySelector('textarea').focus();cacheCues();refreshPlan();
+      }else if(action==='use-replay-window'){
+        selectReplayStart(readTime('start'),{length:60});
+      }
+    }catch(error){if(error.name!=='AbortError')message.textContent=error.message;}
+  },{signal});
+  const observer=new ResizeObserver(paint);observer.observe(canvas);renderGaps();state.frame=requestAnimationFrame(playbackFrame);
+  void loadTranscript();
+  return {
+    seekSource,
+    selectReplayStart,
+    read(){
+      const start=readTime('start'),end=readTime('end'),parts=retainedParts(start,end,state.gaps).parts;
+      if(end>(Number(job.duration)||7200))throw new Error('O fim do corte deve estar dentro do vídeo original.');
+      const extendsWindow=start<Number(clip.start_seconds)||end>Number(clip.end_seconds);
+      if(extendsWindow){
+        if(state.originalLoading)throw new Error('Aguarde o carregamento da transcrição para completar as novas bordas.');
+        if(state.originalError)throw new Error('Não foi possível carregar a transcrição das novas bordas. Use “Tentar carregar transcrição” e tente salvar novamente.');
+      }
+      if(!get('originalCaptions').checked){state.cueCache=editedCues();const conflict=projectCaptionRows(state.cueCache,parts).conflicts[0];if(conflict)throw new Error(conflict.message);}
+      const layout=readLayout(),body={title:get('title').value.trim(),start,end,framing:layout.mode==='crop'?'crop':'fit',framingOptions:layout,captionStyle:readStyle(),excludedRanges:structuredClone(state.gaps),revision:clip.revision};
+      if(get('originalCaptions').checked){if(state.originalLoading)throw new Error('Aguarde o carregamento da transcrição original.');if(state.originalError)throw new Error(state.originalError);body.useOriginalCaptions=true;}
+      else if((start!==Number(clip.start_seconds)||end!==Number(clip.end_seconds))&&!state.captionsDirty){body.useOriginalCaptions=false;}
+      else {
+        body.captions=currentCues().flatMap(cue=>{
+          if(cue.end<=start||cue.start>=end)return [];
+          if(cue.start>=start&&cue.end<=end)return [cue];
+          const words=cue.words?.filter(w=>w.start>=start&&w.end<=end);
+          if(!cue.words?.length)throw new Error('Um limite corta uma legenda corrigida. Ajuste os tempos e o texto dessa linha ou escolha a transcrição original.');
+          return words?.length?[{start:words[0].start,end:words.at(-1).end,text:words.map(w=>w.text).join(' '),words}]:[];
+        });if(!body.captions.length)throw new Error('Adicione uma linha de legenda ou use a transcrição original.');for(const cue of body.captions)if(cue.end<=cue.start||cue.start<start||cue.end>end||!cue.text)throw new Error('Cada legenda precisa ter texto e tempos válidos dentro do intervalo do corte.');}
+      return body;
+    },
+    destroy(){state.alive=false;video.pause();cancelAnimationFrame(state.frame);if(state.videoFrame!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(state.videoFrame);observer.disconnect();controller.abort();}
+  };
+}

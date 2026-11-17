@@ -30,6 +30,7 @@ const {saveConnectedAccount,disconnectAccount}=await import('../src/connected-ac
 const {nativeRoutes}=await import('../src/native-routes.js');
 const {youtubeScopes,tiktokScopes,youtubeToken,tiktokToken,nativeChannels,nativeConnectionState}=await import('../src/native-auth.js');
 const {decrypt,encrypt,AppError}=await import('../src/config.js');
+const {cleanupPublishedMedia}=await import('../src/media-cleanup.js');
 await initDb();
 execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=blue:s=64x96:d=1','-c:v','libx264','-pix_fmt','yuv420p','-metadata','title=Native private tag',join(temp,'video.mp4')]);
 const bytes=await readFile(join(temp,'video.mp4'));
@@ -350,6 +351,40 @@ test('motor local envia ao YouTube sem Postiz e preserva visibilidade, IA e orig
   await worker.native.reconcile();
   const {rows:[done]}=await pool.query('SELECT status FROM deliveries WHERE id=$1',[d.id]);assert.equal(done.status,'private');
   assert.deepEqual(await readFile(join(watch.folder_url,'video.mp4')),bytes);
+});
+test('limpeza recupera cópias órfãs de uploads confirmados e preserva original, revisão e sessão incerta',async()=>{
+  const {watch,deliveries:[confirmed,review]}=await prepare('draft',['native:youtube:youtube-channel','native:tiktok:tiktok-account']);
+  const path=join(process.env.DATA_DIR!,confirmed.local_file);
+  await pool.query("UPDATE deliveries SET status='published',post_id='confirmed-existing-video',local_file=NULL WHERE id=$1",[confirmed.id]);
+  const result=await cleanupPublishedMedia();assert(result.removed>=1);
+  await assert.rejects(()=>readFile(path),{code:'ENOENT'});
+  assert((await readFile(join(process.env.DATA_DIR!,review.local_file))).length>0);
+  assert.deepEqual(await readFile(join(watch.folder_url,'video.mp4')),bytes);
+  await pool.query("UPDATE deliveries SET status='unknown',session='session-retained',upload_started_at=now() WHERE id=$1",[review.id]);
+  await cleanupPublishedMedia();assert((await readFile(join(process.env.DATA_DIR!,review.local_file))).length>0);
+  const saved=(await pool.query('SELECT status,post_id,session FROM deliveries WHERE id=$1',[review.id])).rows[0];
+  assert.equal(saved.status,'unknown');assert.equal(saved.session,'session-retained');
+});
+test('limpeza preserva arquivo compartilhado com entrega pendente e remove após a confirmação de ambas',async()=>{
+  const {deliveries:[first,second]}=await prepare('draft',['native:youtube:youtube-channel','native:tiktok:tiktok-account']);
+  const path=join(process.env.DATA_DIR!,first.local_file);
+  await pool.query("UPDATE deliveries SET status='published',post_id='confirmed-first' WHERE id=$1",[first.id]);
+  await pool.query('UPDATE deliveries SET local_file=$2 WHERE id=$1',[second.id,first.local_file]);
+  await cleanupPublishedMedia(first.id);assert((await readFile(path)).length>0);
+  assert.equal((await pool.query('SELECT local_file FROM deliveries WHERE id=$1',[first.id])).rows[0].local_file,first.local_file);
+  await pool.query("UPDATE deliveries SET status='completed',post_id='confirmed-second' WHERE id=$1",[second.id]);
+  await cleanupPublishedMedia(first.id);await assert.rejects(()=>readFile(path),{code:'ENOENT'});
+  assert((await pool.query('SELECT local_file FROM deliveries WHERE id=ANY($1::uuid[])',[[first.id,second.id]])).rows.every(row=>row.local_file===null));
+});
+test('falha de limpeza mantém a referência para retomar sem alterar uma publicação confirmada',async()=>{
+  const {deliveries:[d]}=await prepare('draft');const path=join(process.env.DATA_DIR!,d.local_file);
+  await rm(path);await mkdir(path);await writeFile(join(path,'unexpected'),'preservar');
+  await pool.query("UPDATE deliveries SET status='published',post_id='confirmed-video' WHERE id=$1",[d.id]);
+  await cleanupPublishedMedia(d.id);
+  const saved=(await pool.query('SELECT local_file,status,post_id FROM deliveries WHERE id=$1',[d.id])).rows[0];
+  assert.equal(saved.local_file,d.local_file);assert.equal(saved.status,'published');assert.equal(saved.post_id,'confirmed-video');
+  await rm(path,{recursive:true});await writeFile(path,bytes);await cleanupPublishedMedia(d.id);
+  await assert.rejects(()=>readFile(path),{code:'ENOENT'});
 });
 test('corrige a declaração de um vídeo existente sem reenviar ou mudar a publicação',async()=>{
   const {worker,deliveries:[delivery]}=await prepare('native_schedule');await worker.native.process(delivery.id);

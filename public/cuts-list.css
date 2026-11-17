@@ -1,0 +1,10 @@
+.confirm-discard-dialog{width:min(460px,calc(100% - 32px));padding:0;border:1px solid var(--border,#dce4d4);border-radius:14px;background:#fff;color:var(--text,#304b38);box-shadow:0 20px 70px #122b2333}
+.confirm-discard-dialog::backdrop{background:#10241cb3;backdrop-filter:blur(3px)}
+.confirm-discard-content{padding:26px}
+.confirm-discard-content h2{font-size:22px;margin:0 0 14px}
+#confirm-discard-name{font-size:14px;font-weight:650;overflow-wrap:anywhere;margin:0 0 12px}
+#confirm-discard-message{font-size:13px;line-height:1.75;color:var(--muted,#617365);margin:0}
+.confirm-discard-dialog .dialog-footer{margin-top:24px;flex-wrap:wrap}
+.confirm-discard-dialog .button.danger{color:#fff;background:#963f32;border-color:#963f32}
+.confirm-discard-dialog .button:focus-visible{outline:3px solid #a9c47c;outline-offset:3px}
+@media(max-width:560px){.confirm-discard-content{padding:22px}.confirm-discard-dialog .dialog-footer .button{flex:1;justify-content:center}}

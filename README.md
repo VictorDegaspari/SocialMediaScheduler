@@ -2,6 +2,16 @@
 
 Painel local para monitorar pastas do computador e do Google Drive e publicar vídeos pelas APIs oficiais do YouTube e TikTok. O motor padrão usa Node.js, BullMQ e Redis locais; o Postiz é uma integração opcional. Funciona em segundo plano enquanto o computador e os containers estiverem ligados; não é necessário deixar o navegador aberto.
 
+## Desenvolvimento por agentes
+
+O [AGENTS.md](AGENTS.md) define contexto e manutenção por IA. Use `./scripts/ctx map <área>`, `outline <arquivo>` e `show <arquivo>#<símbolo>` para carregar apenas o código necessário; `checks <área>` lista a validação relacionada. O mapa é conferido com `./scripts/ctx check`. As integrações aceitam arquivos específicos: `./scripts/test-integration.sh tests/pagination.integration.ts`.
+
+## Gerador de cortes do YouTube
+
+Na aba **Gerador de cortes**, cole o link de um vídeo, escolha a quantidade e a duração aproximada e acompanhe a geração em segundo plano. A aplicação baixa a fonte com yt-dlp, transcreve a fala localmente com faster-whisper e renderiza vídeos verticais com legendas pelo FFmpeg. A seleção combina o mapa público de momentos mais revistos do YouTube, quando disponível, com continuidade da fala e limites de frases. O editor permite mudar cores, tamanho e animação da legenda, remover trechos internos e configurar fundo desfocado, foco e zoom na prévia para celular. Revise o resultado, escolha o canal YouTube para postar ou descarte. A publicação só começa com a autorização individual no painel.
+
+As cópias de upload são removidas após confirmação da plataforma. Cada preview é removido após envio ou descarte; a fonte é liberada quando todos os seus cortes forem resolvidos. O histórico é preservado. Descartar exige confirmação e remove o projeto da lista. As listas com histórico têm navegação por páginas e limite na API; veja [paginação e confirmação de descarte](docs/PAGINACAO.md). Veja [instalação, ferramentas open source e limites](docs/GERADOR-DE-CORTES.md) e [regras da limpeza de arquivos](docs/LIMPEZA-DE-COPIAS.md).
+
 ## Pedidos pela conversa e múltiplas contas
 
 Use **Pedidos e contas** para organizar perfis de conteúdo, conectar vários canais e pedir uma quantidade finita de vídeos com horários definidos. A integração local do assistente usa a mesma fila e mostra pendências manuais. [Guia de integração](docs/ASSISTENTE-E-CONTAS.md).

@@ -14,6 +14,7 @@ import { nativeChannels,publisherEngine } from './native-auth.js';
 import { nativeScheduleSchema,planNativeDate,validScheduleDate,uploadBudgetAvailable,reservedCapacityAllowed,type Reservation } from './native-schedule.js';
 import { uploadYoutube,uploadTiktok,youtubeStatus,tiktokStatus,type UploadSession } from './native-api.js';
 import {genericVideoTitle,titleReview} from './video-titles.js';
+import {cleanupPublishedMedia} from './media-cleanup.js';
 
 const MAX_BYTES=1024*1024*1024;
 export interface NativePayload {metadata:Metadata;channelName:string;assetSha256:string;stripMetadata?:boolean;automatic?:boolean;nativeSchedule?:boolean;}
@@ -216,12 +217,12 @@ export class LocalPublisher {
           if(!session)await pool.query('UPDATE deliveries SET upload_started_at=now() WHERE id=$1',[id]);
           const save=async(value:UploadSession)=>{await pool.query('UPDATE deliveries SET session=$2,updated_at=now() WHERE id=$1',[id,encrypt(value)]);};
           const postId=delivery.provider==='youtube'?await uploadYoutube(path,payload.metadata,session,save,delivery.integration_id.slice('native:youtube:'.length),payload.nativeSchedule?new Date(delivery.planned_at):undefined):await uploadTiktok(path,session,save,delivery.integration_id.slice('native:tiktok:'.length));
-          await pool.query("UPDATE deliveries SET status='processing',post_id=$2,local_file=NULL,error=NULL,updated_at=now() WHERE id=$1",[id,postId]);
+          await pool.query("UPDATE deliveries SET status='processing',post_id=$2,error=NULL,updated_at=now() WHERE id=$1",[id,postId]);
           if(payload.automatic&&!payload.nativeSchedule) {
             const {rows:[watch]}=await pool.query<Watch>('SELECT w.* FROM watches w JOIN videos v ON v.watch_id=w.id WHERE v.id=$1',[delivery.video_id]);
             if(watch)await pool.query('UPDATE watches SET next_upload_at=$2 WHERE id=$1',[watch.id,nextRun(watch,new Date())]);
           }
-          await rm(path,{force:true});
+          await cleanupPublishedMedia(id);
           await event('success',`${payload.channelName}: upload confirmado pela API oficial.`,undefined,delivery.video_id);
         } catch(error) {await this.fail(delivery,error);}
       } catch(error) {

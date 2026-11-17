@@ -6,6 +6,7 @@ import { AppError,appUrl,dataDir,encrypt,decrypt } from './config.js';
 import { pool,getSetting,setSetting,event } from './db.js';
 import { metadataSchema } from './domain.js';
 import { youtubeStatus } from './native-api.js';
+import {cleanupPublishedMedia} from './media-cleanup.js';
 import {tiktokLoginMode,validateTiktokCallback,tiktokCodeChallenge,type TikTokLoginMode} from './tiktok-login.js';
 import { youtubeClient,youtubeScopes,youtubeEditScope,youtubeEditAuthorized,tiktokScopes,exchangeTikToken,tiktokRequest,providerFetch,nativeChannels,type YoutubeConfig,type TiktokConfig,type NativeAccount } from './native-auth.js';
 
@@ -156,8 +157,8 @@ nativeRoutes.post('/api/native/deliveries/:id/link',async(req,res)=>{
   if(!(await nativeChannels()).some(c=>c.id===row.integration_id&&!c.disabled))throw new AppError('Reconecte a mesma conta YouTube antes de vincular.');
   const status=await youtubeStatus(postId,row.integration_id.slice('native:youtube:'.length));
   if(!status)throw new AppError('O vídeo não foi encontrado no canal selecionado.');
-  await pool.query('UPDATE deliveries SET status=$2,post_id=$3,local_file=NULL,error=NULL,release_url=$4,updated_at=now() WHERE id=$1 AND status=\'unknown\'',[id,status,postId,'https://www.youtube.com/watch?v='+encodeURIComponent(postId)]);
-  const {rm}=await import('node:fs/promises');const {join}=await import('node:path');await rm(join(dataDir,id+'.native.mp4'),{force:true});
+  await pool.query('UPDATE deliveries SET status=$2,post_id=$3,error=NULL,release_url=$4,updated_at=now() WHERE id=$1 AND status=\'unknown\'',[id,status,postId,'https://www.youtube.com/watch?v='+encodeURIComponent(postId)]);
+  await cleanupPublishedMedia(id);
   await event('success','Envio reconciliado com vídeo verificado no canal YouTube.',undefined,row.video_id);res.json({ok:true});
 });
 
