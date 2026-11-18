@@ -121,7 +121,7 @@ export class Worker {
     for(const file of videos) {
       const previous=previousFiles.get(file.id);
       // Files already handed to Postiz, or excluded during baseline, are immutable here.
-      if(previous && ['baseline','sent','unknown','duplicate','removed'].includes(previous.status)) continue;
+      if(previous && ['baseline','sent','unknown','duplicate','removed','cancelled'].includes(previous.status)) continue;
       const idMatches=byId.get(key(file.parents?.[0],file.id))||[];
       const matches=idMatches.length?idMatches:byName.get(key(file.parents?.[0],file.name.replace(/\.mp4$/i,'.json').toLowerCase()))||[];
       const sidecar=matches.length===1?matches[0]:null;
@@ -167,7 +167,7 @@ export class Worker {
           retry_at=CASE WHEN videos.version IS DISTINCT FROM EXCLUDED.version OR videos.json_version IS DISTINCT FROM EXCLUDED.json_version THEN NULL ELSE videos.retry_at END,
           version=EXCLUDED.version,size=EXCLUDED.size,modified_at=EXCLUDED.modified_at,metadata=EXCLUDED.metadata,
           json_file_id=EXCLUDED.json_file_id,json_version=EXCLUDED.json_version,status=EXCLUDED.status,error=EXCLUDED.error,updated_at=now()
-          WHERE videos.status NOT IN ('baseline','sent','unknown','duplicate','removed') AND
+          WHERE videos.status NOT IN ('baseline','sent','unknown','duplicate','removed','cancelled') AND
             (videos.name,videos.parent_id,videos.version,videos.size,videos.modified_at,videos.metadata,videos.json_file_id,videos.json_version,videos.status,videos.error)
             IS DISTINCT FROM (EXCLUDED.name,EXCLUDED.parent_id,EXCLUDED.version,EXCLUDED.size,EXCLUDED.modified_at,EXCLUDED.metadata,EXCLUDED.json_file_id,EXCLUDED.json_version,EXCLUDED.status,EXCLUDED.error)`,
         [JSON.stringify(updates.slice(offset,offset+250))]);

@@ -9,7 +9,7 @@ export const localMediaDir = resolve(process.env.LOCAL_MEDIA_DIR || './media');
 export const localMediaHostDir = resolve(process.env.LOCAL_MEDIA_HOST_DIR || localMediaDir);
 const key = Buffer.from(process.env.ENCRYPTION_KEY || '', 'hex');
 if (key.length !== 32) throw new Error('ENCRYPTION_KEY precisa ter 64 caracteres hexadecimais. Execute scripts/start.sh.');
-export const logger = pino({ level: process.env.LOG_LEVEL || 'info', redact: ['token', 'secret', 'authorization', 'password', 'access_token', 'refresh_token', 'clientSecret', 'session', 'req.headers.authorization'] });
+export const logger = pino({ level: process.env.LOG_LEVEL || 'info', redact: ['token', 'secret', 'authorization', 'password', 'access_token', 'refresh_token', 'clientSecret', 'extensionToken', '*.extensionToken', 'PLAYWRIGHT_MCP_EXTENSION_TOKEN', '*.PLAYWRIGHT_MCP_EXTENSION_TOKEN', 'session', 'req.headers.authorization'] });
 
 export function encrypt(value: unknown): string {
   const iv = randomBytes(12);

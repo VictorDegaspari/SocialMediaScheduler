@@ -1,5 +1,7 @@
+import {requireTikTokBrowserToken} from './playwright-mcp.js';
 import {saveConnectedAccount,disconnectAccount,connectedAccount} from './connected-accounts.js';
 import { Router } from 'express';
+import {retryDelivery,cancelDelivery,cancelQueuedVideo} from './queue-controls.js';
 import { randomBytes,createHash } from 'node:crypto';
 import { z } from 'zod';
 import { AppError,appUrl,dataDir,encrypt,decrypt } from './config.js';
@@ -133,6 +135,7 @@ nativeRoutes.post('/api/native/deliveries/:id/approve',async(req,res)=>{
   const {rows:[row]}=await pool.query("SELECT * FROM deliveries WHERE id=$1 AND status='review' AND (engine='local' OR engine='browser' AND request_id IS NULL AND payload->>'manualPublication'='true')",[id]);
   if(!row)throw new AppError('Este envio não está aguardando revisão.');
   if(row.engine==='browser'){
+    await requireTikTokBrowserToken();
     if(!input.publishNow||!row.integration_id.startsWith('browser:tiktok:'))throw new AppError('Confirme a publicação imediata neste perfil.');
     if(!(await pool.query('SELECT id FROM browser_profiles WHERE id=$1',[row.integration_id.slice('browser:tiktok:'.length)])).rowCount)throw new AppError('O perfil selecionado não está mais disponível.',409);
     if(input.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE')throw new AppError('Confira a publicação pública e as declarações do TikTok.');
@@ -146,29 +149,13 @@ nativeRoutes.post('/api/native/deliveries/:id/approve',async(req,res)=>{
   await event('info','Envio aprovado para a fila local.',undefined,row.video_id);res.json({ok:true});
 });
 nativeRoutes.post('/api/native/deliveries/:id/retry',async(req,res)=>{
-  const id=uuid.parse(req.params.id);
-  const result=await pool.query("UPDATE deliveries SET status='pending',retry_at=now(),attempts=0,error=NULL,updated_at=now() WHERE id=$1 AND engine='local' AND status IN ('failed','unknown') AND approved_at IS NOT NULL AND post_id IS NULL AND local_file IS NOT NULL RETURNING video_id",[id]);
-  if(!result.rowCount)throw new AppError('Este envio não pode ser retomado. Confira o vídeo na conta da plataforma.');
-  await event('info','Retomada solicitada; a sessão existente será consultada antes de enviar bytes.',undefined,result.rows[0].video_id);res.json({ok:true});
+  await retryDelivery(uuid.parse(req.params.id));res.json({ok:true});
 });
 nativeRoutes.post('/api/native/deliveries/:id/cancel',async(req,res)=>{
-  const id=uuid.parse(req.params.id);
-  const db=await pool.connect();let row;
-  try{
-    await db.query('BEGIN');await db.query('SELECT pg_advisory_xact_lock(74839200)');
-    const result=await db.query(`UPDATE deliveries d SET status='cancelled',local_file=NULL,error=NULL,updated_at=now()
-      WHERE d.id=$1 AND (d.engine='local' OR d.engine='browser' AND d.request_id IS NULL AND d.payload->>'manualPublication'='true')
-      AND d.status IN ('preparing','review','pending','retry','failed') AND d.session IS NULL AND d.post_id IS NULL AND (d.engine='local' OR d.upload_started_at IS NULL)
-      AND NOT EXISTS(SELECT 1 FROM browser_commands b WHERE b.delivery_id=d.id AND (b.upload_started OR b.status IN ('running','cancel_requested')))
-      RETURNING d.video_id`,[id]);
-    row=result.rows[0];if(!row)throw new AppError('Somente envios que ainda não iniciaram uma sessão podem ser cancelados.');
-    await db.query("UPDATE browser_commands SET status='cancelled',finished_at=now() WHERE delivery_id=$1 AND status='pending'",[id]);
-    await db.query('DELETE FROM content_claims WHERE delivery_id=$1',[id]);await db.query('COMMIT');
-  }catch(error){await db.query('ROLLBACK');throw error;}finally{db.release();}
-  // Filename is generated from the UUID, never accepted from the request.
-  const {rm}=await import('node:fs/promises');const {join}=await import('node:path');
-  await rm(join(dataDir,id+'.native.mp4'),{force:true});
-  await event('info','Envio local cancelado antes do upload.',undefined,row.video_id);res.json({ok:true});
+  res.json({ok:true,...await cancelDelivery(uuid.parse(req.params.id))});
+});
+nativeRoutes.post('/api/videos/:id/cancel',async(req,res)=>{
+  await cancelQueuedVideo(uuid.parse(req.params.id));res.json({ok:true});
 });
 nativeRoutes.post('/api/native/deliveries/:id/link',async(req,res)=>{
   const id=uuid.parse(req.params.id),{postId}=z.object({postId:z.string().regex(/^[\w-]{6,100}$/)}).parse(req.body);

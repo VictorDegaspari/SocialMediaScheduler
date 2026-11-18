@@ -139,6 +139,12 @@ test('arquivo removido deixa a fila antes do envio',async()=>{
   const w=await watch();const worker=await prepare(w);present=false;w.initialized=true;await worker.scan(w);
   const {rows}=await pool.query('SELECT status FROM videos WHERE watch_id=$1',[w.id]);assert.equal(rows[0].status,'removed');
 });
+test('vídeo cancelado continua fora da fila após nova varredura e mudança na origem',async()=>{
+  present=true;version='cancelled-1';const w=await watch(),worker=await prepare(w);w.initialized=true;
+  await pool.query("UPDATE videos SET status='cancelled' WHERE watch_id=$1",[w.id]);
+  version='cancelled-2';await worker.scan(w);
+  const {rows:[video]}=await pool.query('SELECT status FROM videos WHERE watch_id=$1',[w.id]);assert.equal(video.status,'cancelled');version='1';
+});
 test('varredura sem mudanças preserva timestamps, estabilidade e prazo de retry; versão nova libera tentativa',async()=>{
   present=true;version='incremental-1';
   const w=await watch(),worker=await prepare(w);w.initialized=true;

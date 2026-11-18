@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Router } from 'express';
+import { Router,raw } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { AppError, dataDir, errorMessage, logger } from './config.js';
@@ -14,6 +14,7 @@ import { sweepCutUploadFiles } from './cuts-upload-files.js';
 import { canRemovePreparedMedia,retainedDeliveryQuery, type RetainedDelivery } from './media-cleanup.js';
 import { captionStyleSchema, framingOptionsSchema, timeRangeSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
 import { fetchCutHeatmap, type ReplayData } from './cuts-heatmap.js';
+import {cutOverlaysSchema,validateOverlayTimes,overlayImage,saveOverlayImage,type CutOverlay} from './cuts-overlays.js';
 import { cursorFields, keysetClause, pageLimit, paginateRows, parsePagination, type PageOptions } from './pagination.js';
 
 const uuid=z.string().uuid();
@@ -87,7 +88,7 @@ function captionWords(cue:Cue,sources:Cue[]):Cue['words'] {
 }
 
 type Job={id:string;url:string;status:string;title:string|null;duration:number|null;language:string;clip_count:number;target_seconds:number;transcript:Cue[]|null;error:string|null;replay_data:ReplayData|null;pending_analysis:{count:number;targetSeconds:number}|null};
-type Clip={id:string;job_id:string;title:string;reason:string;score:number;edited_from_cut_id:string|null;start_seconds:number;end_seconds:number;captions:Cue[];framing:'fit'|'crop';status:string;revision:number;local_file:string|null;delivery_id:string|null;caption_style:CaptionStyle;framing_options:FramingOptions;excluded_ranges:TimeRange[];output_duration:number};
+type Clip={id:string;job_id:string;title:string;reason:string;score:number;edited_from_cut_id:string|null;start_seconds:number;end_seconds:number;captions:Cue[];framing:'fit'|'crop';status:string;revision:number;local_file:string|null;delivery_id:string|null;caption_style:CaptionStyle;framing_options:FramingOptions;excluded_ranges:TimeRange[];overlays:CutOverlay[];output_duration:number};
 type CutsMedia={download:typeof downloadCutSource;transcribe:typeof transcribeCutSource;select:typeof selectHighlights;render:typeof renderCut;dependencies:typeof cutsDependencies;replay?:typeof fetchCutHeatmap};
 
 async function exists(path:string) {return stat(path).then(s=>s.isFile()).catch(()=>false);}
@@ -154,7 +155,7 @@ export class CutsService {
     const sources=new Map(await Promise.all(jobs.map(async job=>[job.id,await exists(join(cutDirectory(job.id),'source.mp4'))] as const)));
     const mapped=await Promise.all(clips.rows.map(async c=>{
       const {local_file:localFile,...rest}=c;
-      return {...rest,publications:publications.filter(delivery=>delivery.video_id===c.id),caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
+      return {...rest,overlays:cutOverlaysSchema.parse(c.overlays||[]),publications:publications.filter(delivery=>delivery.video_id===c.id),caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
         output_duration:c.output_duration??c.end_seconds-c.start_seconds,error:c.error||c.delivery_error,hasMedia:!!localFile&&await exists(join(cutDirectory(c.job_id),c.id+'.mp4')),
         release_url:c.release_url||(c.post_id?'https://www.youtube.com/watch?v='+encodeURIComponent(c.post_id):null)};
     }));
@@ -241,7 +242,7 @@ export class CutsService {
       for(const clip of clips.filter(c=>['queued','rendering'].includes(c.status))) {
         await pool.query("UPDATE cuts SET status='rendering',error=NULL,updated_at=now() WHERE id=$1",[clip.id]);
         const result=await this.media.render(dir,clip.id,{start:clip.start_seconds,end:clip.end_seconds,captions:clip.captions,framing:clip.framing,
-          captionStyle:captionStyleSchema.parse(clip.caption_style||{}),framingOptions:framingOptionsSchema.parse({...clip.framing_options,mode:clip.framing_options?.mode||clip.framing}),excludedRanges:clip.excluded_ranges||[]});
+          captionStyle:captionStyleSchema.parse(clip.caption_style||{}),framingOptions:framingOptionsSchema.parse({...clip.framing_options,mode:clip.framing_options?.mode||clip.framing}),excludedRanges:clip.excluded_ranges||[],overlays:cutOverlaysSchema.parse(clip.overlays||[])});
         await pool.query("UPDATE cuts SET status='review',local_file=$2,render_warnings=$3,error=NULL,updated_at=now() WHERE id=$1",[clip.id,clip.id+'.mp4',JSON.stringify(result.warnings||[])]);
       }
       await this.stage(job.id,'review');
@@ -299,6 +300,19 @@ export class CutsService {
 export const cutsService=new CutsService();
 export function createCutsRoutes(service:CutsService=cutsService) {
 const cutsRoutes=Router();
+cutsRoutes.post('/api/cuts/jobs/:id/images',raw({type:['image/png','image/jpeg','image/webp','application/octet-stream'],limit:'20mb'}),async(req,res)=>{
+  const id=uuid.parse(req.params.id);
+  if(!Buffer.isBuffer(req.body))throw new AppError('Envie uma imagem PNG, JPEG ou WebP.');
+  const image=await withJob(id,false,async(_db,job)=>{
+    if(job.status==='discarded'||stages.includes(job.status))throw new AppError('Aguarde o processamento do projeto antes de adicionar uma imagem.',409);
+    const dir=cutDirectory(id);await mkdir(dir,{recursive:true});return saveOverlayImage(dir,req.body);
+  });
+  res.status(201).json({...image,url:`/api/cuts/jobs/${id}/images/${image.id}`});
+});
+cutsRoutes.get('/api/cuts/jobs/:id/images/:imageId',async(req,res)=>{
+  const id=uuid.parse(req.params.id),imageId=uuid.parse(req.params.imageId);
+  const image=await overlayImage(cutDirectory(id),imageId);res.type(image.mime);res.sendFile(image.path);
+});
 cutsRoutes.get('/api/cuts',async(req,res)=>{res.json(await service.state(parsePagination(req.query,{scope:'cuts',defaultLimit:10})));});
 cutsRoutes.get('/api/cuts/library',async(req,res)=>{res.json(await service.state(parsePagination(req.query,{scope:'cutFolders',defaultLimit:10})));});
 cutsRoutes.get('/api/cuts/jobs/:id/source',async(req,res)=>{
@@ -373,7 +387,7 @@ cutsRoutes.get('/api/cuts/:id/media',async(req,res)=>{
 cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
   const id=uuid.parse(req.params.id);
   const input=z.object({title:z.string().trim().min(1).max(100),start:z.number().finite().min(0),end:z.number().finite().positive(),framing:z.enum(['fit','crop','blur']).optional(),
-    captionStyle:captionStyleSchema.optional(),framingOptions:framingOptionsSchema.optional(),excludedRanges:z.array(timeRangeSchema).max(20).optional(),
+    captionStyle:captionStyleSchema.optional(),framingOptions:framingOptionsSchema.optional(),excludedRanges:z.array(timeRangeSchema).max(20).optional(),overlays:cutOverlaysSchema.optional(),
     captions:z.array(cueSchema).max(2000).optional(),useOriginalCaptions:z.boolean().default(false),revision:z.number().int().positive().optional(),versionId:uuid.optional()}).parse(req.body);
   const result=await withJob(id,true,async(db,job,clip)=>{
     if(!clip||!['review','failed','publishing','posted'].includes(clip.status))throw new AppError('Aguarde a geração da prévia para ajustar este corte.',409);
@@ -397,13 +411,15 @@ cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
     const captionStyle=captionStyleSchema.parse(input.captionStyle||clip.caption_style||{});
     const framingOptions=framingOptionsSchema.parse(input.framingOptions||{...clip.framing_options,mode:input.framing||clip.framing_options?.mode||clip.framing});
     const outputDuration=cutTimeline(input.start,input.end,excludedRanges).at(-1)!.outputEnd;
+    const overlays=cutOverlaysSchema.parse(input.overlays??clip.overlays??[]);validateOverlayTimes(overlays,outputDuration);
+    for(const overlay of overlays)if(overlay.type==='image')await overlayImage(cutDirectory(job.id),overlay.imageId);
     // A video's ID owns immutable upload bytes and destination claims. Published
     // cuts fork into a separate review copy; active uploads keep their snapshot.
     const {rows:[recorded]}=await db.query('SELECT EXISTS(SELECT 1 FROM videos WHERE id=$1) AS value',[id]);
     const createdVersion=!!clip.delivery_id||recorded.value||['posted','publishing'].includes(clip.status);
     const targetId=createdVersion?(input.versionId||randomUUID()):id;
     const edits={title:input.title,start_seconds:input.start,end_seconds:input.end,framing:framingOptions.mode==='crop'?'crop':'fit',
-      captions,caption_style:captionStyle,framing_options:framingOptions,excluded_ranges:excludedRanges,output_duration:outputDuration};
+      captions,caption_style:captionStyle,framing_options:framingOptions,excluded_ranges:excludedRanges,output_duration:outputDuration,overlays};
     if(createdVersion){
       const {rows:[existing]}=await db.query('SELECT * FROM cuts WHERE id=$1',[targetId]);
       if(existing){
@@ -414,10 +430,10 @@ cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
       const {rows:[count]}=await db.query("SELECT count(*)::int AS n,(count(*) FILTER (WHERE status NOT IN ('posted','discarded')))::int AS active FROM cuts WHERE job_id=$1",[job.id]);
       if(count.n>=50||count.active>=10)throw new AppError('Este projeto atingiu o limite de versões. Ajuste ou exclua um corte pendente antes de criar outra versão.',409);
     }
-    const values=[targetId,input.title,input.start,input.end,edits.framing,JSON.stringify(captions),JSON.stringify(captionStyle),JSON.stringify(framingOptions),JSON.stringify(excludedRanges),outputDuration];
-    if(createdVersion)await db.query(`INSERT INTO cuts(id,title,start_seconds,end_seconds,framing,captions,caption_style,framing_options,excluded_ranges,output_duration,job_id,reason,score,edited_from_cut_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,[...values,job.id,clip.reason,clip.score,id]);
-    else await db.query(`UPDATE cuts SET title=$2,start_seconds=$3,end_seconds=$4,framing=$5,captions=$6,caption_style=$7,framing_options=$8,excluded_ranges=$9,output_duration=$10,
+    const values=[targetId,input.title,input.start,input.end,edits.framing,JSON.stringify(captions),JSON.stringify(captionStyle),JSON.stringify(framingOptions),JSON.stringify(excludedRanges),outputDuration,JSON.stringify(overlays)];
+    if(createdVersion)await db.query(`INSERT INTO cuts(id,title,start_seconds,end_seconds,framing,captions,caption_style,framing_options,excluded_ranges,output_duration,overlays,job_id,reason,score,edited_from_cut_id)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,[...values,job.id,clip.reason,clip.score,id]);
+    else await db.query(`UPDATE cuts SET title=$2,start_seconds=$3,end_seconds=$4,framing=$5,captions=$6,caption_style=$7,framing_options=$8,excluded_ranges=$9,output_duration=$10,overlays=$11,
       status='queued',local_file=NULL,revision=revision+1,error=NULL,render_warnings='[]',updated_at=now() WHERE id=$1`,values);
     await db.query("UPDATE cut_jobs SET status='rendering',error=NULL,updated_at=now() WHERE id=$1",[job.id]);
     return {ok:true,id:targetId,createdVersion};

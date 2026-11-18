@@ -42,6 +42,22 @@ O serviço precisa de Node 22+, `node_modules` com as dependências de desenvolv
 
 Esta integração é local: o agente aceita somente o endereço loopback do painel. Uma implantação em Railway/Vercel não abre o Chrome do usuário e exige uma arquitetura de agente/autenticação própria antes de habilitar esses comandos remotamente.
 
+## Token da extensão Playwright MCP
+
+Em **Conexões → TikTok → Token de automação do TikTok**, cole o valor de **PLAYWRIGHT_MCP_EXTENSION_TOKEN** mostrado pela extensão do seu navegador e clique em **Salvar token**. O valor é criptografado no PostgreSQL e o painel exibe somente se está configurado. Deixar o campo vazio mantém o token; **Remover token salvo** permite voltar ao valor opcional do ambiente. O valor do painel tem prioridade sobre `PLAYWRIGHT_MCP_EXTENSION_TOKEN` no `.env`. O token é obrigatório para adicionar perfis TikTok, abrir login, salvar rotinas e iniciar novos envios, incluindo cortes e vídeos das pastas. Sem ele, tarefas pendentes aguardam; pausas e cancelamentos continuam disponíveis. O agente lê o token salvo antes de iniciar cada tarefa e o transmite ao processo do navegador somente pelo ambiente, sem incluí-lo em comandos ou respostas públicas.
+
+O agente de publicação do TikTok autentica seu acesso ao painel com `BROWSER_AGENT_TOKEN`. O token da extensão pertence à conexão entre o servidor MCP e seu perfil do Chrome, conforme a [documentação oficial do Playwright](https://github.com/microsoft/playwright/blob/main/packages/extension/README.md).
+
+Para iniciar o MCP usando o token do painel:
+
+```bash
+./scripts/node-local.sh scripts/playwright-mcp.mjs
+```
+
+O inicializador consulta a configuração atual com a chave do agente e passa o token somente pelo ambiente do processo Playwright MCP. Ele usa `@playwright/mcp@0.0.85 --extension`; o primeiro uso pode baixar esse pacote pelo npx. Para um cliente MCP com transporte stdio, configure o caminho absoluto de `scripts/node-local.sh` como comando e `["scripts/playwright-mcp.mjs"]` como argumentos. Reinicie a conexão MCP após trocar o token no painel. O `.env` continua opcional para esse token; novos valores podem ser cadastrados pela interface.
+
+Para os comandos diretos abaixo, forneça `PLAYWRIGHT_MCP_EXTENSION_TOKEN` no ambiente. O uso pelo painel carrega automaticamente o valor criptografado no banco.
+
 ## Comandos diretos para diagnóstico
 
 O uso normal é pelo painel. Os comandos abaixo continuam disponíveis para diagnóstico e uso avançado. Eles compartilham o perfil e o histórico de conteúdo com o agente; não execute duas rotinas simultâneas nesse perfil.

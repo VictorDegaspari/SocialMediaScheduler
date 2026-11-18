@@ -1,3 +1,4 @@
+import {requireTikTokBrowserToken,playwrightMcpState} from './playwright-mcp.js';
 import {Router} from 'express';
 import {randomUUID,createHash} from 'node:crypto';
 import {z} from 'zod';
@@ -109,6 +110,7 @@ export class PublicationRequests {
       const existing=await db.query('SELECT * FROM publication_requests WHERE request_key=$1 ORDER BY provider',[input.requestKey]);
       if(existing.rowCount){if(existing.rows[0].config.fingerprint!==fingerprint)throw new AppError('A chave deste pedido já foi usada com outros parâmetros.',409);await db.query('COMMIT');return {requests:existing.rows.map(r=>({id:r.id,provider:r.provider})),reused:true};}
       const {rows:[profile]}=await db.query('SELECT * FROM publishing_profiles WHERE id=$1',[input.profileId]);if(!profile)throw new AppError('Perfil não encontrado.',404);
+      if(platforms.includes('tiktok'))await requireTikTokBrowserToken();
       const requests=[];
       for(const provider of platforms) {
         const id=randomUUID();await db.query('INSERT INTO publication_requests(id,request_key,profile_id,provider,quantity,config) VALUES($1,$2,$3,$4,$5,$6)',[id,input.requestKey,input.profileId,provider,input.quantity,JSON.stringify({...config,fingerprint})]);requests.push({id,provider});
@@ -127,6 +129,7 @@ export class PublicationRequests {
       if(n.confirmed>=r.quantity){await pool.query("UPDATE publication_requests SET status='completed',message='Quantidade solicitada confirmada no agendador.',updated_at=now() WHERE id=$1 AND status<>'completed'",[r.id]);await pool.query("UPDATE manual_actions SET resolved_at=now() WHERE request_id=$1 AND resolved_at IS NULL AND kind<>'youtube_titles'",[r.id]);continue;}
       if(n.unknown){const {rows:[unknown]}=await pool.query("SELECT v.name FROM deliveries d JOIN videos v ON v.id=d.video_id WHERE d.request_id=$1 AND d.status='unknown' ORDER BY d.created_at LIMIT 1",[r.id]);await manual(r.id,'unknown_upload',`O envio de ${unknown?.name||'um vídeo'} ficou sem confirmação. Confira a conta antes de continuar.`);continue;}
       if(n.attention){const {rows:[problem]}=await pool.query("SELECT error FROM deliveries WHERE request_id=$1 AND status IN ('failed','review','private','unlisted','inbox','completed') ORDER BY updated_at LIMIT 1",[r.id]);await manual(r.id,'delivery_review',problem?.error||'Há um vídeo que exige revisão ou cuja data não foi confirmada. Confira o histórico.','/#history');continue;}
+      await pool.query("UPDATE manual_actions SET resolved_at=now() WHERE request_id=$1 AND kind='delivery_review' AND resolved_at IS NULL",[r.id]);
       if(!r.watch_id){await manual(r.id,'source','Defina a origem dos vídeos deste perfil.');continue;}
       const {rows:[watch]}=await pool.query<Watch>('SELECT * FROM watches WHERE id=$1',[r.watch_id]);
       if(watch.last_error){await manual(r.id,'source_access',watch.last_error,'/#connections');continue;}
@@ -140,6 +143,7 @@ export class PublicationRequests {
         if(!channel.autoPublishApproved){await manual(r.id,'approval','Autorize os envios automáticos desta conta YouTube em Conexões.','/#connections');continue;}
         integrationId=channel.id;channelName=channel.name;
       } else {
+        if(!(await playwrightMcpState()).configured){await manual(r.id,'browser_token','Adicione o PLAYWRIGHT_MCP_EXTENSION_TOKEN em Conexões → TikTok para liberar os envios.','/#connections');continue;}
         const browserId=r.config.target?.tiktokProfileId||r.tiktok_profile_id;
         if(!browserId){await manual(r.id,'account','Adicione um perfil TikTok, faça login e vincule-o a este perfil.');continue;}
         const {rows:[agent]}=await pool.query('SELECT * FROM browser_agent WHERE id=true');

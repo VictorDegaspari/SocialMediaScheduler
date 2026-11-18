@@ -1,3 +1,4 @@
+import {revealEditorControl} from './cuts-ui-tabs.mjs';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {readFile,mkdtemp,rm,mkdir} from 'node:fs/promises';
@@ -57,6 +58,7 @@ async function dragSource(from,to){
 }
 try{
   await page.goto('http://127.0.0.1:'+server.address().port);
+  await revealEditorControl(page,'#cut-framing');
   await page.locator('#cut-framing').selectOption('split');
   assert.equal(await page.locator('#cut-split-controls').isVisible(),true);
   await region('content',{x:.35,y:.3,width:.65,height:.7});await region('webcam',{x:0,y:0,width:.3,height:.3});
@@ -83,6 +85,7 @@ try{
   await range('#split-webcam-focusX',.8);await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
   const body=await page.evaluate(()=>window.saved);assert.equal(body.framingOptions.mode,'split');assert.equal(body.framing,'fit');assert.equal(body.framingOptions.split.webcam.focusX,.8);assert.deepEqual(body.excludedRanges,[{start:1,end:2}]);
   await page.evaluate(({clip,body})=>window.openEditor({...clip,framing_options:body.framingOptions}),{clip,body});
+  await revealEditorControl(page,'#cut-framing');
   assert.deepEqual((await read()).framingOptions,body.framingOptions);await colors([255,255,0],[255,0,0]);
   for(const viewport of [{width:390,height:844},{width:320,height:568},{width:844,height:390}]){
     await page.setViewportSize(viewport);await page.locator('#cut-split-source').scrollIntoViewIfNeeded();

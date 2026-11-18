@@ -47,6 +47,12 @@ Para montar uma reação, selecione **Webcam em cima + vídeo embaixo** em **Enq
 
 O celular tem seus próprios controles: toque na imagem ou no botão de reprodução para reproduzir/pausar, use **−5 s / +5 s** para voltar/avançar e arraste a barra para navegar. Essa barra acompanha a montagem já descontando os trechos removidos. O indicador **Original** mostra a posição correspondente no vídeo de origem. Uma seleção no gráfico ou uma alteração confirmada nos campos de início/fim busca o mesmo instante na imagem; enquanto o quadro é carregado, a prévia indica a busca para não mostrar uma imagem antiga como se fosse a seleção atual.
 
+### Textos e imagens sobre o vídeo
+
+Em **Ajustar → Textos e imagens**, use **Adicionar texto**, **Adicionar imagem** ou cole uma imagem copiada com **Ctrl+V**. Texto e imagem podem aparecer juntos, em até 20 elementos. São aceitos PNG, JPEG e WebP de até 20 MB; transparência e o arquivo original da imagem são preservados. Arraste o elemento na prévia ou use os controles de posição e tamanho. Textos também permitem escolher cor, tamanho e fundo.
+
+Mantenha **Durante todo o vídeo** marcado para um elemento fixo. Desmarque para definir **Aparece em** e **Some em**, em segundos do vídeo final, já descontando os trechos removidos. **Ver na prévia** busca o começo do elemento; **Trazer para frente** muda a sobreposição. Salve e confira o MP4 gerado antes de postar. Os elementos permanecem editáveis ao reabrir e acompanham novas versões, preservando a versão anterior.
+
 ### Remover trechos internos
 
 Marque início/fim no player ou informe os tempos do vídeo original para excluir uma parte. A lista aceita até 20 remoções sem sobreposição e permite desfazer cada uma. A duração mostrada corresponde à soma das partes mantidas: o resultado deve ter de 0,5 a 180 segundos. O intervalo na origem pode ser maior quando as remoções deixam o resultado dentro desse limite.

@@ -133,3 +133,12 @@ test('estatísticas são globais e não mudam ao navegar em páginas pequenas',a
   await pool.query("UPDATE watches SET source_type='google_drive' WHERE managed_by_cuts=false AND controlled_by_requests=false");
   assert.deepEqual(await dashboardStats(),{...expected,local_source_ready:false});
 });
+
+test('fila global e contadores da pasta incluem TikTok do navegador e deixam de contar cancelados',async()=>{
+  const local=await watch({source:'local'}),id=await video(local,{status:'sent'});
+  for(const status of ['preparing','review','pending','retry','submitting','cancelled'])await delivery(id,status,{engine:'browser',provider:'tiktok'});
+  assert.equal((await dashboardStats()).pending,5);
+  const first=await page('watches?limit=1');assert.equal(first.items[0].pending_count,5);
+  await pool.query("UPDATE deliveries SET status='cancelled' WHERE video_id=$1",[id]);
+  assert.equal((await dashboardStats()).pending,0);assert.equal((await page('watches?limit=1')).items[0].pending_count,0);
+});

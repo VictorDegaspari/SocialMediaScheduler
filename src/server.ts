@@ -15,6 +15,7 @@ import {requestRoutes,publicationRequests} from './publication-requests.js';
 import { nativeRoutes } from './native-routes.js';
 import { browserRoutes, browserBridge } from './browser-bridge.js';
 import { cutsRoutes, cutsService } from './cuts.js';
+import {playwrightMcpRoutes,playwrightMcpState} from './playwright-mcp.js';
 import { dashboardRoutes, listWatches, listEvents, listVideos, dashboardStats } from './dashboard-lists.js';
 import { parsePagination } from './pagination.js';
 import { publisherEngine,nativeConnectionState,publishingChannels } from './native-auth.js';
@@ -41,6 +42,7 @@ app.use((req,res,next)=>{
 });
 app.use(express.json({limit:'128kb'}));
 app.use(nativeRoutes);
+app.use(playwrightMcpRoutes);
 app.use(requestRoutes);
 app.use(browserRoutes);
 app.use(cutsRoutes);
@@ -62,7 +64,7 @@ app.get('/api/state',async(req,res)=>{
   const requestsPage=parsePagination(req.query,{scope:'requests',prefix:'requests'});
   const actionsPage=parsePagination(req.query,{scope:'actions',prefix:'actions'});
   const browserPage=parsePagination(req.query,{scope:'browser',prefix:'browser'});
-  const [google,tokens,postiz,paused,heartbeat,watches,stats,activities,videos,publishing,browser,cuts,cutFolders,native,queue]=await Promise.all([
+  const [playwrightMcp,google,tokens,postiz,paused,heartbeat,watches,stats,activities,videos,publishing,browser,cuts,cutFolders,native,queue]=await Promise.all([playwrightMcpState(),
     getSetting<GoogleConfig>('google'),getSetting<Credentials>('googleTokens'),getSetting<PostizConfig>('postiz'),
     getSetting<boolean>('paused'),getSetting<string>('heartbeat'),
     listWatches(watchesPage),dashboardStats(),listEvents(eventsPage),listVideos(videosPage),
@@ -70,7 +72,7 @@ app.get('/api/state',async(req,res)=>{
     nativeConnectionState(),scheduler.state()
   ]);
   res.json({publishing,browser,cuts,cutFolders,
-    connections:{native,local:{rootPath:localMediaHostDir},google:{configured:!!google,connected:!!tokens?.refresh_token,clientId:google?.clientId || '',callbackUrl:`${appUrl}/auth/google/callback`},postiz:{configured:!!postiz,baseUrl:postiz?.baseUrl || '',youtubeSchedulingApproved:postiz?.youtubeSchedulingApproved || false}},
+    connections:{native,playwrightMcp,local:{rootPath:localMediaHostDir},google:{configured:!!google,connected:!!tokens?.refresh_token,clientId:google?.clientId || '',callbackUrl:`${appUrl}/auth/google/callback`},postiz:{configured:!!postiz,baseUrl:postiz?.baseUrl || '',youtubeSchedulingApproved:postiz?.youtubeSchedulingApproved || false}},
     scheduler:{paused:!!paused,heartbeat,timezone:'America/Sao_Paulo',queue},
     watches:watches.items,stats,events:activities.items,videos:videos.items,
     pagination:{watches:watches.pagination,events:activities.pagination,videos:videos.pagination}
@@ -236,6 +238,7 @@ app.post('/api/videos/:id/retry',async(req,res)=>{
     if(!video || video.status!=='failed') throw new AppError('Somente falhas confirmadas podem ser retomadas. Confira resultados desconhecidos no Postiz.');
     const {rows:unsafe}=await db.query("SELECT id FROM deliveries WHERE video_id=$1 AND (status IN ('submitting','unknown') OR (status='failed' AND post_id IS NOT NULL))",[id]);
     if(unsafe.length) throw new AppError('Há um envio aceito ou sem confirmação. Corrija esse post diretamente no Postiz.');
+    if((await db.query("SELECT id FROM deliveries WHERE video_id=$1 AND engine IN ('local','browser') AND status IN ('failed','retry')",[id])).rowCount)throw new AppError('Tente novamente no destino que falhou, usando o botão ao lado da conta no histórico.');
     await db.query("UPDATE deliveries SET status='pending',error=NULL WHERE video_id=$1 AND status='failed' AND post_id IS NULL",[id]);
     await db.query("UPDATE videos SET status='waiting',attempts=0,retry_at=NULL,error=NULL WHERE id=$1",[id]);
     await db.query('UPDATE watches SET next_scan_at=now() WHERE id=$1',[video.watch_id]);

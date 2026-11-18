@@ -1,3 +1,4 @@
+import {revealEditorControl} from './cuts-ui-tabs.mjs';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {readFile,mkdir} from 'node:fs/promises';
@@ -55,9 +56,16 @@ const page=await browser.newPage();page.setDefaultTimeout(10_000);const errors=[
 try{
   await page.goto('http://127.0.0.1:'+server.address().port);
   await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
+  if(!diagnostic){
+    await page.getByLabel('Título do corte',{exact:true}).fill('Rascunho da edição');
+    await revealEditorControl(page,'#cuts-cues');
+    await page.getByLabel('Texto da legenda 1',{exact:true}).fill('Palavra revisada sem perder o rascunho.');
+    await page.locator('#cut-source-player').evaluate(video=>{video.dataset.preserved='yes';});
+  }
   await mkdir('artifacts',{recursive:true});
   for(const viewport of [{width:1440,height:1050},{width:1366,height:768},{width:390,height:844},{width:320,height:568},{width:844,height:390}]){
     await page.setViewportSize(viewport);
+    await revealEditorControl(page,'#cuts-cues');
     await page.locator('#cuts-dialog-form').evaluate(form=>{form.scrollTop=0;});
     await page.locator('#cuts-dialog').evaluate(dialog=>{dialog.scrollTop=0;});
     const initial=await page.evaluate(()=>{
@@ -75,6 +83,26 @@ try{
       assert(initial.form.width<=1&&initial.bodyWidth<=1,'no horizontal overflow '+JSON.stringify({viewport,initial}));
     }
     if(!diagnostic){
+      const nav=page.getByRole('navigation',{name:'Etapas da edição'});
+      for(const id of ['cut-editor-timing','cut-editor-framing','cut-overlays','cut-editor-captions']){
+        const shortcut=nav.locator('[aria-controls="'+id+'"]');await shortcut.click();
+        assert.equal(await shortcut.getAttribute('aria-selected'),'true','the chosen editor tab is selected');
+        assert.equal(await page.locator('#'+id).isVisible(),true);
+        assert.equal(await page.locator('[data-editor-panel="primary"]:not([hidden])').count(),1,'only the chosen group of editing controls is visible');
+      }
+      const selectedSubtab=page.getByRole('tab',{name:'Texto e tempos',exact:true});
+      assert.equal(await selectedSubtab.getAttribute('aria-selected'),'true','returning to captions remembers its last subtab');
+      await nav.getByRole('tab',{name:/Trecho/,exact:false}).click();await nav.getByRole('tab',{name:/Trecho/,exact:false}).press('ArrowRight');
+      assert.equal(await nav.getByRole('tab',{name:/Formato/,exact:false}).getAttribute('aria-selected'),'true','arrow keys switch primary tabs');
+      const proportions=page.getByRole('tab',{name:'Proporção',exact:true});await proportions.focus();await proportions.press('End');
+      assert.equal(await page.getByRole('tab',{name:'Enquadrar imagem',exact:true}).getAttribute('aria-selected'),'true','keyboard navigation also works within subtabs');
+      await revealEditorControl(page,'#cuts-cues');
+      assert.equal(await page.getByLabel('Título do corte',{exact:true}).inputValue(),'Rascunho da edição');
+      assert.equal(await page.getByLabel('Texto da legenda 1',{exact:true}).inputValue(),'Palavra revisada sem perder o rascunho.');
+      assert.equal(await page.locator('#cut-source-player').getAttribute('data-preserved'),'yes','navigation keeps the source player alive');
+      await nav.getByRole('button',{name:'Prévia',exact:true}).click();
+      assert.equal(await page.locator('#cut-editor-preview').evaluate(section=>document.activeElement===section),true);
+      assert(await page.locator('.cuts-phone').evaluate(phone=>{const screen=phone.querySelector('.cuts-phone-screen').getBoundingClientRect(),controls=phone.querySelector('.cuts-phone-controls').getBoundingClientRect();return controls.top>=screen.bottom-1&&Math.abs(screen.width/screen.height-9/16)<.002;}),'the phone keeps its portrait screen with playback controls below it');
       await page.locator('.cuts-cue').first().scrollIntoViewIfNeeded();
       const first=await page.locator('.cuts-cue').first().boundingBox(),before=await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollTop);
       await page.mouse.move(first.x+first.width*.5,Math.min(viewport.height-80,first.y+first.height*.5));
@@ -103,8 +131,14 @@ try{
     }
   }
   if(!diagnostic){
+    await revealEditorControl(page,'#cuts-cues');await page.getByLabel('Texto da legenda 1',{exact:true}).fill('');
+    await revealEditorControl(page,'#cut-edit-start');await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
+    assert.equal(await page.getByRole('tab',{name:'Texto e tempos',exact:true}).getAttribute('aria-selected'),'true','saving reveals the subtab with a required field');
+    assert(await page.getByLabel('Texto da legenda 1',{exact:true}).evaluate(field=>document.activeElement===field),'the invalid field receives focus');
+    await page.getByLabel('Texto da legenda 1',{exact:true}).fill('Palavra revisada sem perder o rascunho.');
     const read=()=>page.evaluate(()=>{try{return {body:window.editor.read()};}catch(error){return {error:error.message};}});
     const setWindow=async(start,end)=>{
+      await revealEditorControl(page,'#cut-edit-start');
       await page.getByLabel('Começo do corte',{exact:true}).fill(start);await page.getByLabel('Fim do corte',{exact:true}).fill(end);await page.getByLabel('Título do corte',{exact:true}).focus();
     };
     await page.goto('http://127.0.0.1:'+server.address().port+'/?transcript=fail');
@@ -113,6 +147,7 @@ try{
     await setWindow('00:02','00:07');assert((await read()).body,'trimming within existing bounds needs no transcript fetch');
     await setWindow('00:00','00:08');assert.match((await read()).error,/transcri/i,'new bounds cannot silently lose source captions after fetch failure');
     await page.getByLabel('Título do corte',{exact:true}).fill('Rascunho mantido');
+    await revealEditorControl(page,'#cuts-cues');
     await page.getByLabel('Texto da legenda 1',{exact:true}).fill('Texto corrigido no rascunho');
     await page.evaluate(()=>{window.__transcriptMode='ok';});
     await page.getByRole('button',{name:'Tentar carregar transcrição',exact:true}).click();
@@ -136,7 +171,7 @@ try{
     await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     const rowFor=async text=>{
       const index=await page.locator('.cuts-cue textarea').evaluateAll((areas,text)=>areas.findIndex(area=>area.value===text),text);
-      assert(index>=0,'caption is visible: '+text);return page.locator('.cuts-cue').nth(index);
+      assert(index>=0,'caption is visible: '+text);const row=page.locator('.cuts-cue').nth(index);await revealEditorControl(page,row);return row;
     };
     const assertTimes=async(text,start,end)=>{
       const row=await rowFor(text);
@@ -144,6 +179,7 @@ try{
       assert.equal(await row.locator('[name=cueEnd]').inputValue(),end,text+' ends on the phone clock');
     };
     const remove=async(start,end)=>{
+      await revealEditorControl(page,'#cut-remove-start');
       await page.getByLabel('Remover a partir de',{exact:true}).fill(start);await page.getByLabel('Remover até',{exact:true}).fill(end);
       await page.getByRole('button',{name:'Remover este trecho',exact:true}).click();
     };
@@ -160,7 +196,7 @@ try{
     assert.deepEqual(body.captions.find(cue=>cue.text==='A fala do corte.').words,timelineClip.captions[0].words,'millisecond-aligned words stay exact through the phone projection');
     assert.deepEqual(body.captions.find(cue=>cue.text==='Outra frase.').words,timelineClip.captions[1].words,'untouched word alignment survives projection');
     assert.deepEqual(body.captions.find(cue=>cue.text==='Antes depois agora.'),timelineClip.captions[2],'split UI rows keep the canonical source group and exact words until edited');
-    await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();
+    await revealEditorControl(page,'#cut-removed-ranges');await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();
     await assertTimes('Antes depois agora.','00:07,500','00:13');
     await assertTimes('Linha corrigida sem alinhamento.','00:15','00:17');
     await (await rowFor('A fala do corte.')).locator('[name=cueText]').fill('Fala corrigida preservada.');
@@ -179,13 +215,13 @@ try{
     body=(await read()).body;assert(body);
     assert.equal(body.captions.find(cue=>cue.text==='Antes').end,18,'a caption end on a junction uses the previous retained segment');
     assert.equal(body.captions.find(cue=>cue.text==='depois agora.').start,20,'a caption start on a junction uses the next retained segment');
-    await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();
+    await revealEditorControl(page,'#cut-removed-ranges');await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();
     await remove('00:25,500','00:26');
     assert(await (await rowFor('Linha corrigida sem alinhamento.')).isVisible(),'a conflict must not silently remove corrected text');
     assert.match((await read()).error,/legenda|alinhamento|remoç|remov/i,'a removal through unaligned corrected text cannot be saved silently');
-    await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();
+    await revealEditorControl(page,'#cut-removed-ranges');await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();
     assert((await read()).body,'restoring the conflicting removal recovers the preserved draft');
-    await page.getByRole('button',{name:'Remover legenda 2',exact:true}).click();
+    await revealEditorControl(page,'#cuts-cues');await page.getByRole('button',{name:'Remover legenda 2',exact:true}).click();
     await page.getByRole('button',{name:'Adicionar linha',exact:true}).click();
     const count=await page.locator('.cuts-cue').count();
     for(let number=1;number<=count;number++){
@@ -213,6 +249,7 @@ try{
     await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     await setWindow('00:08','00:44');
     await page.locator('#cut-phone-seek').evaluate(range=>{range.value='0.5';range.dispatchEvent(new Event('input',{bubbles:true}));});
+    await revealEditorControl(page,'#cuts-cues');
     await page.getByRole('button',{name:'Adicionar linha',exact:true}).click();
     const manual=page.locator('.cuts-cue').last();
     await manual.locator('[name=cueEnd]').fill('00:01');

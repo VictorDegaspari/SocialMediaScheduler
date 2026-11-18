@@ -13,7 +13,8 @@ import {metadataSchema} from '../src/domain.ts';
 import {browserProfileDirectory} from '../src/browser-profiles.ts';
 import { packDefaultsSchema } from '../src/pack-config.ts';
 import { LocalFiles } from '../src/local.ts';
-import { browserProgress, browserProfileBusy, browserProfileSaved } from '../src/browser-agent-core.ts';
+import { browserProgress, browserProfileBusy, browserProfileSaved, browserFailureStages } from '../src/browser-agent-core.ts';
+import {loadPlaywrightMcpEnvironment} from './playwright-mcp.mjs';
 
 const token=process.env.BROWSER_AGENT_TOKEN||'';
 if(!/^[a-f0-9]{64}$/.test(token))throw new Error('Execute scripts/start.sh para configurar o agente local.');
@@ -54,6 +55,7 @@ async function execute(job){
   const task={id:job.id,child:null,started:false,published:false,scheduled:false,duplicate:false,review:false,empty:false,opened:false,failed:false,cancelled:false,progress:Promise.resolve(),done:null};
   active=task;
   try{
+    const extension=await loadPlaywrightMcpEnvironment({appUrl,agentToken:token});
     if(job.kind==='upload'&&!job.media&&job.sourceType!=='gta6_pack')await new LocalFiles(localMediaDir,localMediaDir).folder(job.folder);
     if(stopped||task.cancelled){await request('/jobs/'+job.id+'/finish',{result:'cancelled'});return;}
     let prepared;
@@ -65,7 +67,7 @@ async function execute(job){
     if(job.profileId)args.push('--profile-id',job.profileId);
     if(prepared)args.push('--prepared-file',join(prepared,'video.mp4'),'--prepared-sha',job.media.assetSha256,'--prepared-info',JSON.stringify(job.media));
     const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs'),...args],
-      {cwd:process.cwd(),env:{...process.env,LOG_LEVEL:'info'},stdio:['ignore','pipe','ignore'],shell:false});
+      {cwd:process.cwd(),env:{...process.env,...extension,LOG_LEVEL:'info'},stdio:['ignore','pipe','ignore'],shell:false});
     task.child=child;
     let buffer='';
     child.stdout.on('data',chunk=>{
@@ -74,16 +76,17 @@ async function execute(job){
       while((index=buffer.indexOf('\n'))>=0){
         const progress=browserProgress(buffer.slice(0,index));buffer=buffer.slice(index+1);
         if(!progress)continue;
-        if(progress.stage==='browser_upload_started')task.started=true;
+        if(progress.stage==='browser_upload_started'||progress.uploadStarted)task.started=true;
         if(progress.stage==='browser_duplicate')task.duplicate=true;
         if(progress.stage==='browser_scheduled')task.scheduled=true;
         if(progress.stage==='browser_published')task.published=true;
         if(progress.stage==='browser_review_required')task.review=true;
         if(progress.stage==='browser_no_video')task.empty=true;
         if(progress.stage==='browser_manual_login')task.opened=true;
-        if(['browser_source_failed','platform_limit','login_required','security_check','page_changed','browser_attempt_failed','browser_agent_failed'].includes(progress.stage))task.failed=true;
+        if(browserFailureStages.has(progress.stage))task.failed=true;
         if(progress.stage==='browser_manual_action'&&task.failed)continue;
-        task.progress=task.progress.then(()=>request('/jobs/'+job.id+'/progress',progress)).catch(()=>{});
+        const update={...progress,uploadStarted:task.started};
+        task.progress=task.progress.then(()=>request('/jobs/'+job.id+'/progress',update)).catch(()=>{});
       }
     });
     const code=await new Promise((done,reject)=>{child.once('error',reject);child.once('close',done);});
@@ -95,7 +98,7 @@ async function execute(job){
       try{await request('/jobs/'+job.id+'/finish',{result});break;}catch{if(attempt<2)await delay(1000);}
     }
   }catch{
-    await request('/jobs/'+job.id+'/progress',{stage:'browser_agent_failed'}).catch(()=>{});
+    await request('/jobs/'+job.id+'/progress',{stage:'browser_agent_failed',uploadStarted:task.started}).catch(()=>{});
     await request('/jobs/'+job.id+'/finish',{result:task.started?'unknown':'failed'}).catch(()=>{});
   }finally{if(task.prepared)await rm(task.prepared,{recursive:true,force:true});clearTimeout(task.killTimer);if(active===task)active=undefined;}
 }

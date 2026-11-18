@@ -53,6 +53,7 @@ beforeEach(async()=>{
   globalThis.fetch=originalFetch;downloads=0;renders=0;failRender=false;renderInputs=[];
   await pool.query('TRUNCATE cuts,cut_jobs,content_claims,deliveries,videos,watches,publication_requests,publishing_profiles,manual_actions,events,connected_accounts,settings,browser_commands,browser_agent,browser_settings CASCADE');
   await rm(process.env.DATA_DIR!,{recursive:true,force:true});await mkdir(process.env.DATA_DIR!);
+  await setSetting('playwrightMcpExtension',{extensionToken:'test-extension-token'});
   await saveConnectedAccount('youtube','cuts-channel','Canal de cortes',{
     access_token:'test-access',refresh_token:'test-refresh',expiry_date:Date.now()+86400000,scope:youtubeScopes.join(' '),channelId:'cuts-channel'
   },{clientId:'test-client',clientSecret:'test-secret',autoPublishApproved:false});
@@ -63,6 +64,39 @@ test('URLs são normalizadas e hosts externos, credenciais e playlists são recu
   assert.equal(youtubeVideoUrl('https://youtu.be/abcdefghijk?t=20'),'https://www.youtube.com/watch?v=abcdefghijk');
   assert.equal(youtubeVideoUrl('https://www.youtube.com/shorts/abcdefghijk'),'https://www.youtube.com/watch?v=abcdefghijk');
   for(const url of ['https://youtube.com.evil.test/watch?v=abcdefghijk','http://youtube.com/watch?v=abcdefghijk','https://user:pass@youtube.com/watch?v=abcdefghijk','https://youtube.com/playlist?list=xyz','https://127.0.0.1/watch?v=abcdefghijk'])assert.throws(()=>youtubeVideoUrl(url));
+});
+test('publishing a cut to TikTok requires its browser token before creating media or deliveries',async()=>{
+  await create();await service.tick();const clip=await currentClip(),previous=process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
+  try{
+    delete process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;await pool.query("DELETE FROM settings WHERE key='playwrightMcpExtension'");
+    const response=await call('/'+clip.id+'/publish',{...publishBody(clip),channelId:'browser:tiktok:default',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE'}});
+    assert.equal(response.status,409,await response.clone().text());assert.match((await response.json()).error,/PLAYWRIGHT_MCP_EXTENSION_TOKEN/);
+    assert.equal((await pool.query('SELECT id FROM deliveries')).rowCount,0);assert.equal((await currentClip()).status,'review');
+  }finally{if(previous===undefined)delete process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;else process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN=previous;}
+});
+test('text and image overlays persist, remain scoped to their job and survive new versions',async()=>{
+  const jobId=await create();await service.tick();let clip=await currentClip();
+  const png=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=lime:s=32x16','-frames:v','1','-threads','1','-c:v','png','-f','image2pipe','-']);
+  const upload=await originalFetch(base+'/api/cuts/jobs/'+jobId+'/images',{method:'POST',headers:{'Content-Type':'image/png'},body:png});
+  assert.equal(upload.status,201,await upload.clone().text());const image=await upload.json();assert.equal(image.width,32);assert.equal(image.height,16);
+  const downloaded=await originalFetch(base+image.url);assert.equal(downloaded.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),png);
+  const invalid=await originalFetch(base+'/api/cuts/jobs/'+jobId+'/images',{method:'POST',headers:{'Content-Type':'image/png'},body:Buffer.from('not an image')});assert.equal(invalid.status,400);
+  const overlays=[{id:randomUUID(),type:'text',text:'Texto fixo',start:0,end:null,x:.4,y:.2,width:.8,fontSize:64,color:'#FFFFFF',background:'box'},
+    {id:randomUUID(),type:'image',imageId:image.id,start:.5,end:2,x:.6,y:.7,width:.25}];
+  const saved=await call('/'+clip.id,{title:clip.title,start:5,end:13,overlays,revision:clip.revision},'PUT');assert.equal(saved.status,202,await saved.clone().text());
+  await service.tick();clip=await currentClip();assert.deepEqual(clip.overlays,overlays);assert.deepEqual(renderInputs.at(-1).overlays,overlays);
+  assert.deepEqual((await new CutsService(media).state()).jobs[0].clips[0].overlays,overlays,'a restarted service reads the persisted overlays');
+  const wrongJob=await create();await service.tick();const other=(await state()).jobs.find(j=>j.id===wrongJob)!.clips[0];
+  assert.equal((await call('/'+other.id,{title:other.title,start:5,end:13,overlays},'PUT')).status,404,'images cannot be borrowed from another job');
+  assert.equal((await call('/'+clip.id,{title:clip.title,start:5,end:13,overlays:[{...overlays[0],start:2,end:1}]},'PUT')).status,400);
+  assert.equal((await call('/'+clip.id,{title:clip.title,start:5,end:13,overlays:[],revision:clip.revision-1},'PUT')).status,409,'a stale editor cannot clear the layers');
+  await pool.query("UPDATE cuts SET status='posted' WHERE id=$1",[clip.id]);
+  const version=await call('/'+clip.id,{title:'Versão com elementos',start:5,end:13,versionId:randomUUID(),revision:clip.revision},'PUT');assert.equal(version.status,202,await version.clone().text());
+  const result=await version.json();assert(result.createdVersion);await service.tick();
+  const job=(await state()).jobs.find(j=>j.id===jobId)!;assert.deepEqual(job.clips.find(c=>c.id===clip.id)!.overlays,overlays);assert.deepEqual(job.clips.find(c=>c.id===result.id)!.overlays,overlays,'omitted fields preserve layers in a new version');
+  assert.equal((await originalFetch(base+image.url)).status,200,'both versions retain their shared image');
+  assert.equal((await call('/'+result.id,{title:'Sem elementos',start:5,end:13,overlays:[]},'PUT')).status,202);await service.tick();
+  const original=(await state()).jobs.find(j=>j.id===jobId)!.clips.find(c=>c.id===clip.id)!;assert.deepEqual(original.overlays,overlays,'removing layers in a copy does not alter the sent version');
 });
 test('recorte de legenda usa palavras reais e não mostra fala anterior ao intervalo',()=>{
   assert.deepEqual(clipCaptions(transcript,6.3,8).map(c=>c.text),['algo novo?']);

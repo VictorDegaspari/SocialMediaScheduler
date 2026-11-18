@@ -142,6 +142,19 @@
 .browser-layout .form-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
 .browser-config-card .checkbox{margin-top:17px}.browser-config-card code{overflow-wrap:anywhere}
 .browser-history{margin-top:30px}.browser-history td{vertical-align:top}.browser-history td:nth-child(3){max-width:450px;min-width:200px;white-space:normal;line-height:1.7}
+@media(max-width:650px){
+  .queue-table,.queue-table tbody{display:block;width:100%;min-width:0}
+  .queue-table thead{display:none}
+  .queue-table tr{display:block;padding:18px;border-bottom:1px solid var(--border)}
+  .queue-table tr:last-child{border-bottom:0}
+  .queue-table td,.browser-history .queue-table td:nth-child(3){display:block;width:100%;min-width:0;max-width:none;padding:0;border:0;white-space:normal;overflow-wrap:anywhere}
+  .queue-table td+td{margin-top:14px}
+  .queue-table td:empty{display:none}
+  .queue-table td::before{content:attr(data-label);display:block;margin-bottom:5px;font-size:10px;font-weight:600;color:var(--muted)}
+  .queue-table td .button{min-height:40px;margin:8px 4px 0 0;white-space:normal}
+  .queue-table .badge{white-space:normal}
+  .queue-table td>div+div{margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
+}
 .browser-entry{display:flex;gap:15px;align-items:center}.browser-entry>svg{width:25px;min-width:25px}.browser-entry>div{flex:1}.browser-entry p{margin:7px 0 0;font-size:12px}
 @media(max-width:1050px){.browser-layout{grid-template-columns:1fr}.browser-entry{flex-wrap:wrap}}
 @media(max-width:650px){.browser-facts>div{flex-direction:column;gap:3px}.browser-facts strong{text-align:left}.browser-layout .form-actions .button{flex:1;min-width:140px}.browser-entry .button{width:100%}}

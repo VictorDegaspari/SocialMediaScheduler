@@ -49,8 +49,10 @@ try {
   await page.getByRole('checkbox',{name:/Autorizo o envio deste vídeo/}).check();await page.getByRole('button',{name:'Autorizar e enviar',exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector('#delivery-dialog').open);assert.equal(approvals.length,2);assert.equal(approvals[1].body.metadata.tiktok.madeWithAI,true);
   await page.getByRole('link',{name:'Conexões',exact:true}).click();
+  await page.getByText('Configurações avançadas',{exact:true}).click();
   await page.getByRole('heading',{name:'Motor de publicação',exact:true}).waitFor();
   assert.equal(await page.getByLabel('Quem gerencia as publicações?').inputValue(),'local');
+  await page.getByText('Configurações avançadas',{exact:true}).click();
   assert.equal(await page.locator('#tiktok-form').count(),0);
   assert.equal(await page.getByRole('link',{name:'Autorizar TikTok',exact:true}).count(),0);
   assert.equal(await page.getByRole('link',{name:/Abrir TikTok navegador/}).isVisible(),true);

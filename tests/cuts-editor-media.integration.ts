@@ -1,13 +1,14 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm,readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { renderCut, type Cue, type RenderCutInput } from '../src/cuts-media.js';
 import { captionStyleSchema, framingOptionsSchema } from '../src/cuts-edit.js';
 import { sha256, validateVideo } from '../src/media.js';
+import {saveOverlayImage,cutOverlaysSchema} from '../src/cuts-overlays.js';
 
 const dir=await mkdtemp(join(tmpdir(),'watcher-cuts-editor-'));
 const source=join(dir,'source.mp4');
@@ -26,6 +27,26 @@ function pixels(bytes:Buffer,match:(r:number,g:number,b:number)=>boolean) {
 }
 const white=(r:number,g:number,b:number)=>r>120&&g>120&&b>120;
 const yellow=(r:number,g:number,b:number)=>r>150&&g>150&&b<100;
+test('text and transparent images are encoded together and timed on the final edited timeline',async()=>{
+  const bytes=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=lime:s=80x40,format=rgba,colorchannelmixer=aa=0.8','-frames:v','1','-threads','1','-c:v','png','-f','image2pipe','-']);
+  const image=await saveOverlayImage(dir,bytes),sourceHash=await sha256(source);
+  assert.deepEqual(await readFile(join(dir,'overlay-'+image.id+'.image')),bytes,'the original image bytes are retained');
+  const overlays=cutOverlaysSchema.parse([
+    {id:randomUUID(),type:'text',text:'FIXO 100%: [ok] \\ {teste}',fontSize:64,color:'#FF00FF',x:.5,y:.8,width:.9},
+    {id:randomUUID(),type:'image',imageId:image.id,start:0,end:.8,width:.3,x:.2,y:.1}
+  ]);
+  const {path}=await render({...basic,captionStyle:style({enabled:false}),overlays});
+  const green=(r:number,g:number,b:number)=>g>140&&r<70&&b<70,magenta=(r:number,g:number,b:number)=>r>120&&g<100&&b>120;
+  assert(pixels(frame(path,.4,'crop=720:300:0:0'),green)>3000,'transparent image is present before its end');
+  assert.equal(pixels(frame(path,1.2,'crop=720:300:0:0'),green),0,'image disappears from the encoded frames');
+  assert(pixels(frame(path,.4),magenta)>100&&pixels(frame(path,1.4),magenta)>100,'fixed text remains after the image disappears');
+  assert.ok(Math.abs(frequency(path,.3)-440)<15);assert.equal(await sha256(source),sourceHash);
+  assert.equal((await validateVideo(path)).width,1080,'overlay composition keeps the full output resolution');
+  const timed=cutOverlaysSchema.parse([{...overlays[0],start:2,end:3}]);
+  const edited=await render({start:0,end:6,captions:[{start:.2,end:1,text:'Teste'}],framing:'fit',captionStyle:style({enabled:false}),excludedRanges:[{start:2,end:4}],overlays:timed});
+  assert.equal(pixels(frame(edited.path,1.5),magenta),0);assert(pixels(frame(edited.path,2.5),magenta)>100,'timing follows the output after removing the middle');assert.equal(pixels(frame(edited.path,3.5),magenta),0);
+  assert(!(await readdir(dir)).some(name=>name.includes('.overlay-')&&name.endsWith('.txt')),'rendering text files are cleaned up');
+});
 function yellowCenter(bytes:Buffer) {
   let count=0,total=0;
   for(let i=0;i<bytes.length;i+=3)if(yellow(bytes[i],bytes[i+1],bytes[i+2])){count++;total+=(i/3)%720;}

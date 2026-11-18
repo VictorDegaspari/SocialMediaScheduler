@@ -1,4 +1,5 @@
 import { chromium } from 'playwright-core';
+import {playwrightExtensionTokenSchema} from '../src/browser-auth.ts';
 import { parseArgs } from 'node:util';
 import { mkdir, chmod, open, readFile, rm, realpath, writeFile } from 'node:fs/promises';
 import { resolve, join, dirname, relative, isAbsolute } from 'node:path';
@@ -22,6 +23,7 @@ if(args.help){
   process.exit(0);
 }
 if([args.login,args.watch,args.once,args.status].filter(Boolean).length>1)throw new Error('Escolha somente --login, --watch, --once ou --status.');
+if(!args.status&&!playwrightExtensionTokenSchema.safeParse(process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN).success)throw new Error('Adicione o PLAYWRIGHT_MCP_EXTENSION_TOKEN em Conexões → TikTok antes de iniciar a automação.');
 if(args['schedule-at']&&(!args.once||!/^\d{4}-\d{2}-\d{2}T/.test(args['schedule-at'])||!Number.isFinite(Date.parse(args['schedule-at']))))throw new Error('Use --schedule-at com uma data ISO válida e --once.');
 if(args['publish-now']&&(!args.once||!args['prepared-file']||args['schedule-at']))throw new Error('Publicação imediata exige --once, mídia previamente revisada e ausência de agendamento.');
 if(args.source&&!['local','gta6_pack'].includes(args.source))throw new Error('Origem de vídeos inválida.');
@@ -130,7 +132,8 @@ async function attempt(){
     }
     logger.warn({event:error instanceof BrowserActionRequired?error.code:'browser_attempt_failed',file:candidate.name,uploadMayHaveStarted:started},
       error instanceof BrowserActionRequired?error.message:'A preparação não foi confirmada. Confira o navegador e o histórico antes de tentar novamente.');
-    if(current){logger.info({event:'browser_manual_action'},'A janela permanece aberta para sua conferência. Feche-a após resolver a pendência.');await waitForClose(current);}
+    process.exitCode=1;
+    if(current&&!args.once){logger.info({event:'browser_manual_action'},'A janela permanece aberta para sua conferência. Feche-a após resolver a pendência.');await waitForClose(current);}
     return true;
   }finally{
     await current?.close().catch(()=>{});context=undefined;

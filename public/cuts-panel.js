@@ -119,7 +119,8 @@ async function openEditor(id,seek,format){
   document.querySelector('#cuts-dialog').dataset.mode='edit';
   editing.editor=createCutEditor({clip:format?{...clip,framing_options:{...clip.framing_options,format}}:clip,job,esc:helpers.esc,api:apiClient});
   if(!document.querySelector('#cuts-dialog').open)document.querySelector('#cuts-dialog').showModal();
-  if(seek!==undefined){editing.editor.selectReplayStart(seek);const details=document.querySelector('.cuts-replay-details');details.open=true;details.scrollIntoView({block:'nearest'});}
+  if(format)editing.editor.reveal('#cut-format');
+  if(seek!==undefined){editing.editor.selectReplayStart(seek);editing.editor.reveal('.cuts-replay-details');}
 }
 function openPublish(id,platform='youtube'){
   const {clip,job}=findClip(id),{esc}=helpers,format=clip.framing_options?.format||'shorts';editing={mode:'publish',id,jobId:job.id,revision:clip.revision,format};

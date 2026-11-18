@@ -93,6 +93,7 @@ export async function initDb() {
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS caption_style jsonb NOT NULL DEFAULT '{}';
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS framing_options jsonb NOT NULL DEFAULT '{}';
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS excluded_ranges jsonb NOT NULL DEFAULT '[]';
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS overlays jsonb NOT NULL DEFAULT '[]';
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS output_duration double precision;
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS render_warnings jsonb NOT NULL DEFAULT '[]';
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS edited_from_cut_id uuid REFERENCES cuts(id);
@@ -128,6 +129,7 @@ export async function initDb() {
       finished_at timestamptz
     );
     CREATE INDEX IF NOT EXISTS browser_commands_status ON browser_commands(status,created_at);
+    ALTER TABLE browser_commands ADD COLUMN IF NOT EXISTS progress_at timestamptz NOT NULL DEFAULT now();
     CREATE TABLE IF NOT EXISTS connected_accounts (
       provider text NOT NULL,external_id text NOT NULL,name text NOT NULL,label text,
       tokens text NOT NULL,config text NOT NULL,disabled boolean NOT NULL DEFAULT false,

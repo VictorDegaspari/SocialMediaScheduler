@@ -41,6 +41,9 @@
     "code": [
       "src/cuts-edit.ts",
       "public/cuts-editor.js",
+      "public/cuts-editor-view.js",
+      "public/cuts-editor-tabs.js",
+      "scripts/cuts-ui-tabs.mjs",
       "public/cuts-playback.js",
       "public/cuts-replay.js",
       "public/cuts-time.js",
@@ -48,7 +51,11 @@
       "public/cuts-captions.js",
       "public/cuts-split.js",
       "public/cuts-split-layout.js",
-      "public/cuts-split-layout.d.ts"
+      "public/cuts-split-layout.d.ts",
+      "public/cuts-overlays.js",
+      "public/cuts-overlays-layout.js",
+      "public/cuts-overlays-layout.d.ts",
+      "src/cuts-overlays.ts"
     ],
     "unit": [
       "tests/cuts-edit.test.ts",
@@ -56,7 +63,8 @@
       "tests/cuts-replay.test.ts",
       "tests/cuts-time.test.ts",
       "tests/cuts-captions.test.ts",
-      "tests/cuts-split.test.ts"
+      "tests/cuts-split.test.ts",
+      "tests/cuts-overlays.test.ts"
     ],
     "integration": [
       "tests/cuts-editor-media.integration.ts",
@@ -66,7 +74,8 @@
       "scripts/check-cuts-ui.mjs",
       "scripts/check-cuts-editor-regressions.mjs",
       "scripts/check-cuts-panel-sessions.mjs",
-      "scripts/check-cuts-split-ui.mjs"
+      "scripts/check-cuts-split-ui.mjs",
+      "scripts/check-cuts-overlays-ui.mjs"
     ],
     "docs": [
       "docs/GERADOR-DE-CORTES.md"
@@ -99,6 +108,7 @@
       "src/local-publisher.ts",
       "src/native-api.ts",
       "src/native-routes.ts",
+      "src/queue-controls.ts",
       "src/publication-requests.ts",
       "src/request-work.ts",
       "src/video-titles.ts",
@@ -133,6 +143,9 @@
       "src/browser-bridge.ts",
       "src/browser-tiktok.ts",
       "src/browser-agent-core.ts",
+      "src/browser-auth.ts",
+      "src/playwright-mcp.ts",
+      "scripts/playwright-mcp.mjs",
       "src/browser-profiles.ts",
       "src/browser-login.ts",
       "scripts/browser-agent.mjs",
@@ -145,6 +158,7 @@
     "unit": [
       "tests/browser.test.ts",
       "tests/browser-agent.test.ts",
+      "tests/playwright-mcp.test.ts",
       "tests/browser-profiles.test.ts"
     ],
     "integration": [
@@ -229,6 +243,7 @@
       "src/native-routes.ts",
       "src/tiktok-login.ts",
       "public/connections-view.js",
+      "public/connections.css",
       "scripts/assistant.mjs"
     ],
     "unit": [
@@ -241,6 +256,7 @@
     "ui": [
       "scripts/check-native-ui.mjs",
       "scripts/check-requests-ui.mjs",
+      "scripts/check-connections-ui.mjs",
       "scripts/check-browser-panel.mjs"
     ],
     "docs": [

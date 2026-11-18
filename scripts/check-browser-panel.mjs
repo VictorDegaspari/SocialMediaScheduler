@@ -11,7 +11,7 @@ const base='http://127.0.0.1:'+server.address().port;
 const fixture={
   browser:{configured:true,rootPath:'/videos',config:{folder:'/videos',enabled:false,cadence:'daily',intervalMinutes:720,times:['08:00','20:00'],timezone:'America/Sao_Paulo',stripMetadata:true,nextAt:null,revision:0},agent:{online:true,desktop:true,externalBusy:false,profileSaved:true,lastSeen:null},active:null,jobs:[]},
   scheduler:{paused:false,queue:{backend:'BullMQ + Redis'}},watches:[],stats:{pending:0,sent:0,attention:0},videos:[],events:[],
-  connections:{local:{rootPath:'/videos'},google:{configured:false,connected:false,clientId:'',callbackUrl:base+'/auth/google/callback'},postiz:{configured:false,baseUrl:'',youtubeSchedulingApproved:false},native:{engine:'local',youtube:{configured:false,connected:false,clientId:'',account:'',autoPublishApproved:false,callbackUrl:base+'/auth/youtube/callback'},tiktok:{configured:false,connected:false,clientKey:'',account:'',loginMode:'desktop',desktopAvailable:true,httpsRequired:false,callbackUrl:base+'/auth/tiktok/callback'}}}
+  connections:{playwrightMcp:{configured:true,source:'input'},local:{rootPath:'/videos'},google:{configured:false,connected:false,clientId:'',callbackUrl:base+'/auth/google/callback'},postiz:{configured:false,baseUrl:'',youtubeSchedulingApproved:false},native:{engine:'local',youtube:{configured:false,connected:false,clientId:'',account:'',autoPublishApproved:false,callbackUrl:base+'/auth/youtube/callback'},tiktok:{configured:false,connected:false,clientKey:'',account:'',loginMode:'desktop',desktopAvailable:true,httpsRequired:false,callbackUrl:base+'/auth/tiktok/callback'}}}
 };
 const cutId='22222222-2222-4222-8222-222222222222',jobId='33333333-3333-4333-8333-333333333333',videoId='44444444-4444-4444-8444-444444444444',deliveryId='55555555-5555-4555-8555-555555555555',profileId='66666666-6666-4666-8666-666666666666';
 const metadata={schemaVersion:1,ready:true,title:'Uma corrida no pôr do sol',description:'Minha legenda.',hashtags:[],youtube:{visibility:'private',madeForKids:false,containsSyntheticMedia:false,tags:[]},tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false,allowComment:false,allowDuet:false,allowStitch:false,commercialContent:false,ownBrand:false,contentPostingMethod:'DIRECT_POST'}};
@@ -35,7 +35,7 @@ await page.route('**/api/**',async route=>{
   if(path==='/api/browser/videos/'+videoId+'/prepare')return route.fulfill({json:{id:deliveryId}});
   if(path==='/api/cuts/'+cutId+'/publish'&&body.visibility!==undefined&&!['private','unlisted','public'].includes(body.visibility))return route.fulfill({status:400,json:{error:'Verifique os campos: visibility: Invalid option'}});
   if(path==='/api/native/deliveries/'+deliveryId+'/approve'||path==='/api/cuts/'+cutId+'/publish'){
-    fixture.browser.active={id:'77777777-7777-4777-8777-777777777777',kind:'upload',status:'pending',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:new Date().toISOString()};
+    fixture.browser.active={id:'77777777-7777-4777-8777-777777777777',kind:'upload',status:'running',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:new Date().toISOString()};
     return route.fulfill({json:{ok:true,deliveryId}});
   }
   if(path==='/api/browser/config')Object.assign(fixture.browser.config,body,{nextAt:'2026-11-15T22:00:00Z'});
@@ -43,6 +43,16 @@ await page.route('**/api/**',async route=>{
     const job={id:'11111111-1111-4111-8111-111111111111',kind:path.endsWith('login')?'login':'upload',origin:'manual',status:'running',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:'2026-11-15T12:00:00-03:00'};
     fixture.browser.active=job;fixture.browser.jobs.unshift(job);
   }else if(path==='/api/browser/pause')fixture.browser.config.enabled=false;
+  else if(/^\/api\/browser\/jobs\/[^/]+\/(retry|cancel)$/.test(path)){
+    const id=path.split('/')[4],job=fixture.browser.jobs.find(job=>job.id===id);assert(job);
+    job.status=path.endsWith('/retry')?'pending':'cancelled';
+    if(fixture.browser.active?.id===id)fixture.browser.active=null;
+  }
+  else if(/^\/api\/native\/deliveries\/[^/]+\/(retry|cancel)$/.test(path)){
+    const id=path.split('/')[4],delivery=fixture.videos.flatMap(video=>video.deliveries).find(delivery=>delivery.id===id);assert(delivery);
+    delivery.status=path.endsWith('/retry')?'pending':'cancelled';delivery.error=null;
+  }
+  else if(/^\/api\/videos\/[^/]+\/cancel$/.test(path))fixture.videos.find(video=>video.id===path.split('/')[3]).status='cancelled';
   else if(path==='/api/browser/stop'){fixture.browser.config.enabled=false;fixture.browser.active.status='cancel_requested';fixture.browser.active.message='Interrupção solicitada pelo painel.';}
   else if(path==='/api/scheduler')fixture.scheduler.paused=body.paused;
   else throw new Error('Requisição inesperada: '+path);
@@ -118,6 +128,12 @@ try{
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Layout não pode ultrapassar a tela: '+width);
     if(width===390)await page.screenshot({path:'artifacts/browser-panel-mobile.png',fullPage:true});
   }
+  fixture.connections.playwrightMcp={configured:false,source:null};fixture.browser.active=null;
+  await page.goto(base+'/#browser');await page.getByText('Adicione o token para configurar o TikTok.',{exact:true}).waitFor();
+  for(const name of ['Abrir login do TikTok','Salvar rotina do navegador','Postar agora no TikTok'])assert(await page.getByRole('button',{name,exact:true}).isDisabled(),'token required for '+name);
+  assert(await page.locator('[data-browser-action="run"]').isDisabled());
+  const beforeTokenActions=actions.length;await page.getByRole('link',{name:'Adicionar token em Conexões',exact:true}).click();await page.getByLabel('PLAYWRIGHT_MCP_EXTENSION_TOKEN',{exact:true}).waitFor();assert.equal(actions.length,beforeTokenActions,'the setup link does not queue work');
+  fixture.connections.playwrightMcp={configured:true,source:'input'};
   assert.deepEqual(errors,[]);
   await page.setViewportSize({width:1440,height:1100});
   await page.goto(base+'/#watches');
@@ -164,6 +180,37 @@ try{
   await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(cutId);await picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click();
   await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).waitFor();assert.equal(await cutForm.getByLabel('Perfil do TikTok').inputValue(),'browser:tiktok:'+profileId);
   await cutForm.getByRole('button',{name:'Cancelar',exact:true}).click();
+  const now=new Date().toISOString();
+  fixture.browser.active=null;
+  fixture.browser.jobs=[
+    {id:jobId,kind:'upload',filename:'falhou.mp4',status:'failed',phase:'login_required',message:'Faça login no TikTok. O upload não começou.',upload_started:false,created_at:now},
+    {id:videoId,kind:'upload',filename:'aguardando.mp4',status:'pending',phase:'queued',message:'Aguardando o agente.',upload_started:false,created_at:now},
+    {id:deliveryId,kind:'upload',filename:'incerto.mp4',status:'unknown',phase:'page_changed',message:'Confira o TikTok Studio.',upload_started:true,created_at:now}
+  ];
+  await page.goto(base+'/#browser');
+  const failedTask=page.getByRole('row').filter({hasText:'falhou.mp4'}),waitingTask=page.getByRole('row').filter({hasText:'aguardando.mp4'}),unknownTask=page.getByRole('row').filter({hasText:'incerto.mp4'});
+  await unknownTask.waitFor();
+  await page.setViewportSize({width:320,height:844});assert(await page.locator('.browser-history .table-wrap').evaluate(el=>el.scrollWidth<=el.clientWidth),'tarefas e orientações do navegador cabem sem rolagem horizontal');await page.setViewportSize({width:1440,height:1100});
+  assert.equal(await unknownTask.getByRole('button',{name:'Tentar novamente',exact:true}).count(),0);
+  assert(await unknownTask.getByRole('link',{name:'Conferir no TikTok',exact:true}).isVisible());
+  await failedTask.getByRole('button',{name:'Tentar novamente',exact:true}).click();await failedTask.getByText('Na fila',{exact:true}).waitFor();assert.equal(actions.at(-1).path,'/api/browser/jobs/'+jobId+'/retry');
+  await waitingTask.getByRole('button',{name:'Cancelar vídeo',exact:true}).click();await waitingTask.getByText('Cancelado',{exact:true}).waitFor();assert.equal(actions.at(-1).path,'/api/browser/jobs/'+videoId+'/cancel');
+  fixture.videos=[
+    {id:videoId,name:'falha-tiktok.mp4',status:'sent',watch_name:'Minha pasta',deliveries:[{id:deliveryId,engine:'browser',provider:'tiktok',status:'failed',error:'Faça login no perfil escolhido.',hasMedia:true,approved:true,uploadStarted:false,channelName:'Perfil secundário'}]},
+    {id:jobId,name:'retry-youtube.mp4',status:'sent',watch_name:'Minha pasta',deliveries:[{id:cutId,engine:'local',provider:'youtube',status:'retry',error:'Limite temporário da plataforma.',attempts:2,retryAt:now,hasMedia:true,approved:true}]},
+    {id:cutId,name:'origem.mp4',status:'ready',watch_name:'Minha pasta',deliveries:[]},
+    {id:profileId,name:'incerto-tiktok.mp4',status:'sent',watch_name:'Minha pasta',deliveries:[{id:profileId,engine:'browser',provider:'tiktok',status:'unknown',uploadStarted:true}]}
+  ];
+  await page.goto(base+'/#history');
+  const failedDelivery=page.getByRole('row').filter({hasText:'falha-tiktok.mp4'}),unknownDelivery=page.getByRole('row').filter({hasText:'incerto-tiktok.mp4'}),sourceVideo=page.getByRole('row').filter({hasText:'origem.mp4'});
+  await failedDelivery.waitFor();
+  assert(await page.getByText('Próxima tentativa automática:',{exact:false}).isVisible());assert(await page.getByText('2 tentativa(s) realizada(s).',{exact:true}).isVisible());
+  assert.equal(await unknownDelivery.getByRole('button',{name:'Tentar novamente',exact:true}).count(),0);assert.equal(await unknownDelivery.getByRole('button',{name:'Cancelar envio',exact:true}).count(),0);
+  await failedDelivery.getByRole('button',{name:'Tentar novamente',exact:true}).click();await failedDelivery.getByText('TikTok · Na fila local',{exact:true}).waitFor();assert.equal(actions.at(-1).path,'/api/native/deliveries/'+deliveryId+'/retry');
+  await failedDelivery.getByRole('button',{name:'Cancelar envio',exact:true}).click();await failedDelivery.getByText('TikTok · Cancelado',{exact:true}).waitFor();assert.equal(actions.at(-1).path,'/api/native/deliveries/'+deliveryId+'/cancel');
+  await sourceVideo.getByRole('button',{name:'Cancelar vídeo',exact:true}).click();await sourceVideo.getByText('Cancelado',{exact:true}).waitFor();assert.equal(actions.at(-1).path,'/api/videos/'+cutId+'/cancel');
+  for(const width of [320,390]){await page.setViewportSize({width,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'o histórico da fila cabe no celular');assert(await page.locator('.queue-table').evaluate(el=>el.closest('.table-wrap').scrollWidth<=el.closest('.table-wrap').clientWidth),'erros e ações ficam visíveis sem rolagem horizontal');}
+  await page.screenshot({path:'artifacts/queue-controls-mobile.png',fullPage:true});
   await page.setViewportSize({width:320,height:844});await page.goto(base+'/#watches');await page.getByRole('heading',{name:'Cortes do aplicativo',exact:true}).waitFor();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'a biblioteca cabe no celular');await page.screenshot({path:'artifacts/cuts-library-mobile.png',fullPage:true});
   assert.deepEqual(errors,[]);
   console.log('Painel validado: rotinas, login, interrupção, lote TikTok com limites/datas, formulário YouTube e telas móveis. Todos os comandos foram simulados.');

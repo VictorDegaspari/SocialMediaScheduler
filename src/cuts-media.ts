@@ -5,6 +5,7 @@ import { AppError, dataDir } from './config.js';
 import { validateVideo } from './media.js';
 import { captionStyleSchema, framingOptionsSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
 import {cutFramingFilters} from './cuts-framing.js';
+import {cutOverlayFilters,cutOverlaysSchema,type CutOverlay} from './cuts-overlays.js';
 import { normalizeHeatmap, replayFromMetadata, replayInterest, type ReplayData } from './cuts-heatmap.js';
 
 export type Cue = { start:number; end:number; text:string; words?:{start:number;end:number;text:string}[] };
@@ -274,7 +275,7 @@ function sourceFrameRate(stream:{avg_frame_rate?:string;r_frame_rate?:string}) {
 
 export type RenderCutInput={
   start:number;end:number;captions:Cue[];framing:'fit'|'crop'|'blur';
-  captionStyle?:CaptionStyle;framingOptions?:FramingOptions;excludedRanges?:TimeRange[];
+  captionStyle?:CaptionStyle;framingOptions?:FramingOptions;excludedRanges?:TimeRange[];overlays?:CutOverlay[];
 };
 export async function renderCut(dir:string,clipId:string,input:RenderCutInput):Promise<{path:string;warnings:string[]}> {
   if(!/^[a-fA-F0-9-]{16,80}$/.test(clipId))throw new AppError('Identificador de corte inválido.');
@@ -292,6 +293,7 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
   const relative=timelineCaptions(captions,parts);
   if(!relative.length)throw new AppError('O trecho precisa conter fala e legendas. Ajuste o início ou o fim.');
   const assName=`${clipId}.ass`,partialName=`${clipId}.rendering.mp4`,path=join(dir,`${clipId}.mp4`);
+  let overlayFiles:string[]=[];
   try {
     const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type,width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate:stream_side_data_list','-of','json','source.mp4'],{cwd:dir,timeout:30_000}));
     const sourceVideo=probe.streams?.find((s:{codec_type:string})=>s.codec_type==='video');
@@ -325,7 +327,10 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
       labels.push(`[timedv${i}][a${i}]`);
     }
     graph.push(`${labels.join('')}concat=n=${parts.length}:v=1:a=1[editedv][editeda]`);
-    graph.push(`[editedv]fps=${rate}${style.enabled?`,ass=${assName}`:''}[outv]`);
+    graph.push(`[editedv]fps=${rate}[overlaybase]`);
+    const layers=await cutOverlayFilters(dir,clipId,cutOverlaysSchema.parse(input.overlays||[]),output,duration,parts.length);
+    overlayFiles=layers.temporary;args.push(...layers.args);graph.push(...layers.graph);
+    graph.push(`[${layers.label}]${style.enabled?`ass=${assName}`:'null'}[outv]`);
     args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset','slow','-crf','16','-pix_fmt','yuv420p','-r',rate,'-threads','2','-c:a','aac','-b:a','320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
     await command('ffmpeg',args,{cwd:dir,timeout:60*60_000});
     const actual=await validateVideo(join(dir,partialName),framing.format);
@@ -336,6 +341,6 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
     if(error instanceof AppError)throw error;
     throw new AppError('Não foi possível renderizar o corte. Confira o vídeo de origem e as dependências FFmpeg/libass.');
   }finally {
-    await Promise.all([rm(join(dir,partialName),{force:true}),rm(join(dir,assName),{force:true})]);
+    await Promise.all([rm(join(dir,partialName),{force:true}),rm(join(dir,assName),{force:true}),...overlayFiles.map(path=>rm(path,{force:true}))]);
   }
 }

@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdir,rename,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {z} from 'zod';
+import {requireTikTokBrowserToken} from './playwright-mcp.js';
 import {pool} from './db.js';
 import {AppError,dataDir,errorMessage,logger} from './config.js';
 import {metadataSchema} from './domain.js';
@@ -32,6 +33,7 @@ export async function recoverBrowserPreparations(){
 }
 
 async function prepareVideo(videoId:string,profileId:string,version:string){
+  await requireTikTokBrowserToken();
   const db=await pool.connect(),account='browser:tiktok:'+profileId,key=preparationKey(videoId,account);let locked=false,deliveryId='';
   try{
     locked=(await db.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok',[key])).rows[0].ok;

@@ -1,3 +1,4 @@
+import {revealEditorControl} from './cuts-ui-tabs.mjs';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {readFile,mkdir,mkdtemp,rm} from 'node:fs/promises';
@@ -158,7 +159,7 @@ try{
   assert.equal(actions.length,beforeInvalidTime,'phone navigation must not submit or publish anything');
 
   // The replay curve selects the actual start, rather than centering a window.
-  await page.getByText('Consultar momentos mais revistos',{exact:true}).click();
+  await revealEditorControl(page,'#cut-editor-replay');
   const replay=page.locator('#cut-editor-replay svg');
   await replay.scrollIntoViewIfNeeded();
   assert.equal(await replay.getAttribute('role'),'slider');
@@ -210,16 +211,17 @@ try{
   await replayRange.press('Home');assert.equal(await cutStart.inputValue(),'00:00');
   await replayRange.press('End');assert.equal(parseTimecode(await cutStart.inputValue()),179.5);assert.equal(parseTimecode(await cutEnd.inputValue()),180);
   assert.equal(actions.length,beforeInvalidTime,'graph selection edits the draft without posting or saving');
+  await revealEditorControl(page,'#cut-edit-start');
   await cutStart.fill('00:10');await cutEnd.fill('00:40');await cutStart.focus();
   await page.getByLabel('Título do corte',{exact:true}).fill('Título revisado');
   const before=polls;await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
   await page.waitForTimeout(200);assert(polls>before);
   assert.equal(await page.getByLabel('Título do corte',{exact:true}).inputValue(),'Título revisado');
-  await page.getByLabel('Texto da legenda 1',{exact:true}).fill('Palavra corrigida, fiel ao áudio.');
+  await revealEditorControl(page,'#cuts-cues');await page.getByLabel('Texto da legenda 1',{exact:true}).fill('Palavra corrigida, fiel ao áudio.');
   assert.equal(await page.getByLabel('Início da legenda 1',{exact:true}).inputValue(),'00:00,001','caption timestamps use the phone timeline, not the source clock');
   assert.equal(await page.getByLabel('Fim da legenda 1',{exact:true}).inputValue(),'00:03');
   await page.getByLabel('Fim da legenda 1',{exact:true}).fill('00:03,125');
-  await page.getByLabel('Enquadramento',{exact:true}).selectOption('crop');
+  await revealEditorControl(page,'#cut-framing');await page.getByLabel('Enquadramento',{exact:true}).selectOption('crop');
   await seekPhone(0);await phoneAt(10,'red');
   const zoom=page.getByLabel('Zoom',{exact:false});
   for(const value of ['0.25','0.5','1.5']){
@@ -232,11 +234,11 @@ try{
     },value);
   }
   await page.getByLabel('Foco horizontal').fill('80');await page.getByLabel('Foco vertical').fill('20');await zoom.fill('0.5');
-  await page.getByLabel('Tamanho da legenda').fill('58');await page.getByLabel('Cor do texto',{exact:true}).fill('#00ffcc');
+  await revealEditorControl(page,'#cut-font-size');await page.getByLabel('Tamanho da legenda').fill('58');await page.getByLabel('Cor do texto',{exact:true}).fill('#00ffcc');
   await page.getByLabel('Cor de destaque',{exact:true}).fill('#ffcc00');await page.getByLabel('Cor do contorno',{exact:true}).fill('#102030');
-  await page.getByLabel('Animação da legenda').selectOption('karaoke');await page.getByLabel('Posição da legenda').selectOption('top');
+  await revealEditorControl(page,'#cut-caption-animation');await page.getByLabel('Animação da legenda').selectOption('karaoke');await page.getByLabel('Posição da legenda').selectOption('top');
   await page.getByLabel('Fundo da legenda').selectOption('box');
-  await page.getByLabel('Remover a partir de',{exact:true}).fill('00:18');await page.getByLabel('Remover até',{exact:true}).fill('00:20');
+  await revealEditorControl(page,'#cut-remove-start');await page.getByLabel('Remover a partir de',{exact:true}).fill('00:18');await page.getByLabel('Remover até',{exact:true}).fill('00:20');
   await page.getByRole('button',{name:'Remover este trecho',exact:true}).click();
   assert.equal(await page.locator('#cut-final-duration').textContent(),'00:28 de vídeo');
   await page.getByRole('button',{name:'Restaurar trecho 1',exact:true}).click();assert.equal(await page.locator('#cut-final-duration').textContent(),'00:30 de vídeo');
@@ -257,6 +259,7 @@ try{
   await seekPhone(9.25);await phoneAt(21.25,'red');
   assert.equal(await phoneCaption.isVisible(),true);assert.equal(await phone.locator('#cut-phone-caption-text').textContent(),'depois agora.');
   const captionsEnabled=page.getByRole('checkbox',{name:'Exibir legendas no vídeo',exact:true});
+  await revealEditorControl(page,'#cut-captions-enabled');
   assert.equal(await captionsEnabled.isChecked(),true,'existing cuts keep captions enabled');
   await captionsEnabled.uncheck();
   assert.equal(await phoneCaption.isHidden(),true,'disabling captions immediately removes the phone overlay');
@@ -285,12 +288,15 @@ try{
     assert(Math.abs(ratio-9/16)<.002,'phone canvas should remain 9:16 at '+viewport.width+'x'+viewport.height);
   }
   await page.setViewportSize({width:1440,height:1050});
+  await revealEditorControl(page,'#cut-font-size');await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollTop=0);
   await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/cuts-editor-desktop.png'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.equal(await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollWidth>form.clientWidth+1),false);
   assert(Math.abs(await page.locator('#cut-phone-canvas').evaluate(c=>c.getBoundingClientRect().width/c.getBoundingClientRect().height)-9/16)<.002);
-  await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollTop=0);await page.screenshot({path:'artifacts/cuts-editor-mobile.png'});await page.setViewportSize({width:1440,height:1050});
+  await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollTop=0);await page.screenshot({path:'artifacts/cuts-editor-mobile.png'});
+  await revealEditorControl(page,'#cut-caption-animation');await page.locator('[data-editor-tab="cut-editor-captions"]').click();await page.screenshot({path:'artifacts/cuts-editor-subtabs-mobile.png'});
+  await page.setViewportSize({width:1440,height:1050});
   await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
   await page.getByText('Atualizando prévia',{exact:true}).waitFor();
   assert.equal(actions.at(-1).method,'PUT');assert.equal(actions.at(-1).body.revision,2);assert.equal(actions.at(-1).body.captions[0].text,'Palavra corrigida, fiel ao áudio.');assert.equal(actions.at(-1).body.framing,'crop');
@@ -303,11 +309,13 @@ try{
   Object.assign(clip,{status:'review',hasMedia:true});await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByRole('button',{name:'Ajustar',exact:true}).click();
   assert.equal(await page.getByLabel('Zoom',{exact:false}).inputValue(),'0.5','reopening the editor preserves a saved zoom below 1×');
+  await revealEditorControl(page,'#cut-captions-enabled');
   assert.equal(await captionsEnabled.isChecked(),false,'reopening the editor preserves disabled captions');
   assert.equal(await page.getByLabel('Texto da legenda 1',{exact:true}).inputValue(),'Palavra corrigida, fiel ao áudio.');
   await captionsEnabled.check();
+  await revealEditorControl(page,'#cut-edit-start');
   await page.getByLabel('Começo do corte',{exact:true}).fill('00:09');await page.getByLabel('Fim do corte',{exact:true}).focus();
-  assert.equal(await page.getByRole('checkbox',{name:/Usar a transcrição original/}).isChecked(),false);
+  await revealEditorControl(page,'#cuts-cues');assert.equal(await page.getByRole('checkbox',{name:/Usar a transcrição original/}).isChecked(),false);
   await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
   await page.getByText('Atualizando prévia',{exact:true}).waitFor();assert.equal('captions' in actions.at(-1).body,false);assert.equal(actions.at(-1).body.useOriginalCaptions,false);
   assert.equal(actions.at(-1).body.captionStyle.enabled,true);
@@ -339,7 +347,7 @@ try{
   await publishFormat.selectOption('video');await page.getByRole('button',{name:'Ajustar formato',exact:true}).click();
   const editorFormat=page.getByLabel('Formato no YouTube',{exact:true});
   assert.equal(await editorFormat.inputValue(),'video');assert.equal(actions.length,beforePublish,'choosing a format opens a draft without publishing');
-  await page.getByLabel('Enquadramento',{exact:true}).selectOption('fit');
+  await revealEditorControl(page,'#cut-framing');await page.getByLabel('Enquadramento',{exact:true}).selectOption('fit');
   await seekPhone(0);await phoneAt(9,'red');
   for(const viewport of [{width:1440,height:1050},{width:390,height:844}]){
     await page.setViewportSize(viewport);
@@ -348,7 +356,7 @@ try{
     assert.equal(await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollWidth>form.clientWidth+1),false,'horizontal previews fit desktop and mobile');
   }
   await page.setViewportSize({width:1440,height:1050});
-  await editorFormat.scrollIntoViewIfNeeded();await page.screenshot({path:'artifacts/cuts-editor-horizontal.png'});
+  await revealEditorControl(page,'#cut-format');await editorFormat.scrollIntoViewIfNeeded();await page.screenshot({path:'artifacts/cuts-editor-horizontal.png'});
   await editorFormat.selectOption('shorts');assert.equal(await page.locator('#cut-phone-canvas').getAttribute('width'),'720');
   await editorFormat.selectOption('video');
   await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();await page.getByText('Atualizando prévia',{exact:true}).waitFor();

@@ -5,7 +5,7 @@ import {createServer} from 'node:http';
 import {resolve,extname} from 'node:path';
 const id='11111111-1111-4111-8111-111111111111',requestId='22222222-2222-4222-8222-222222222222';
 const fixture={publishing:{profiles:[{id,name:'Bíblicos',watch_id:null,youtube_id:null,tiktok_profile_id:null,source_roots:[],pack_defaults:{}}],accounts:[{id:'native:youtube:channel-one',identifier:'youtube',name:'GTA 6',disabled:false,autoPublishApproved:true},{id:'native:youtube:channel-two',identifier:'youtube',name:'Bíblicos',disabled:false,autoPublishApproved:false}],browserProfiles:[{id:'default',name:'GTA 6',profileSaved:true}],agentOnline:true,googleConnected:false,requests:[],actions:[]},browser:{},
-  scheduler:{paused:false,queue:{}},watches:[],stats:{pending:0,sent:0,attention:0},videos:[],events:[],connections:{local:{rootPath:'/videos'},google:{},postiz:{},native:{engine:'local',youtube:{configured:true},tiktok:{}}}};
+  scheduler:{paused:false,queue:{}},watches:[],stats:{pending:0,sent:0,attention:0},videos:[],events:[],connections:{playwrightMcp:{configured:true,source:'input'},local:{rootPath:'/videos'},google:{},postiz:{},native:{engine:'local',youtube:{configured:true},tiktok:{}}}};
 const calls=[],errors=[];
 // Serve the checkout with simulated APIs; this check never connects real accounts.
 const publicRoot=resolve('public');
@@ -107,6 +107,10 @@ try {
   }
   await page.getByRole('tab',{name:'Pedidos',exact:true}).click();await page.screenshot({path:'artifacts/requests-mobile.png',fullPage:true});
   const attention=await page.locator('.requests-attention').boundingBox(),compose=await page.locator('.requests-compose').boundingBox();assert(attention.y<compose.y,'mobile puts pending actions before the form');
+  fixture.connections.playwrightMcp={configured:false,source:null};await page.reload();
+  assert(await page.getByRole('checkbox',{name:'TikTok',exact:true}).isDisabled());
+  await page.getByRole('tab',{name:'Contas',exact:true}).click();assert(await page.getByRole('button',{name:'Abrir login',exact:true}).first().isDisabled());
+  await page.getByText('Adicionar conta TikTok',{exact:true}).click();assert(await page.getByRole('button',{name:'Adicionar perfil TikTok',exact:true}).isDisabled());
   fixture.publishing.profiles=[];await page.reload();await page.getByRole('button',{name:'Criar perfil de conteúdo',exact:true}).click();
   assert.equal(await page.getByRole('tab',{name:/^Perfis/}).getAttribute('aria-selected'),'true');assert(await page.getByLabel('Nome do perfil',{exact:true}).isVisible());
   assert.deepEqual(errors,[]);console.log('Pedidos e contas: abas e teclado, opções avançadas, rascunhos no polling, quantidade, horários, autorização, cancelamento, perfis, login e telas móveis validados com APIs simuladas.');

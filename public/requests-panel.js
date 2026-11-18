@@ -10,7 +10,7 @@ export function renderRequests(state,helpers) {
   const p=state.publishing;if(!p)return '<p>Reinicie o serviço para carregar os pedidos.</p>';
   return `<div id="requests-panel"><div class="page-head requests-page-head"><div><h1>Pedidos e contas</h1><p class="subtitle">Agende seus vídeos e acompanhe os pedidos.</p></div></div>
     <div class="requests-tabs" role="tablist" aria-label="Pedidos e contas">${views.map(([id,label])=>`<button type="button" role="tab" id="requests-tab-${id}" aria-controls="requests-view-${id}" aria-selected="${view===id}" tabindex="${view===id?'0':'-1'}" data-requests-view="${id}">${label}${id==='profiles'?`<span class="requests-tab-count">${p.profiles.length}</span>`:''}</button>`).join('')}</div>
-    <section id="requests-view-orders" role="tabpanel" aria-labelledby="requests-tab-orders" ${view!=='orders'?'hidden':''}><div class="requests-layout"><div class="requests-main">${requestActions(p,helpers)}${requestList(p,helpers)}</div>${requestForm(p,helpers)}</div></section>
+    <section id="requests-view-orders" role="tabpanel" aria-labelledby="requests-tab-orders" ${view!=='orders'?'hidden':''}><div class="requests-layout"><div class="requests-main">${requestActions(p,helpers)}${requestList(p,helpers)}</div>${requestForm(p,helpers,!!state.connections.playwrightMcp?.configured)}</div></section>
     <section id="requests-view-profiles" role="tabpanel" aria-labelledby="requests-tab-profiles" ${view!=='profiles'?'hidden':''}>${requestProfiles(state,editing,helpers)}</section>
     <section id="requests-view-accounts" role="tabpanel" aria-labelledby="requests-tab-accounts" ${view!=='accounts'?'hidden':''}>${requestAccounts(state,helpers)}</section></div>`;
 }

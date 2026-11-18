@@ -1,11 +1,11 @@
 import {accountCalendar} from './calendar.js';
 import {dataDir} from './config.js';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { pool, event, getSetting, setSetting } from './db.js';
-import { AppError, localMediaHostDir } from './config.js';
+import { AppError, localMediaHostDir,encrypt } from './config.js';
 import { PackSource } from './pack-source.js';
 import { packDefaultsSchema } from './pack-config.js';
 import { LocalFiles } from './local.js';
@@ -14,9 +14,14 @@ import { nativeScheduleSchema,planNativeDate,validScheduleDate,uploadBudgetAvail
 import {cleanupPublishedMedia} from './media-cleanup.js';
 import {browserPublicationRoutes,recoverBrowserPreparations} from './browser-publications.js';
 import {cursorFields,keysetClause,pageLimit,paginateRows,parsePagination,type PageOptions} from './pagination.js';
+import {browserFailureStages} from './browser-agent-core.js';
+import {retryDelivery,cancelDelivery} from './queue-controls.js';
+import {browserAgentAuthorized} from './browser-auth.js';
+import {playwrightMcpState,requireTikTokBrowserToken} from './playwright-mcp.js';
+export {browserAgentAuthorized} from './browser-auth.js';
 
 const ACTIVE = ['pending','running','cancel_requested'];
-const PUBLIC_JOB_FIELDS='id,kind,origin,status,phase,message,filename,upload_started,created_at,started_at,finished_at,planned_at';
+const PUBLIC_JOB_FIELDS='id,kind,origin,status,phase,message,filename,upload_started,created_at,started_at,finished_at,planned_at,delivery_id';
 const LEASE_SECONDS = 20;
 export const browserConfigSchema = z.object({
   sourceType:z.enum(['local','gta6_pack']).default('local'),packDefaults:packDefaultsSchema.prefault({}),
@@ -40,6 +45,7 @@ const stages:Record<string,string> = {
   login_required:'Faça login pelo botão Abrir login. Prefira o QR code do TikTok.',
   security_check:'Verificação de segurança no TikTok. Resolva manualmente; a automação foi interrompida.',
   page_changed:'A interface esperada não ficou disponível. Confira o Chrome antes de repetir.',
+  upload_unconfirmed:'O TikTok não confirmou a publicação ou o agendamento. Confira o TikTok Studio antes de repetir.',
   browser_attempt_failed:'A preparação não foi confirmada. Confira o Chrome e o histórico.',
   browser_agent_failed:'Falha na execução local. Confira Chrome, arquivos e sessão gráfica.',
   browser_no_video:'Nenhum MP4 novo e estável encontrado na pasta.'
@@ -82,11 +88,28 @@ async function advance(db:PoolClient,job:any,empty=false){
   else await db.query('UPDATE browser_settings SET next_at=$1,retry_at=NULL WHERE revision=$2',[next(job.config),job.config.revision]);
 }
 async function recover(db:PoolClient){
-  const {rows}=await db.query(`UPDATE browser_commands SET status=CASE WHEN phase='browser_published' AND upload_started AND config->>'publishNow'='true' THEN 'completed' WHEN phase='browser_scheduled' AND upload_started THEN 'scheduled' WHEN kind='upload' THEN 'unknown' ELSE 'failed' END,
-    phase=CASE WHEN (phase='browser_scheduled' OR (phase='browser_published' AND config->>'publishNow'='true')) AND upload_started THEN phase ELSE 'agent_offline' END,
-    message=CASE WHEN phase='browser_published' AND upload_started AND config->>'publishNow'='true' THEN 'Publicação confirmada no TikTok Studio antes da desconexão.' WHEN phase='browser_scheduled' AND upload_started THEN 'Agendamento confirmado no TikTok Studio antes da desconexão.' ELSE 'O agente perdeu a conexão durante a tarefa. Confira o Chrome antes de repetir.' END,finished_at=now()
-    WHERE status IN ('running','cancel_requested') AND lease_until<now() RETURNING *`);
-  for(const job of rows){if(job.request_id&&job.status==='unknown')await db.query("INSERT INTO manual_actions(id,request_id,kind,message) VALUES($1,$2,'unknown_upload','O agente desconectou durante um envio. Confira o TikTok Studio antes de continuar.') ON CONFLICT(request_id,kind) DO UPDATE SET resolved_at=NULL",[randomUUID(),job.request_id]);if(job.delivery_id)await db.query('UPDATE deliveries SET status=$2,error=$3 WHERE id=$1',[job.delivery_id,job.status,job.message]);await advance(db,job);}
+  const {rows}=await db.query(`UPDATE browser_commands SET status=CASE WHEN phase='browser_published' AND upload_started AND config->>'publishNow'='true' THEN 'completed' WHEN phase='browser_scheduled' AND upload_started THEN 'scheduled' WHEN kind='upload' AND (upload_started OR NOT phase=ANY($1::text[])) THEN 'unknown' ELSE 'failed' END,
+    message=CASE WHEN phase='browser_published' AND upload_started AND config->>'publishNow'='true' THEN 'Publicação confirmada no TikTok Studio antes da desconexão.' WHEN phase='browser_scheduled' AND upload_started THEN 'Agendamento confirmado no TikTok Studio antes da desconexão.'
+      WHEN phase=ANY($1::text[]) THEN message||CASE WHEN upload_started THEN ' O upload pode ter começado; confira o TikTok Studio antes de repetir.' ELSE ' O upload não começou. Corrija a pendência e tente novamente.' END
+      WHEN kind='upload' THEN 'O navegador parou de responder sem confirmar o resultado. Confira o TikTok Studio antes de repetir.'
+      ELSE 'O navegador parou de responder. Confira o agente e tente novamente.' END,
+    phase=CASE WHEN phase=ANY($1::text[]) OR ((phase='browser_scheduled' OR (phase='browser_published' AND config->>'publishNow'='true')) AND upload_started) THEN phase ELSE 'agent_offline' END,
+    finished_at=now(),lease_until=NULL
+    WHERE status IN ('running','cancel_requested') AND (lease_until IS NULL OR lease_until<now() OR phase=ANY($1::text[])
+      OR (status='cancel_requested' AND progress_at<now()-interval '30 seconds')
+      OR (kind='upload' AND phase NOT IN ('browser_review_required','browser_manual_login') AND progress_at<now()-interval '30 minutes')) RETURNING *`,[[...browserFailureStages]]);
+  for(const job of rows){
+    if(job.request_id&&job.status==='unknown')await db.query("INSERT INTO manual_actions(id,request_id,kind,message) VALUES($1,$2,'unknown_upload','O agente desconectou durante um envio. Confira o TikTok Studio antes de continuar.') ON CONFLICT(request_id,kind) DO UPDATE SET resolved_at=NULL",[randomUUID(),job.request_id]);
+    if(job.delivery_id){
+      await db.query('UPDATE deliveries SET status=$2,error=$3,upload_started_at=CASE WHEN $4 THEN COALESCE(upload_started_at,$5) ELSE upload_started_at END,updated_at=now() WHERE id=$1',[job.delivery_id,job.status,job.message,job.upload_started,job.started_at]);
+      if(job.status==='cancelled')await db.query('DELETE FROM content_claims WHERE delivery_id=$1',[job.delivery_id]);
+    }
+    if(job.phase==='platform_limit'){
+      await db.query(`INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`,['uploadCooldown:browser:tiktok:'+(job.config.profileId||'default'),encrypt(new Date(Date.now()+86400_000).toISOString())]);
+      if(!job.request_id&&!job.config.requestManaged)await db.query("UPDATE browser_settings SET blocked_until=now()+interval '24 hours' WHERE id=true");
+    }
+    await advance(db,job);
+  }
 }
 
 export class BrowserBridge {
@@ -97,6 +120,7 @@ export class BrowserBridge {
     return paginateRows(rows,page);
   }
   async state(page:PageOptions=parsePagination({},{scope:'browser'})){
+    await atomic(recover);
     const [config,agentResult,commands,active,calendarState]=await Promise.all([configuration(),pool.query('SELECT * FROM browser_agent WHERE id=true'),
       this.jobs(page),
       pool.query(`SELECT ${PUBLIC_JOB_FIELDS} FROM browser_commands WHERE status=ANY($1::text[]) ORDER BY created_at DESC,id DESC LIMIT 1`,[ACTIVE]),
@@ -111,6 +135,7 @@ export class BrowserBridge {
   }
   async save(body:unknown){
     const input=browserConfigSchema.parse(body);
+    await requireTikTokBrowserToken();
     const folder=input.sourceType==='gta6_pack'?{hostPath:localMediaHostDir}:await new LocalFiles().folder(input.folder);
     if(input.sourceType==='gta6_pack')await new PackSource(input.packDefaults).catalog();
     const config={...input,folder:folder.hostPath,timezone:'America/Sao_Paulo',revision:0,nextAt:null};
@@ -127,6 +152,7 @@ export class BrowserBridge {
     return configuration();
   }
   async request(kind:'login'|'upload',profileId='default'){
+    await requireTikTokBrowserToken();
     if(kind==='upload'&&await getSetting<boolean>('paused'))throw new AppError('As rotinas estão pausadas. Retome em Conexões antes de enviar.',409);
     const id=await atomic(async db=>{
       await recover(db);
@@ -147,6 +173,7 @@ export class BrowserBridge {
   async tick(){
     const paused=await getSetting<boolean>('paused');
     await recoverBrowserPreparations();
+    if(!(await playwrightMcpState()).configured)return;
     if(!paused){
       const {rows:deliveries}=await pool.query(`SELECT d.*,v.sha256 AS original_hash,v.name,v.file_id FROM deliveries d JOIN videos v ON v.id=d.video_id
         WHERE d.engine='browser' AND d.status='pending' AND d.request_id IS NULL AND d.approved_at IS NOT NULL AND d.payload->>'publishNow'='true'
@@ -177,10 +204,43 @@ export class BrowserBridge {
   async stop(){
     await atomic(async db=>{
       await db.query('UPDATE browser_settings SET enabled=false,revision=revision+1 WHERE id=true');
-      await db.query(`UPDATE browser_commands SET status=CASE WHEN status='pending' THEN 'cancelled' ELSE 'cancel_requested' END,
+      const {rows:pending}=await db.query("UPDATE deliveries SET status='cancelled',error=NULL,retry_at=NULL,updated_at=now() WHERE id IN (SELECT delivery_id FROM browser_commands WHERE status='pending') AND status IN ('pending','retry') AND upload_started_at IS NULL RETURNING id");
+      for(const row of pending)await db.query('DELETE FROM content_claims WHERE delivery_id=$1',[row.id]);
+      await db.query(`UPDATE browser_commands SET status=CASE WHEN status='pending' THEN 'cancelled' ELSE 'cancel_requested' END,progress_at=now(),
         message='Interrupção solicitada pelo painel.',finished_at=CASE WHEN status='pending' THEN now() ELSE NULL END WHERE status=ANY($1::text[])`,[ACTIVE]);
     });
     await event('warning','Interrupção do navegador solicitada. Envios já iniciados precisam ser conferidos no TikTok.');
+  }
+  async cancel(id:string){
+    const {rows:[job]}=await pool.query('SELECT delivery_id FROM browser_commands WHERE id=$1',[id]);
+    if(!job)throw new AppError('Tarefa não encontrada.',404);
+    if(job.delivery_id)return cancelDelivery(job.delivery_id);
+    return atomic(async db=>{
+      await recover(db);
+      const {rows:[row]}=await db.query(`UPDATE browser_commands SET status=CASE WHEN status='pending' THEN 'cancelled' ELSE 'cancel_requested' END,
+        message='Cancelamento desta tarefa solicitado.',progress_at=now(),finished_at=CASE WHEN status='pending' THEN now() ELSE NULL END
+        WHERE id=$1 AND status=ANY($2::text[]) RETURNING status`,[id,ACTIVE]);
+      if(!row)throw new AppError('Esta tarefa já terminou. Atualize o histórico para conferir o resultado.',409);
+      return {status:row.status};
+    });
+  }
+  async retry(id:string){
+    await requireTikTokBrowserToken();
+    const {rows:[job]}=await pool.query('SELECT * FROM browser_commands WHERE id=$1',[id]);
+    if(!job)throw new AppError('Tarefa não encontrada.',404);
+    if(job.delivery_id){await retryDelivery(job.delivery_id);return;}
+    await atomic(async db=>{
+      await recover(db);
+      const {rows:[current]}=await db.query('SELECT * FROM browser_commands WHERE id=$1 FOR UPDATE',[id]);
+      if(current.status!=='failed'||current.upload_started)throw new AppError('Somente falhas anteriores ao upload podem ser repetidas. Confira o TikTok Studio.',409);
+      if(await busy(db))throw new AppError('Há outra tarefa em andamento. Aguarde ou cancele essa tarefa antes de repetir.',409);
+      if(current.config.revision!==(await configuration(db)).revision)throw new AppError('A rotina mudou. Use Enviar próximo agora com a configuração atual.',409);
+      // Reuse the original command exactly once, retaining its account and consent.
+      const plannedAt=current.kind==='upload'&&current.config.mode==='native_schedule'?
+        planNativeDate('tiktok',{...current.config,interval_minutes:current.config.intervalMinutes},current.config.nativeSchedule,await calendar(db,current.config.profileId)):null;
+      if(current.kind==='upload'&&current.config.mode==='native_schedule'&&!plannedAt)throw new AppError('Sem data disponível nos limites autorizados. Revise o período da rotina.',409);
+      await db.query("UPDATE browser_commands SET status='pending',phase='queued',message='Nova tentativa solicitada. Aguardando o agente.',planned_at=$2,agent_instance=NULL,lease_until=NULL,started_at=NULL,finished_at=NULL,progress_at=now() WHERE id=$1",[id,plannedAt]);
+    });
   }
   async poll(body:unknown){
     const input=z.object({instanceId:z.string().uuid(),profileSaved:z.boolean(),externalBusy:z.boolean(),desktop:z.boolean(),activeJobId:z.string().uuid().nullable(),profiles:z.record(z.string().max(40),z.object({profileSaved:z.boolean(),externalBusy:z.boolean()}).strict()).optional()}).strict().parse(body);
@@ -197,6 +257,7 @@ export class BrowserBridge {
           WHERE id=$1 AND agent_instance=$2 AND status IN ('running','cancel_requested') AND lease_until>now() RETURNING status`,[input.activeJobId,input.instanceId]);
         return {job:null,cancel:!job||job.status==='cancel_requested'};
       }
+      if(!(await playwrightMcpState()).configured)return {job:null,cancel:false};
       if(!input.desktop||(await db.query("SELECT id FROM browser_commands WHERE status IN ('running','cancel_requested') LIMIT 1")).rowCount)return {job:null,cancel:false};
       const {rows:[job]}=await db.query(`SELECT * FROM browser_commands WHERE status='pending' ${paused?"AND kind='login'":''} ORDER BY created_at LIMIT 1 FOR UPDATE`);
       if(!job)return {job:null,cancel:false};
@@ -220,11 +281,12 @@ export class BrowserBridge {
         }
         if(!uploadBudgetAvailable(current.nativeSchedule,await calendar(db)))return {job:null,cancel:false};
       }
-      await db.query("UPDATE browser_commands SET status='running',phase='opening',message='Abrindo o navegador no computador.',agent_instance=$2,lease_until=now()+interval '20 seconds',started_at=now() WHERE id=$1",[job.id,input.instanceId]);
+      await db.query("UPDATE browser_commands SET status='running',phase='opening',message='Abrindo o navegador no computador.',agent_instance=$2,lease_until=now()+interval '20 seconds',started_at=now(),progress_at=now() WHERE id=$1",[job.id,input.instanceId]);
       return {job:{id:job.id,kind:job.kind,folder:job.config.folder,...(job.config.profileId?{profileId:job.config.profileId}:{}),...(job.config.media?{media:job.config.media}:{}),stripMetadata:job.config.stripMetadata,...(job.config.sourceType==='gta6_pack'?{sourceType:'gta6_pack',packDefaults:job.config.packDefaults}:{}),...(job.planned_at?{publishAt:job.planned_at.toISOString()}: {}),...(job.config.publishNow?{publishNow:true}: {})},cancel:false};
     });
   }
   async enqueueDelivery(delivery:any,profileId:string,config:Config) {
+    if(!(await playwrightMcpState()).configured)return;
     return atomic(async db=>{
       const existing=await db.query("SELECT id FROM browser_commands WHERE delivery_id=$1 AND (status NOT IN ('cancelled','failed') OR upload_started)",[delivery.id]);if(existing.rowCount)return existing.rows[0].id;
       const {rows:[agent]}=await db.query('SELECT * FROM browser_agent WHERE id=true');
@@ -250,21 +312,23 @@ export class BrowserBridge {
         if(delivery.request_id||config.mode!=='review'||delivery.payload.nativeSchedule||!delivery.approved_at)throw new AppError('Publicação imediata exige uma única entrega aprovada, sem agendamento.');
       }
       const id=randomUUID();
-      await db.query(`INSERT INTO browser_commands(id,kind,origin,config,planned_at,request_id,delivery_id,message)
-        VALUES($1,'upload',$6,$2,$3,$4,$5,$7)`,
+      await db.query(`INSERT INTO browser_commands(id,kind,origin,config,planned_at,request_id,delivery_id,message,filename)
+        VALUES($1,'upload',$6,$2,$3,$4,$5,$7,$8)`,
         [id,JSON.stringify({...config,profileId,requestManaged:true,media}),config.publishNow?null:delivery.planned_at,delivery.request_id,delivery.id,
-          config.publishNow?'manual':'schedule',config.publishNow?'Aguardando o agente para postar agora na conta selecionada.':'Aguardando o agente para agendar na conta selecionada.']);
+          config.publishNow?'manual':'schedule',config.publishNow?'Aguardando o agente para postar agora na conta selecionada.':'Aguardando o agente para agendar na conta selecionada.',delivery.name]);
       if(config.publishNow)await db.query('UPDATE deliveries SET error=NULL WHERE id=$1',[delivery.id]);
       return id;
     });
   }
   async progress(id:string,body:unknown){
-    const input=z.object({instanceId:z.string().uuid(),stage:z.enum(Object.keys(stages) as [string,...string[]]),filename:z.string().max(255).optional(),hash:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict().parse(body);
-    const result=await pool.query(`UPDATE browser_commands SET phase=$3,message=$4,filename=COALESCE($5,filename),hash=COALESCE($6,hash),
-      upload_started=upload_started OR $3='browser_upload_started' WHERE id=$1 AND agent_instance=$2 AND status IN ('running','cancel_requested') AND lease_until>now()`,
-      [id,input.instanceId,input.stage,stages[input.stage],input.filename||null,input.hash||null]);
+    const input=z.object({instanceId:z.string().uuid(),stage:z.enum(Object.keys(stages) as [string,...string[]]),filename:z.string().max(255).optional(),hash:z.string().regex(/^[a-f0-9]{64}$/).optional(),uploadStarted:z.boolean().optional()}).strict().parse(body);
+    const result=await pool.query(`UPDATE browser_commands SET phase=$3,message=$4,progress_at=now(),filename=COALESCE($5,filename),hash=COALESCE($6,hash),
+      upload_started=upload_started OR $3='browser_upload_started' OR $7 WHERE id=$1 AND agent_instance=$2 AND status IN ('running','cancel_requested') AND lease_until>now()`,
+      [id,input.instanceId,input.stage,stages[input.stage],input.filename||null,input.hash||null,!!input.uploadStarted]);
     if(!result.rowCount)throw new AppError('A tarefa não está mais sob controle deste agente.',409);
-    if(input.stage==='browser_upload_started')await pool.query("UPDATE deliveries SET status='submitting',upload_started_at=COALESCE(upload_started_at,now()) WHERE id=(SELECT delivery_id FROM browser_commands WHERE id=$1)",[id]);
+    if(input.stage==='browser_upload_started'||input.uploadStarted)await pool.query("UPDATE deliveries SET status='submitting',upload_started_at=COALESCE(upload_started_at,now()) WHERE id=(SELECT delivery_id FROM browser_commands WHERE id=$1) AND status IN ('pending','submitting')",[id]);
+    // A live agent heartbeat must not keep a reported Playwright failure running.
+    if(browserFailureStages.has(input.stage))await this.finish(id,{instanceId:input.instanceId,result:'failed'});
   }
   async finish(id:string,body:unknown){
     const input=z.object({instanceId:z.string().uuid(),result:z.enum(['done','review','scheduled','published','empty','failed','unknown','cancelled','duplicate'])}).strict().parse(body);
@@ -282,27 +346,23 @@ export class BrowserBridge {
       const status=job.upload_started&&['failed','cancelled'].includes(input.result)?'unknown':input.result==='published'?'completed':input.result;
       const message=status==='completed'?stages.browser_published:status==='scheduled'?stages.browser_scheduled:status==='review'?stages.browser_review_required:status==='empty'?(job.config.sourceType==='gta6_pack'?'Nenhum vídeo novo elegível no pack. A origem será consultada novamente.':stages.browser_no_video):
         status==='done'?'Janela de login encerrada. Confira a conta no próximo envio.':status==='cancelled'?'Tarefa interrompida antes do envio.':
-        status==='unknown'?'O envio pode ter começado. Confira o TikTok antes de repetir.':job.message||'A preparação falhou. Confira o computador.';
+        status==='unknown'?`${job.message||'A execução foi interrompida.'} O upload pode ter começado. Confira o TikTok Studio antes de repetir.`:
+        status==='failed'?`${job.message||'A preparação falhou.'} O upload não começou. Corrija a pendência e tente novamente.`:job.message;
       await db.query('UPDATE browser_commands SET status=$2,message=$3,finished_at=now(),lease_until=NULL WHERE id=$1',[id,status,message]);
       if(job.delivery_id)await db.query(`UPDATE deliveries SET status=$2,error=$3,updated_at=now() WHERE id=$1`,[job.delivery_id,status==='scheduled'?'scheduled':status==='duplicate'?'duplicate':status==='empty'?'failed':status,['scheduled','completed','duplicate'].includes(status)?null:message]);
+      if(job.delivery_id&&status==='cancelled')await db.query('DELETE FROM content_claims WHERE delivery_id=$1',[job.delivery_id]);
       if(job.request_id&&status==='unknown')await db.query(`INSERT INTO manual_actions(id,request_id,kind,message) VALUES($1,$2,'unknown_upload','Confira o envio no TikTok Studio antes de continuar; a publicação pode ter sido iniciada.')
         ON CONFLICT(request_id,kind) DO UPDATE SET resolved_at=NULL,message=EXCLUDED.message`,[randomUUID(),job.request_id]);
       await advance(db,{...job,status},status==='empty');
       if(job.phase==='platform_limit'){await setSetting('uploadCooldown:browser:tiktok:'+(job.config.profileId||'default'),new Date(Date.now()+86400_000).toISOString());if(!job.request_id&&!job.config.requestManaged)await db.query("UPDATE browser_settings SET blocked_until=now()+interval '24 hours' WHERE id=true");}
       return status;
     });
-    if(['scheduled','completed','duplicate'].includes(status)){const {rows:[row]}=await pool.query('SELECT delivery_id FROM browser_commands WHERE id=$1',[id]);if(row?.delivery_id)await cleanupPublishedMedia(row.delivery_id);}
+    if(['scheduled','completed','duplicate','cancelled'].includes(status)){const {rows:[row]}=await pool.query('SELECT delivery_id FROM browser_commands WHERE id=$1',[id]);if(row?.delivery_id)await cleanupPublishedMedia(row.delivery_id);}
     if(status!=='empty')await event(status==='unknown'||status==='failed'?'warning':'info',status==='completed'?'Vídeo publicado no TikTok.':status==='scheduled'?'Vídeo agendado no TikTok para a data reservada.':status==='review'?'Vídeo preparado no navegador; publicação final depende da revisão no Chrome.':status==='done'?'Janela de login do TikTok encerrada.':status==='cancelled'?'Tarefa do navegador interrompida.':'A tarefa do navegador requer conferência.');
     return status;
   }
 }
 
-export function browserAgentAuthorized(header:string|undefined){
-  const key=process.env.BROWSER_AGENT_TOKEN||'';
-  if(!/^[a-f0-9]{64}$/.test(key)||!header?.startsWith('Bearer '))return false;
-  const supplied=Buffer.from(header.slice(7));const expected=Buffer.from(key);
-  return supplied.length===expected.length&&timingSafeEqual(supplied,expected);
-}
 export const browserBridge=new BrowserBridge();
 export const browserRoutes=Router();
 browserRoutes.use(browserPublicationRoutes);
@@ -312,6 +372,8 @@ browserRoutes.post('/api/browser/login',async(_req,res)=>res.status(202).json({i
 browserRoutes.post('/api/browser/run',async(_req,res)=>res.status(202).json({id:await browserBridge.request('upload')}));
 browserRoutes.post('/api/browser/pause',async(_req,res)=>{await browserBridge.pause();res.json({ok:true});});
 browserRoutes.post('/api/browser/stop',async(_req,res)=>{await browserBridge.stop();res.json({ok:true});});
+browserRoutes.post('/api/browser/jobs/:id/retry',async(req,res)=>{await browserBridge.retry(z.string().uuid().parse(req.params.id));res.json({ok:true});});
+browserRoutes.post('/api/browser/jobs/:id/cancel',async(req,res)=>{res.json({ok:true,...await browserBridge.cancel(z.string().uuid().parse(req.params.id))});});
 browserRoutes.use('/api/browser-agent',(req,res,next)=>{
   if(!browserAgentAuthorized(req.get('authorization')))return void res.status(401).json({error:'Agente não autorizado.'});next();
 });
@@ -320,6 +382,7 @@ browserRoutes.post('/api/browser-agent/jobs/:id/progress',async(req,res)=>{await
 browserRoutes.post('/api/browser-agent/jobs/:id/finish',async(req,res)=>res.json({ok:true,status:await browserBridge.finish(z.string().uuid().parse(req.params.id),req.body)}));
 
 browserRoutes.post('/api/browser/profiles',async(req,res)=>{
+  await requireTikTokBrowserToken();
   const {name}=z.object({name:z.string().trim().min(1).max(100)}).parse(req.body);const id=randomUUID();
   await pool.query('INSERT INTO browser_profiles(id,name) VALUES($1,$2)',[id,name]);res.status(201).json({id,name});
 });

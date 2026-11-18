@@ -10,6 +10,7 @@ test('progresso compartilhado com o painel filtra campos privados e linhas não 
   assert.equal(browserProgress('not json'),undefined);assert.equal(browserProgress(JSON.stringify({event:'private_debug',access_token:'secret'})),undefined);
   assert.deepEqual(browserProgress(JSON.stringify({event:'browser_upload_started',file:'/private/path/video.mp4',hash:'a'.repeat(64),access_token:'secret',msg:'confidential'})),
     {stage:'browser_upload_started',filename:'video.mp4',hash:'a'.repeat(64)});
+  assert.deepEqual(browserProgress(JSON.stringify({event:'page_changed',uploadMayHaveStarted:true})),{stage:'page_changed',uploadStarted:true});
 });
 test('detecta perfil ocupado sem ler credenciais e não considera perfil salvo como login validado',async()=>{
   assert.equal(await browserProfileBusy(temp),false);assert.equal(await browserProfileSaved(temp),false);

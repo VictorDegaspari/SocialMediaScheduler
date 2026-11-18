@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, rm, writeFile, utimes, symlink, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, utimes, symlink, readFile,stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
@@ -198,7 +198,7 @@ test('CLI sem vídeo não abre navegador e Ctrl+C encerra a espera sem aguardar 
   const cliDirectory = join(directory, 'cli'), empty = join(cliDirectory,'empty');
   await mkdir(empty,{recursive:true});
   const command = ['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs')];
-  const options = {cwd:cliDirectory,env:{...process.env,ENCRYPTION_KEY:'00'.repeat(32)}};
+  const options = {cwd:cliDirectory,env:{...process.env,PLAYWRIGHT_MCP_EXTENSION_TOKEN:'test-extension-token',ENCRYPTION_KEY:'00'.repeat(32)}};
   const {stdout} = await promisify(execFile)(process.execPath,[...command,'--once','--folder',empty],{...options,timeout:5000});
   assert.match(stdout,/browser_no_video/);
   let interruptedAt = 0;
@@ -208,6 +208,14 @@ test('CLI sem vídeo não abre navegador e Ctrl+C encerra a espera sem aguardar 
   assert(interruptedAt>0,'a rotina deve chegar à espera por vídeo');
   assert.equal(code,0);
   assert(Date.now()-interruptedAt<2000,'a interrupção deve ser imediata');
+});
+test('CLI blocks browser startup when the mandatory extension token is missing',async()=>{
+  const cliDirectory=join(directory,'cli-no-token');await mkdir(cliDirectory,{recursive:true});
+  const env={...process.env,ENCRYPTION_KEY:'00'.repeat(32),PLAYWRIGHT_MCP_EXTENSION_TOKEN:''};
+  await assert.rejects(()=>promisify(execFile)(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs'),'--login'],{cwd:cliDirectory,env,timeout:5000}),error=>{
+    assert.match((error as any).stderr,/PLAYWRIGHT_MCP_EXTENSION_TOKEN/);return true;
+  });
+  await assert.rejects(()=>stat(join(cliDirectory,'.browser-data')),'the rejected command does not create a browser profile');
 });
 
 test('agente executa tarefa do painel e rejeita origem fora da pasta local autorizada',async()=>{
@@ -221,6 +229,7 @@ test('agente executa tarefa do painel e rejeita origem fora da pasta local autor
   const server=createServer(async(req,res)=>{
     try{
       assert.equal(req.headers.authorization,'Bearer '+testKey);
+      if(req.url==='/api/browser-agent/playwright-mcp'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({PLAYWRIGHT_MCP_EXTENSION_TOKEN:'test-extension-token'}));return;}
       assert.equal(req.headers['x-watcher-request'],'1');
       let text='';for await(const chunk of req)text+=chunk;
       const body=JSON.parse(text);let response:unknown={ok:true};
@@ -256,6 +265,7 @@ for(const commercial of [false,true])test(commercial?'publicação comercial ime
   const server=createServer(async(req,res)=>{
     try {
       assert.equal(req.headers.authorization,'Bearer '+key);
+      if(req.url==='/api/browser-agent/playwright-mcp'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({PLAYWRIGHT_MCP_EXTENSION_TOKEN:'test-extension-token'}));return;}
       if(req.url==='/api/browser-agent/jobs/'+jobId+'/media'){assert.equal(req.method,'GET');downloaded=true;res.setHeader('Content-Type','video/mp4');res.end(bytes);return;}
       let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);let response:unknown={ok:true};
       if(req.url==='/api/browser-agent/profiles')response=[{id:profileId}];

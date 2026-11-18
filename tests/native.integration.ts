@@ -96,6 +96,7 @@ beforeEach(async()=>{
   titleUpdates=0;remoteTitle='Título anterior';
   disclosureUpdates=0;remoteSynthetic=true;
   await setSetting('publisherEngine','local');
+  await setSetting('playwrightMcpExtension',{extensionToken:'test-extension-token'});
   await setSetting('youtubeConfig',{clientId:'fake-client.apps.googleusercontent.com',clientSecret:'fake-secret',autoPublishApproved:true});
   await setSetting('youtubeAccount',{id:'youtube-channel',name:'Canal de teste'});
   await setSetting('youtubeTokens',{channelId:'youtube-channel',access_token:'fake-access',refresh_token:'fake-refresh',expiry_date:Date.now()+3600_000,scope:youtubeScopes.join(' ')});
@@ -200,6 +201,25 @@ test('pedido TikTok usa mídia preparada e confirma a conta/perfil sem depender 
   assert((await response.arrayBuffer()).byteLength>0);
   await browserBridge.progress(job.id,{instanceId,stage:'browser_upload_started'});await browserBridge.progress(job.id,{instanceId,stage:'browser_scheduled'});await browserBridge.finish(job.id,{instanceId,result:'scheduled'});
   await publicationRequests.tick(worker.native);const request=(await publicationRequests.context()).requests.find(r=>r.id===id)!;assert.equal(request.status,'completed');assert.equal(request.confirmed,1);assert.equal(ytInit+ttInit,0);
+});
+test('pedido TikTok retoma o mesmo vídeo após falha do Playwright e cancelamento individual libera a próxima vaga',async()=>{
+  const instanceId=randomUUID(),report={instanceId,desktop:true,profileSaved:true,externalBusy:false,activeJobId:null};
+  await pool.query('TRUNCATE browser_commands,browser_agent,browser_settings');await browserBridge.poll(report);
+  const {worker,result}=await requestFixture(1,['tiktok']);const requestId=result.requests[0].id;
+  await publicationRequests.tick(worker.native);await publicationRequests.tick(worker.native);
+  let {job}=await browserBridge.poll(report);assert(job);const firstJob=job.id;
+  await browserBridge.progress(job.id,{instanceId,stage:'login_required'});await publicationRequests.tick(worker.native);
+  assert.equal((await publicationRequests.context()).requests.find(r=>r.id===requestId)?.status,'waiting_manual');
+  const {rows:[delivery]}=await pool.query('SELECT * FROM deliveries WHERE request_id=$1',[requestId]);
+  assert.equal((await post('/api/native/deliveries/'+delivery.id+'/retry',{})).status,200);
+  await publicationRequests.tick(worker.native);job=(await browserBridge.poll(report)).job;assert(job);assert.notEqual(job.id,firstJob);assert.equal(job.media.assetSha256,delivery.payload.assetSha256);
+  assert.equal((await publicationRequests.context()).actions.some(a=>a.request_id===requestId&&a.kind==='delivery_review'),false,'o pedido não deve continuar mostrando a falha já retomada');
+  assert.equal((await post('/api/native/deliveries/'+delivery.id+'/cancel',{})).status,200);
+  assert.equal((await browserBridge.poll({...report,activeJobId:job.id})).cancel,true);await browserBridge.finish(job.id,{instanceId,result:'cancelled'});
+  await publicationRequests.tick(worker.native);await publicationRequests.tick(worker.native);
+  const {rows:deliveries}=await pool.query('SELECT * FROM deliveries WHERE request_id=$1 ORDER BY created_at',[requestId]);assert.equal(deliveries.length,2);assert.equal(deliveries[0].status,'cancelled');assert.notEqual(deliveries[0].video_id,deliveries[1].video_id);
+  job=(await browserBridge.poll(report)).job;assert(job);await browserBridge.progress(job.id,{instanceId,stage:'browser_upload_started'});await browserBridge.progress(job.id,{instanceId,stage:'browser_scheduled'});await browserBridge.finish(job.id,{instanceId,result:'scheduled'});
+  await publicationRequests.tick(worker.native);assert.equal((await publicationRequests.context()).requests.find(r=>r.id===requestId)?.status,'completed');assert.equal(ytInit+ttInit,0);
 });
 test('YouTube e TikTok reaproveitam a mesma mídia verificada sem repetir download nem misturar claims',async()=>{
   await browserBridge.poll({instanceId:randomUUID(),desktop:true,profileSaved:true,externalBusy:false,activeJobId:null});

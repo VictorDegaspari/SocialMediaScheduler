@@ -1,7 +1,7 @@
 import {openCutPublication} from './cuts-panel.js';
 
-export function immediatePublicationCard({icon}){
-  return `<section class="panel immediate-publication"><div><h2>Postar agora</h2><p>Escolha um corte do aplicativo ou um vídeo de suas pastas, confira a prévia e publique no TikTok sem agendar.</p></div><button class="button primary" type="button" data-immediate-action="open">${icon('tiktok')} Postar agora no TikTok</button></section>`;
+export function immediatePublicationCard({icon},tokenReady=true){
+  return `<section class="panel immediate-publication"><div><h2>Postar agora</h2><p>Escolha um corte do aplicativo ou um vídeo de suas pastas, confira a prévia e publique no TikTok sem agendar.</p></div><button class="button primary" type="button" data-immediate-action="open" ${tokenReady?'':'disabled'}>${icon('tiktok')} Postar agora no TikTok</button></section>`;
 }
 
 export function bindImmediatePublication({api,refresh,toast,getState,openReview,helpers}){
@@ -21,6 +21,7 @@ export function bindImmediatePublication({api,refresh,toast,getState,openReview,
     current.form.querySelector('[data-immediate-action="next"]').disabled=!response.pagination?.hasMore;
   }
   async function open(){
+    if(!getState().connections.playwrightMcp?.configured)throw new Error('Adicione o PLAYWRIGHT_MCP_EXTENSION_TOKEN em Conexões → TikTok antes de publicar.');
     const state=getState(),channels=(state.cutFolders?.channels||state.cuts?.channels||[]).filter(channel=>channel.identifier==='tiktok-browser'&&!channel.disabled);
     dialog.innerHTML=`<div class="dialog-head"><h2 id="browser-publish-title">Postar agora no TikTok</h2><button type="button" class="button ghost" data-immediate-action="close" aria-label="Fechar">×</button></div><form id="immediate-video-form"><div class="form-field"><label for="immediate-source">Origem do vídeo</label><select id="immediate-source" name="source"><option value="cuts">Cortes do aplicativo</option><option value="folders">Vídeos das minhas pastas</option></select></div><div class="form-field"><label for="immediate-profile">Perfil do TikTok</label><select id="immediate-profile" name="profileId" required><option value="">Escolha o perfil de destino</option>${channels.map(channel=>`<option value="${esc(channel.id)}">${esc(channel.name)}</option>`).join('')}</select>${channels.length?'':'<small>Conecte um perfil TikTok em Conexões para continuar.</small>'}</div><div class="form-field"><label for="immediate-video">Vídeo para revisar</label><select id="immediate-video" name="videoId" required><option value="">Carregando vídeos…</option></select></div><p class="tip" data-immediate-empty hidden>Nenhum vídeo disponível nesta página. Gere um corte ou verifique suas pastas em Minhas pastas.</p><div class="form-actions"><button class="button small" type="button" data-immediate-action="prev" disabled>Anterior</button><button class="button small" type="button" data-immediate-action="next" disabled>Próximos vídeos</button></div><p class="error-banner" data-immediate-error hidden role="alert"></p><p class="tip">Na próxima etapa, confira o vídeo e a legenda antes de autorizar a publicação.</p><div class="dialog-footer"><button class="button" type="button" data-immediate-action="close">Cancelar</button><button class="button primary" type="submit" ${channels.length?'':'disabled'}>Conferir prévia e legenda</button></div></form>`;
     const current={form:dialog.querySelector('form'),channels,cursors:[null],index:0,rows:[],pending:false};session=current;dialog.showModal();await load(current);

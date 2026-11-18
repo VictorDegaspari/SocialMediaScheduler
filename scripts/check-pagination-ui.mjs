@@ -22,7 +22,7 @@ for(const scope of scopes)rows[scope]=Array.from({length:45},(_,index)=>{
 });
 const fixture={
   scheduler:{paused:false,queue:{}},stats:{watches:45,active_watches:34,local_source_ready:true,pending:80,sent:222,attention:7},
-  connections:{local:{rootPath:'/videos'},google:{configured:false,connected:false},postiz:{configured:false},native:{engine:'local',youtube:{configured:true,connected:true},tiktok:{}}},
+  connections:{playwrightMcp:{configured:true,source:'input'},local:{rootPath:'/videos'},google:{configured:false,connected:false},postiz:{configured:false},native:{engine:'local',youtube:{configured:true,connected:true},tiktok:{}}},
   publishing:{profiles:[{id:profileId,name:'Perfil QA',watch_id:null,source_roots:[],pack_defaults:{}}],accounts:[],browserProfiles:[],googleConnected:false,summary:{actionCount:45}},
   browser:{configured:true,rootPath:'/videos',config:{sourceType:'local',folder:'/videos',enabled:false,cadence:'daily',intervalMinutes:720,times:['08:00','20:00'],timezone:'America/Sao_Paulo',stripMetadata:true,mode:'review',packDefaults:{},nextAt:null,revision:0},agent:{online:true,desktop:true,externalBusy:false,profileSaved:true,lastSeen:stamp},active:{id:'global-active',kind:'upload',status:'running',message:'Tarefa global permanece ativa.'},calendar:{reserved:0,uploads:0,next:null}},
   cuts:{jobs:[],pagination:{limit:10,hasMore:false,nextCursor:null},dependencies:{ready:true,details:[]},channels:[]}

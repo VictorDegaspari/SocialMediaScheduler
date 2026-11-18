@@ -1,0 +1,59 @@
+#connections-panel [hidden]{display:none!important}
+#connections-panel .page-head{margin-bottom:30px}
+#connections-panel .eyebrow:empty{display:none}
+#connections-panel .subtitle{color:#617163;max-width:none}
+.connections-group{margin-bottom:27px}
+.connections-section-head{margin:0 0 13px}
+.connections-section-head h2{font-size:14px;color:#5b6e59;letter-spacing:0}
+.connections-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;align-items:start}
+.connection-service{padding:24px;min-width:0}
+.connection-service .connection-title{gap:11px;flex-wrap:wrap;margin-bottom:14px}
+.connection-service .connection-title .folder-icon{width:37px;height:37px;border-radius:10px}
+.connection-service .connection-title .folder-icon svg{width:21px;height:21px}
+.connection-service .connection-title h3{font-size:17px;letter-spacing:-.3px;color:#243d30}
+.connection-service .connection-title .badge{font-size:10px;margin-left:auto}
+.connection-service.platform-card>.connection-title .badge.amber{color:#86622d;background:#fbf1de}
+.connection-service.platform-card::before{height:3px}
+.connection-service>.connections-description{color:#596d57;font-size:12px;line-height:1.7;margin:0}
+.connections-account{min-height:70px;padding-top:17px;font-size:12px;color:#4c6247}
+.connections-account>span{display:block;color:#687860;font-size:10px;margin-bottom:4px}
+.connections-account>strong{display:block;font-size:14px;color:#344e34;font-weight:550;overflow-wrap:anywhere}
+.connections-account>p{max-width:380px;font-size:12px;line-height:1.7;color:#5d7057}
+.connections-account .code{margin:0;font-size:11px;color:#4f6746;background:#f4f7ee;line-height:1.6;overflow-wrap:anywhere;word-break:break-word}
+.connections-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}
+.connections-actions .button{font-size:11px;white-space:normal;min-height:37px;text-align:center}
+.connections-details{border-top:1px solid #e2e8dc;padding-top:15px;margin-top:21px;min-width:0}
+.connections-details>summary{font-size:11px;font-weight:550;cursor:pointer;color:#4f6848;line-height:1.7}
+.connections-details[open]>summary{margin-bottom:17px}
+.connections-details .form-field small{color:#62755c}
+.connections-details .checkbox{color:#4e6547;font-size:11px}
+.connections-help{font-size:12px;color:#5f7259;line-height:1.8;margin-bottom:18px;overflow-wrap:anywhere}
+.connections-details .form-actions{margin-top:17px;padding-top:0;gap:8px}
+.connections-details .button{white-space:normal;text-align:center}
+.connections-details .code{font-size:11px;word-break:break-word}
+.connections-details .field-label{display:block}
+.connections-advanced{margin-top:29px;background:#fafcf7}
+.connections-advanced>summary{display:flex;align-items:center;gap:11px;flex-wrap:wrap;padding:19px 23px;font-size:12px;color:#4d6348;font-weight:550;cursor:pointer;list-style:none}
+.connections-advanced>summary::-webkit-details-marker{display:none}
+.connections-advanced>summary::before{content:'›';font-size:19px;line-height:1;transition:transform .15s}
+.connections-advanced[open]>summary::before{transform:rotate(90deg)}
+.connections-engine-label{margin-left:auto;font-size:11px;color:#6c7a64;font-weight:400}
+.connections-advanced-body{padding:0 23px 23px;border-top:1px solid #e8eddf}
+.connections-advanced-body h2{font-size:15px;margin-top:20px;margin-bottom:8px}
+.connections-advanced-body form{max-width:450px}
+.connections-advanced-body .connections-help{max-width:650px}
+.connections-advanced-body .queue-status{color:#68785f;overflow-wrap:anywhere}
+.connections-mcp{border-top:1px solid #e2e8dc;margin-top:24px;padding-top:3px}
+.connections-mcp-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;margin-bottom:10px}
+.connections-mcp-heading h2{margin:0}
+.connections-mcp .form-actions{margin-top:15px}
+.connections-mcp .form-field label{overflow-wrap:anywhere;font-size:11px}
+.connections-mcp .form-field small{color:#64755c}
+.connections-mcp .connections-help{max-width:650px}
+.connection-service .channel-list{min-height:70px;align-content:start;margin-top:17px}
+.connections-details :is(input,select):focus-visible,.connections-details summary:focus-visible,.connections-advanced>summary:focus-visible{outline-offset:3px}
+@media(max-width:1100px){.connections-grid{gap:17px}.connection-service{padding:21px}.connection-service .connection-title{gap:9px}.connection-service .connection-title h3{font-size:16px}.connection-service .connection-title .badge{font-size:9px}}
+@media(max-width:720px){.connections-grid{grid-template-columns:1fr}.connections-account{min-height:0}.connections-actions{margin-top:20px}.connections-group{margin-bottom:24px}.connections-advanced>summary{padding:17px 20px}.connections-advanced-body{padding:0 20px 20px}.connections-engine-label{font-size:10px}.connection-service .connection-title h3{font-size:17px}}
+@media(max-width:390px){.connection-service{padding:19px}.connection-service .connection-title{gap:8px}.connection-service .connection-title h3{font-size:16px}.connection-service .connection-title .folder-icon{width:32px;height:32px}.connection-service .connection-title .badge{font-size:9px;padding:4px 6px}.connections-advanced>summary{column-gap:8px}.connections-engine-label{margin-left:17px;width:100%}}
+
+.connection-service .connections-mcp{border:0;padding:0;margin:0}.connections-mcp-heading h4{font-size:13px;margin:0}.connections-mcp .form-actions{padding-top:0}

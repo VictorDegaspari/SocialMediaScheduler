@@ -1,3 +1,4 @@
+import {requireTikTokBrowserToken} from './playwright-mcp.js';
 import {randomUUID} from 'node:crypto';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -32,6 +33,7 @@ export async function publishCut(db:PoolClient,job:{id:string;title:string|null;
   const tiktok=channel.identifier==='tiktok-browser';
   const {rows:[existing]}=await db.query('SELECT id FROM deliveries WHERE video_id=$1 AND integration_id=$2',[clip.id,channel.id]);
   if(existing)return {deliveryId:existing.id,reused:true};
+  if(tiktok)await requireTikTokBrowserToken();
   if(!['review','failed','posted','publishing'].includes(clip.status)||!clip.local_file)throw new AppError('Aguarde uma prévia pronta para autorizar o envio.',409);
   const format=framingOptionsSchema.parse(clip.framing_options||{}).format;
   if(input.format&&input.format!==format)throw new AppError('O formato escolhido precisa de uma nova prévia. Ajuste o corte e confira antes de postar.',409);
