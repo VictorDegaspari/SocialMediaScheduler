@@ -33,6 +33,7 @@ await page.route('**/api/**',async route=>{
   assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');
   const body=request.postDataJSON();actions.push({path,body});
   if(path==='/api/browser/videos/'+videoId+'/prepare')return route.fulfill({json:{id:deliveryId}});
+  if(path==='/api/cuts/'+cutId+'/publish'&&body.visibility!==undefined&&!['private','unlisted','public'].includes(body.visibility))return route.fulfill({status:400,json:{error:'Verifique os campos: visibility: Invalid option'}});
   if(path==='/api/native/deliveries/'+deliveryId+'/approve'||path==='/api/cuts/'+cutId+'/publish'){
     fixture.browser.active={id:'77777777-7777-4777-8777-777777777777',kind:'upload',status:'pending',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:new Date().toISOString()};
     return route.fulfill({json:{ok:true,deliveryId}});
@@ -149,7 +150,7 @@ try{
   const beforeCut=actions.length;await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();assert.equal(actions.length,beforeCut,'sem consentimento o corte não é enviado');
   assert.equal(await cutForm.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await cutForm.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).check();await cutForm.getByRole('checkbox',{name:'Promove minha marca',exact:true}).check();await cutForm.getByRole('checkbox',{name:/Revisei este vídeo/}).check();
   await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();await page.locator('#cuts-dialog').waitFor({state:'hidden'});
-  assert.equal(actions.at(-1).path,'/api/cuts/'+cutId+'/publish');assert.equal(actions.at(-1).body.channelId,'browser:tiktok:'+profileId);assert.equal(actions.at(-1).body.tiktok.privacyLevel,'PUBLIC_TO_EVERYONE');assert.equal(actions.at(-1).body.revision,3);assert.equal(actions.at(-1).body.tiktok.commercialContent,true);assert.equal(actions.at(-1).body.tiktok.ownBrand,true);
+  assert.equal(actions.at(-1).path,'/api/cuts/'+cutId+'/publish');assert.equal(actions.at(-1).body.channelId,'browser:tiktok:'+profileId);assert.equal(actions.at(-1).body.tiktok.privacyLevel,'PUBLIC_TO_EVERYONE');assert.equal(actions.at(-1).body.revision,3);assert.equal(actions.at(-1).body.tiktok.commercialContent,true);assert.equal(actions.at(-1).body.tiktok.ownBrand,true);assert.equal(Object.hasOwn(actions.at(-1).body,'visibility'),false,'campos desativados do YouTube não entram na publicação do TikTok');assert.equal(Object.hasOwn(actions.at(-1).body,'madeForKids'),false);assert.equal(Object.hasOwn(actions.at(-1).body,'containsSyntheticMedia'),false);
   await page.waitForFunction(()=>location.hash==='#browser');await page.getByText('Publicação pelo Playwright',{exact:true}).waitFor();assert.equal(await page.locator('.browser-progress .cuts-spinner').evaluate(el=>getComputedStyle(el).animationName),'cuts-spin');
   await page.goto(base+'/#browser');await page.getByRole('button',{name:'Postar agora no TikTok',exact:true}).click();
   const picker=page.locator('#browser-publish-dialog');await picker.getByLabel('Origem do vídeo').selectOption('folders');await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(videoId);

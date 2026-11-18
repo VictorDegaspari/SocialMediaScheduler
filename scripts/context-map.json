@@ -102,7 +102,9 @@
       "src/publication-requests.ts",
       "src/request-work.ts",
       "src/video-titles.ts",
-      "public/requests-panel.js"
+      "public/requests-panel.js",
+      "public/requests-view.js",
+      "public/requests.css"
     ],
     "unit": [
       "tests/native.test.ts"

@@ -1,42 +1,92 @@
-import {nativeScheduleFields,readNativeSchedule} from './native-schedule.js';
-import {renderPagination,resetPagination} from './pagination.js';
-let editing=null;
-const statuses={active:'Na fila',waiting_manual:'Ação manual necessária',completed:'Concluído',cancelled:'Cancelado'};
-export function renderRequests(state,{esc,badge,date}) {
+import {readNativeSchedule} from './native-schedule.js';
+import {resetPagination} from './pagination.js';
+import {requestActions,requestList,requestForm,requestProfiles,requestAccounts} from './requests-view.js';
+
+let editing=null,view='orders';
+const clearedForms=new Set();
+const views=[['orders','Pedidos'],['profiles','Perfis'],['accounts','Contas']];
+
+export function renderRequests(state,helpers) {
   const p=state.publishing;if(!p)return '<p>Reinicie o serviço para carregar os pedidos.</p>';
-  const profile=p.profiles.find(row=>row.id===editing),defaults=profile?.pack_defaults||{};
-  const origin=profile?.source_type||'',folders=(profile?.source_roots||[]).map(id=>'https://drive.google.com/drive/folders/'+id).join('\n');
-  return `<div class="page-head"><div><span class="eyebrow">PEDIDOS PELA CONVERSA OU PELO PAINEL</span><h1>Pedidos e contas</h1><p class="subtitle">Escolha o perfil, a quantidade e os horários. O excedente aguarda capacidade na fila.</p></div></div>
-    ${!p.googleConnected&&p.profiles.some(row=>row.source_type==='google_drive')?'<div class="notice"><strong>Google Drive precisa de autorização.</strong> As pastas estão cadastradas; autorize a leitura em <a href="#connections">Conexões</a> para o sistema buscar os vídeos.</div>':''}
-    ${p.actions.length||p.pagination?.actions?`<section class="panel panel-pad"><h2>Ações que precisam de você</h2>${p.actions.map(a=>`<div class="notice"><strong>${esc(a.profile_name)} · ${a.provider==='youtube'?'YouTube':'TikTok'}</strong><p>${esc(a.message)}</p><div class="form-actions"><a class="button small" href="${esc(a.href)}">Abrir local da pendência</a>${a.kind==='unknown_upload'||a.kind==='delivery_review'?`<button class="button small" data-request-action="resolve" data-id="${a.id}" data-resolution="checked_not_scheduled">Conferi: não agendado; usar próximo</button>${a.provider==='tiktok'?`<button class="button small" data-request-action="resolve" data-id="${a.id}" data-resolution="checked_scheduled">Conferi no TikTok: agendado</button>`:''}`:`<button class="button small" data-request-action="resume" data-id="${a.request_id}">Já resolvi; verificar novamente</button>`}</div></div>`).join('')||'<p>Nenhuma pendência nesta página.</p>'}${renderPagination(p.pagination?.actions,'actions',esc)}</section>`:''}
-    <section class="panel panel-pad"><h2>Perfis de conteúdo</h2><p class="tip">Cada perfil reúne uma origem e as contas de destino. Conectar outra conta preserva as anteriores. O login de cada TikTok usa um perfil separado do Chrome. Pedidos já iniciados mantêm a conta original.</p>
-      ${p.profiles.map(row=>`<article class="notice"><strong>${esc(row.name)}</strong><p>Origem: ${row.source_type==='gta6_pack'?'Pack GTA 6':row.source_type==='google_drive'?'Google Drive · '+(row.source_roots?.length||1)+' pasta(s)':row.source_type==='local'?'Pasta local':'Definir origem'}</p><p>YouTube: ${esc(p.accounts.find(a=>a.id===row.youtube_id)?.name||'Criar/conectar e vincular canal')} · TikTok: ${esc(p.browserProfiles.find(a=>a.id===row.tiktok_profile_id)?.name||'Adicionar/vincular perfil')}</p><button class="button small" data-request-action="edit-profile" data-id="${row.id}">Editar perfil</button></article>`).join('')}
-      <details ${editing||!p.profiles.length?'open':''}><summary>${editing?'Editar '+esc(profile?.name):'Adicionar perfil de conteúdo'}</summary><form id="publishing-profile-form">
-        <div class="form-field"><label for="profile-name">Nome do perfil</label><input id="profile-name" name="name" value="${esc(profile?.name||'')}" maxlength="100" required placeholder="Bíblicos, GTA 6..."></div>
-        <div class="form-field"><label for="profile-source">Origem do perfil</label><select id="profile-source" name="sourceType" ${profile?.watch_id?'disabled':''}><option value="">Definir depois</option>${[['gta6_pack','Site · Pack GTA 6'],['google_drive','Pastas do Google Drive'],['local','Pasta local']].map(([v,l])=>`<option value="${v}" ${origin===v?'selected':''}>${l}</option>`).join('')}</select></div>
-        <div class="form-field"><label for="profile-folders">Pastas do Drive (uma por linha)</label><textarea id="profile-folders" name="folderUrls" ${profile?.watch_id?'readonly':''}>${esc(folders)}</textarea><small>Subpastas são incluídas. Arquivos repetidos entre as pastas são identificados pelo ID.</small></div>
-        <div class="form-field"><label for="profile-local">Pasta local</label><input id="profile-local" name="localPath" value="${esc(origin==='local'?profile.folder_url:state.connections.local.rootPath)}" ${profile?.watch_id?'readonly':''}></div>
-        <div class="field-row"><div class="form-field"><label for="profile-youtube">Canal YouTube</label><select id="profile-youtube" name="youtubeId"><option value="">Ainda não criado/conectado</option>${p.accounts.filter(a=>a.identifier==='youtube'&&!a.disabled).map(a=>`<option value="${esc(a.id)}" ${profile?.youtube_id===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></div><div class="form-field"><label for="profile-tiktok">Perfil TikTok</label><select id="profile-tiktok" name="tiktokProfileId"><option value="">Vincular depois</option>${p.browserProfiles.map(a=>`<option value="${a.id}" ${profile?.tiktok_profile_id===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></div></div>
-        <div class="form-field"><label for="profile-prefix">Prefixo do título</label><input id="profile-prefix" name="titlePrefix" value="${esc(defaults.titlePrefix||'')}"><small>Usa o nome do arquivo ou o título do catálogo. Um JSON junto do vídeo preserva suas próprias declarações.</small></div>
-        <div class="form-field"><label for="profile-tags">Hashtags padrão</label><input id="profile-tags" name="hashtags" value="${esc(defaults.hashtags?.join(', ')||'')}"></div>
-        <div class="form-field"><label for="profile-description">Descrição padrão</label><textarea id="profile-description" name="description" maxlength="2000">${esc(defaults.description||'')}</textarea></div>
-        <label class="checkbox"><input name="youtubeSynthetic" type="checkbox" ${defaults.youtubeContainsSyntheticMedia===true?'checked':''}><span>YouTube: conteúdo realista alterado ou sintético<small>Desmarcado por padrão; ative quando necessário para este conteúdo.</small></span></label>
-        <label class="checkbox"><input name="madeWithAI" type="checkbox" ${defaults.madeWithAI!==false?'checked':''}><span>TikTok: declarar conteúdo gerado/alterado por IA</span></label><label class="checkbox"><input name="madeForKids" type="checkbox" ${defaults.madeForKids?'checked':''}><span>Conteúdo produzido especificamente para crianças</span></label>
-        <p class="tip">Os pedidos de agendamento publicam na data escolhida. No YouTube, o vídeo permanece privado até essa data.</p><div class="form-actions"><button class="button primary" type="submit">Salvar perfil</button>${editing?'<button class="button" type="button" data-request-action="new-profile">Adicionar outro perfil</button>':''}</div>
-      </form></details>
-    </section>
-    <div class="connection-grid"><section class="panel connection-card"><h2>Adicionar contas</h2><p>Autorize cada canal YouTube. Cada conexão fica salva separadamente.</p><a class="button" href="${state.connections.native.youtube.configured?'/auth/youtube':'/#connections'}">Adicionar conta YouTube</a>${p.accounts.map(a=>`<p>${esc(a.name)} · ${esc(a.identifier)} ${a.disabled?'· Desconectada':''}${a.identifier==='youtube'&&!a.disabled?` <button class="button small" data-request-action="approval" data-id="${esc(a.id)}" data-approved="${a.autoPublishApproved?'false':'true'}" data-name="${esc(a.name)}">${a.autoPublishApproved?'Desativar automático':'Autorizar automático'}</button>`:''}</p>`).join('')}
-      <h3>Perfis do Chrome para TikTok</h3>${p.browserProfiles.map(a=>`<div class="form-actions"><span>${esc(a.name)} · ${a.profileSaved?'Sessão salva':'Login necessário'}</span><button class="button small" data-request-action="login" data-id="${a.id}">Abrir login</button></div>`).join('')}<form id="browser-profile-form"><div class="form-field"><label for="new-browser-profile">Nome de outra conta TikTok</label><input id="new-browser-profile" name="name" required maxlength="100" placeholder="TikTok bíblico"></div><button class="button" type="submit">Adicionar perfil TikTok</button></form></section>
-    <section class="panel connection-card"><h2>Novo pedido</h2><form id="publication-request-form"><div class="form-field"><label for="request-profile">Perfil de conteúdo</label><select id="request-profile" name="profileId" required><option value="">Selecione</option>${p.profiles.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></div><div class="form-field"><label for="request-quantity">Quantidade de vídeos por plataforma</label><input id="request-quantity" name="quantity" type="number" min="1" max="10000" value="10" required></div><label class="checkbox"><input type="checkbox" name="platforms" value="youtube" checked><span>YouTube</span></label><label class="checkbox"><input type="checkbox" name="platforms" value="tiktok" checked><span>TikTok</span></label><div class="form-field"><label for="request-times">Horários de postagem</label><input id="request-times" name="times" value="08:00, 20:00" required><small>America/Sao_Paulo. Um vídeo por horário; cada plataforma tem sua própria quantidade.</small></div>${nativeScheduleFields({},esc,'request')}<button class="button primary" type="submit">Criar pedido e colocar na fila</button></form></section></div>
-    <section class="panel panel-pad"><h2>Pedidos e progresso</h2>${p.requests.map(r=>`<article class="notice"><strong>${esc(r.profile_name)} · ${r.provider==='youtube'?'YouTube':'TikTok'} ${badge(statuses[r.status]||r.status,r.status==='waiting_manual'?'amber':'gray')}</strong><p>${r.confirmed} / ${r.quantity} confirmados · ${r.reserved} em preparação/conferência · ${r.waiting} aguardando vaga</p><p>${esc(r.message||'Aguardando o próximo ciclo.')}</p><small>${date(r.created_at,true)} · ${esc(r.config.cadence.times.join(', '))} · ${esc(r.config.cadence.timezone)}</small>${!['completed','cancelled'].includes(r.status)?`<div class="form-actions"><button class="button small" data-request-action="cancel" data-id="${r.id}">Cancelar restante do pedido</button></div>`:''}</article>`).join('')||'<p>Nenhum pedido ainda. Você também pode solicitar pela conversa: “Agende 20 vídeos do perfil GTA 6 às 08:00 e 20:00 no YouTube e TikTok”.</p>'}${renderPagination(p.pagination?.requests,'requests',esc)}</section>`;
+  return `<div id="requests-panel"><div class="page-head requests-page-head"><div><h1>Pedidos e contas</h1><p class="subtitle">Agende seus vídeos e acompanhe os pedidos.</p></div></div>
+    <div class="requests-tabs" role="tablist" aria-label="Pedidos e contas">${views.map(([id,label])=>`<button type="button" role="tab" id="requests-tab-${id}" aria-controls="requests-view-${id}" aria-selected="${view===id}" tabindex="${view===id?'0':'-1'}" data-requests-view="${id}">${label}${id==='profiles'?`<span class="requests-tab-count">${p.profiles.length}</span>`:''}</button>`).join('')}</div>
+    <section id="requests-view-orders" role="tabpanel" aria-labelledby="requests-tab-orders" ${view!=='orders'?'hidden':''}><div class="requests-layout"><div class="requests-main">${requestActions(p,helpers)}${requestList(p,helpers)}</div>${requestForm(p,helpers)}</div></section>
+    <section id="requests-view-profiles" role="tabpanel" aria-labelledby="requests-tab-profiles" ${view!=='profiles'?'hidden':''}>${requestProfiles(state,editing,helpers)}</section>
+    <section id="requests-view-accounts" role="tabpanel" aria-labelledby="requests-tab-accounts" ${view!=='accounts'?'hidden':''}>${requestAccounts(state,helpers)}</section></div>`;
 }
+
+// Polling also refreshes orders while forms and expanded details keep their state.
+export function updateRequests(state,helpers) {
+  const panel=document.querySelector('#requests-panel'),drafts=[];
+  for(const form of panel.querySelectorAll('form')) {
+    if(clearedForms.has(form.id))continue;
+    if(form.id==='publishing-profile-form'&&form.dataset.profileId!==(editing||''))continue;
+    drafts.push({id:form.id,fields:Array.from(form.elements).filter(e=>e.name).map(e=>({name:e.name,type:e.type,value:e.value,checked:e.checked}))});
+  }
+  const details=Array.from(panel.querySelectorAll('details')).map(e=>({id:e.id,open:e.open}));
+  const keepProfile=drafts.some(f=>f.id==='publishing-profile-form');
+  const active=document.activeElement,focusId=panel.contains(active)?active.id:null;
+  panel.outerHTML=renderRequests(state,helpers);
+  for(const draft of drafts) {
+    const form=document.getElementById(draft.id);if(!form)continue;
+    for(const field of draft.fields) {
+      const input=Array.from(form.elements).find(e=>e.name===field.name&&(field.type!=='checkbox'||e.value===field.value));
+      if(!input)continue;
+      if(field.type==='checkbox')input.checked=field.checked;
+      else if(input.tagName!=='SELECT'||Array.from(input.options).some(o=>o.value===field.value))input.value=field.value;
+    }
+  }
+  for(const {id,open} of details) {
+    if(['profile-editor','profile-defaults'].includes(id)&&!keepProfile)continue;
+    const detail=document.getElementById(id);if(detail)detail.open=open;
+  }
+  clearedForms.clear();syncProfileSource();
+  if(focusId)document.getElementById(focusId)?.focus({preventScroll:true});
+}
+
+function selectView(next) {
+  if(!views.some(([id])=>id===next))return;
+  view=next;
+  for(const tab of document.querySelectorAll('#requests-panel [role=tab]')) {
+    const selected=tab.dataset.requestsView===view;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;
+  }
+  for(const panel of document.querySelectorAll('#requests-panel [role=tabpanel]'))panel.hidden=panel.id!=='requests-view-'+view;
+}
+
+function syncProfileSource() {
+  const source=document.querySelector('#profile-source');if(!source)return;
+  for(const field of document.querySelectorAll('[data-profile-source]'))field.hidden=field.dataset.profileSource!==source.value;
+}
+
 export function bindRequests({api,refresh,toast}) {
+  document.addEventListener('click',event=>{
+    const button=event.target.closest('[data-requests-view]');if(!button)return;
+    selectView(button.dataset.requestsView);
+    if(button.getAttribute('role')!=='tab')document.querySelector('#requests-tab-'+view)?.focus();
+  });
+  document.addEventListener('keydown',event=>{
+    const tab=event.target.closest('#requests-panel [role=tab]');if(!tab)return;
+    const index=views.findIndex(([id])=>id===view);let next;
+    if(event.key==='ArrowRight')next=(index+1)%views.length;
+    else if(event.key==='ArrowLeft')next=(index+views.length-1)%views.length;
+    else if(event.key==='Home')next=0;
+    else if(event.key==='End')next=views.length-1;
+    else return;
+    event.preventDefault();selectView(views[next][0]);document.querySelector('#requests-tab-'+view).focus();
+  });
+  document.addEventListener('change',event=>{if(event.target.id==='profile-source')syncProfileSource();});
+  document.addEventListener('invalid',event=>{
+    if(!event.target.closest('#requests-panel'))return;
+    for(let parent=event.target.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
+  },true);
   document.addEventListener('click',async event=>{
     const button=event.target.closest('[data-request-action]');if(!button)return;button.disabled=true;
     try {
       const {requestAction:action,id,resolution}=button.dataset;
-      if(action==='edit-profile'){editing=id;await refresh(true);return;}
-      if(action==='new-profile'){editing=null;await refresh(true);return;}
+      if(action==='edit-profile'||action==='new-profile'){
+        editing=action==='edit-profile'?id:null;clearedForms.add('publishing-profile-form');view='profiles';await refresh(true);
+        const editor=document.querySelector('#profile-editor');if(editor){editor.open=true;editor.scrollIntoView({block:'nearest',behavior:'smooth'});document.querySelector('#profile-name')?.focus({preventScroll:true});}return;
+      }
       if(action==='approval')await api('/accounts/update',{provider:'youtube',id:id.slice('native:youtube:'.length),label:button.dataset.name,autoPublishApproved:button.dataset.approved==='true'});
       else if(action==='login')await api('/browser/profiles/'+id+'/login',{});
       else if(action==='resolve')await api('/assistant/actions/'+id+'/resolve',{confirm:true,resolution});
@@ -54,11 +104,13 @@ export function bindRequests({api,refresh,toast}) {
         await api('/assistant/profiles'+(editing?'/'+editing:''),{name,sourceType:source||null,folderUrls:String(f.get('folderUrls')||'').split(/\n/).map(v=>v.trim()).filter(Boolean),localPath:f.get('localPath')||'',youtubeId:f.get('youtubeId')||null,tiktokProfileId:f.get('tiktokProfileId')||null,
           packDefaults:{titlePrefix:f.get('titlePrefix')||name,description:f.get('description')||'',hashtags:String(f.get('hashtags')||'').split(',').map(t=>t.trim()).filter(Boolean),madeWithAI:f.has('madeWithAI'),youtubeContainsSyntheticMedia:f.has('youtubeSynthetic'),madeForKids:f.has('madeForKids'),youtubeVisibility:'public'}},editing?'PUT':'POST');editing=null;
       }else {
+        if(!f.getAll('platforms').length)throw new Error('Selecione pelo menos uma plataforma.');
         const body={profileId:f.get('profileId'),quantity:Number(f.get('quantity')),platforms:f.getAll('platforms'),times:String(f.get('times')).split(',').map(t=>t.trim()).filter(Boolean),timezone:'America/Sao_Paulo',policy:readNativeSchedule(form)};
         const serialized=JSON.stringify(body);let saved;try{saved=JSON.parse(sessionStorage.getItem('watcher-request-submit'));}catch{}
         const requestKey=saved?.body===serialized?saved.key:crypto.randomUUID();sessionStorage.setItem('watcher-request-submit',JSON.stringify({key:requestKey,body:serialized}));
         await api('/assistant/requests',{...body,requestKey});resetPagination('requests');sessionStorage.removeItem('watcher-request-submit');
       }
+      clearedForms.add(form.id);
       await refresh(true);toast('Configuração salva. A fila verifica as conexões e os limites automaticamente.');
     }catch(error){toast(error.message,true);}finally{button.disabled=false;}
   });

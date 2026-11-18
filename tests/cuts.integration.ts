@@ -528,13 +528,14 @@ test('corte publica agora no TikTok com consentimento, conta e bytes preservados
   const {BrowserBridge}=await import('../src/browser-bridge.js');
   await create();await service.tick();let clip=await currentClip();
   const original=await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4'));
-  const body={...publishBody(clip),channelId:'browser:tiktok:default',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false,commercialContent:true,ownBrand:true}};
+  const body={channelId:'browser:tiktok:default',title:'Título revisado',description:'Descrição revisada',revision:clip.revision,confirm:true,tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false,commercialContent:true,ownBrand:true}};
+  assert.equal((await call('/'+clip.id+'/publish',{...body,visibility:null})).status,400);
   assert.equal((await call('/'+clip.id+'/publish',{...body,confirm:false})).status,400);
   assert.equal((await call('/'+clip.id+'/publish',{...body,revision:clip.revision+1})).status,409);
   const first=await call('/'+clip.id+'/publish',body);assert.equal(first.status,202,await first.clone().text());const {deliveryId}=await first.json();
   assert.equal((await (await call('/'+clip.id+'/publish',body)).json()).deliveryId,deliveryId);
   const delivery=(await pool.query('SELECT * FROM deliveries WHERE id=$1',[deliveryId])).rows[0];
-  assert.equal(delivery.engine,'browser');assert.equal(delivery.payload.publishNow,true);assert.ok(delivery.approved_at);assert.equal(delivery.planned_at,null);
+  assert.equal(delivery.payload.metadata.youtube.visibility,'private','campos do YouTube omitidos usam o padrão válido sem afetar a privacidade pública do TikTok');assert.equal(delivery.engine,'browser');assert.equal(delivery.payload.publishNow,true);assert.ok(delivery.approved_at);assert.equal(delivery.planned_at,null);
   assert.deepEqual(await readFile(join(process.env.DATA_DIR!,delivery.local_file)),original);
   const bridge=new BrowserBridge(),instanceId=randomUUID(),report={instanceId,profileSaved:true,externalBusy:false,desktop:true,activeJobId:null};
   await bridge.poll(report);await bridge.tick();const {job}=await bridge.poll(report);
