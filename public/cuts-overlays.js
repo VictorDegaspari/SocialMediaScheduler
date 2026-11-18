@@ -1,19 +1,21 @@
-import {editorTabList,editorPanelAttributes} from './cuts-editor-tabs.js';
+import {mountOverlayView} from './build/cuts-overlays-view.js';
+import {editorPanelAttributes} from './cuts-editor-tabs.js';
 import {overlayVisible,overlayImageBox,overlayTextLayout} from './cuts-overlays-layout.js';
 
 export function cutOverlayFields(){
-  return `<section ${editorPanelAttributes('primary','cut-overlays')} class="cuts-tool-section cuts-overlays"><div class="cuts-tool-heading"><div><h3 id="cut-overlays-heading">3. Textos e imagens</h3><p>Adicione títulos, logos ou imagens sobre o vídeo.</p></div></div><div class="cuts-overlay-add"><button class="button small" type="button" data-cut-overlay-action="add-text">Adicionar texto</button><button class="button small" type="button" data-cut-overlay-action="add-image">Adicionar imagem</button><input id="cut-overlay-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden></div><p class="tip">Para colar uma imagem copiada, use Ctrl+V com o editor aberto. PNG, JPEG ou WebP, até 20 MB.</p><p id="cut-overlay-status" class="cuts-overlay-status" role="status"></p><div id="cut-overlay-list" class="cuts-overlay-list" aria-label="Textos e imagens do vídeo"></div><div id="cut-overlay-controls"></div></section>`;
+  return `<section ${editorPanelAttributes('primary','cut-overlays')} class="cuts-tool-section cuts-overlays"></section>`;
 }
 
 export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDuration,seek,onChange,uploadImage}){
-  const root=form.querySelector('#cut-overlays'),list=root.querySelector('#cut-overlay-list'),controls=root.querySelector('#cut-overlay-controls'),status=root.querySelector('#cut-overlay-status');
+  const root=form.querySelector('#cut-overlays');
   const layers=structuredClone(overlays),images=new Map();let selected=layers[0]?.id||null,pending=0,drag=null,preventClick=false;
+  const view=mountOverlayView(root,layers,selected,getDuration()),controls=root.querySelector('#cut-overlay-controls');
+  signal.addEventListener('abort',()=>view.destroy(),{once:true});
+  const render=()=>view.update(layers,selected,getDuration());
   const imageUrl=id=>`/api/cuts/jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(id)}`;
   const clamp=value=>Math.max(0,Math.min(1,value));
-  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const current=()=>layers.find(o=>o.id===selected);
-  const feedback=message=>{status.textContent=message;};
-  const name=o=>o.type==='text'?(o.text.trim().slice(0,55)||'Texto sem conteúdo'):'Imagem';
+  const feedback=message=>view.feedback(message);
   function imageFor(id){
     if(images.has(id))return images.get(id);
     const item={image:new Image(),ready:false,error:false};images.set(id,item);
@@ -21,23 +23,7 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     item.image.onerror=()=>{if(signal.aborted)return;item.error=true;feedback('Uma imagem não pôde ser carregada. Adicione a imagem novamente.');};
     item.image.src=imageUrl(id);return item;
   }
-  function renderList(){
-    list.innerHTML=layers.map((o,i)=>`<button class="cuts-overlay-item" type="button" data-cut-overlay-action="select" data-id="${esc(o.id)}" aria-pressed="${o.id===selected}"><span class="cuts-overlay-kind">${o.type==='text'?'T':'▧'}</span><span>${esc(name(o))}<small>${o.end===null?'Durante todo o vídeo':`${o.start} s → ${o.end} s`}</small></span><span class="cuts-overlay-order">${i+1}</span></button>`).join('')||'<p class="cuts-overlay-empty">Nenhum texto ou imagem adicionado.</p>';
-  }
-  function renderControls(){
-    const o=current();if(!o){controls.replaceChildren();return;}
-    const range=(field,label,min,max,value,step='1')=>`<div class="form-field cuts-editor-range"><label for="cut-overlay-${field}">${label} <output data-overlay-output="${field}">${value}${field==='fontSize'?'':'%'}</output></label><input id="cut-overlay-${field}" data-overlay-field="${field}" type="range" min="${min}" max="${max}" step="${step}" value="${value}"></div>`;
-    const textFields=o.type==='text'?`<div class="form-field"><label for="cut-overlay-text">Texto sobre o vídeo</label><textarea id="cut-overlay-text" data-overlay-field="text" rows="3" maxlength="1000">${esc(o.text)}</textarea></div><div class="field-row"><div class="form-field"><label for="cut-overlay-color">Cor do texto</label><input id="cut-overlay-color" data-overlay-field="color" type="color" value="${esc(o.color)}"></div><div class="form-field"><label for="cut-overlay-background">Fundo do texto</label><select id="cut-overlay-background" data-overlay-field="background"><option value="none" ${o.background==='none'?'selected':''}>Sem caixa</option><option value="box" ${o.background==='box'?'selected':''}>Caixa escura</option></select></div></div>${range('fontSize','Tamanho do texto',24,160,o.fontSize)}`:'';
-    const items=[...(o.type==='text'?[['cut-overlay-content','Texto']]:[]),['cut-overlay-position','Posição e tamanho'],['cut-overlay-timing','Duração']];
-    const previous=controls.querySelector('[role="tab"][aria-selected="true"]')?.dataset.editorTab;
-    const active=items.some(([id])=>id===previous)?previous:items[0][0];
-    controls.innerHTML=`<div class="cuts-overlay-settings">${editorTabList('overlay','Ajustes do elemento',items,{active})}
-      ${o.type==='text'?`<div ${editorPanelAttributes('overlay','cut-overlay-content',active==='cut-overlay-content')}>${textFields}</div>`:''}
-      <div ${editorPanelAttributes('overlay','cut-overlay-position',active==='cut-overlay-position')}>${range('width',o.type==='image'?'Tamanho da imagem':'Largura do texto',5,100,Math.round(o.width*100))}<div class="field-row">${range('x','Posição horizontal',0,100,Math.round(o.x*100))}${range('y','Posição vertical',0,100,Math.round(o.y*100))}</div><p class="tip">Você também pode arrastar o elemento na prévia para posicionar.</p></div>
-      <div ${editorPanelAttributes('overlay','cut-overlay-timing',active==='cut-overlay-timing')}><label class="checkbox"><input id="cut-overlay-always" data-overlay-field="always" type="checkbox" ${o.end===null?'checked':''}><span>Durante todo o vídeo</span></label><div class="field-row cuts-overlay-times"><div class="form-field"><label for="cut-overlay-start">Aparece em (segundos)</label><input id="cut-overlay-start" data-overlay-field="start" type="number" min="0" max="180" step="0.001" value="${o.start}" ${o.end===null?'disabled':''}></div><div class="form-field"><label for="cut-overlay-end">Some em (segundos)</label><input id="cut-overlay-end" data-overlay-field="end" type="number" min="0" max="180" step="0.001" value="${o.end??Math.min(3,getDuration())}" ${o.end===null?'disabled':''}></div></div><p class="tip">Os segundos contam a partir do início do vídeo final, descontando os trechos removidos.</p></div>
-      <div class="form-actions"><button class="button small" type="button" data-cut-overlay-action="preview">Ver na prévia</button><button class="button small" type="button" data-cut-overlay-action="front">Trazer para frente</button><button class="button small danger" type="button" data-cut-overlay-action="remove">Remover elemento</button></div></div>`;
-  }
-  function refresh(){renderList();renderControls();onChange();}
+  function refresh(){render();onChange();}
   function add(layer){
     if(layers.length>=20)throw new Error('Use até 20 textos e imagens por vídeo.');
     layers.push({id:crypto.randomUUID(),start:0,end:null,x:.5,y:.1,...layer});selected=layers.at(-1).id;feedback('');refresh();controls.dispatchEvent(new CustomEvent('cut-editor-reveal',{bubbles:true}));
@@ -78,11 +64,10 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
   root.addEventListener('input',event=>{
     const field=event.target.dataset.overlayField,o=current();if(!field||!o)return;
     if(field==='always'){
-      o.start=0;o.end=event.target.checked?null:Math.min(3,getDuration());renderControls();
+      o.start=0;o.end=event.target.checked?null:Math.min(3,getDuration());
     }else if(['text','color','background'].includes(field))o[field]=event.target.value;
     else o[field]=Number(event.target.value)/(['x','y','width'].includes(field)?100:1);
-    const output=root.querySelector(`[data-overlay-output="${field}"]`);if(output)output.textContent=event.target.value+(field==='fontSize'?'':'%');
-    renderList();onChange();
+    render();onChange();
   },{signal});
   const boxes=new Map();
   function paint(ctx,time,duration){
@@ -112,19 +97,19 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     const p=point(event),hit=[...layers].reverse().find(o=>{const b=boxes.get(o.id);return b&&p.x>=b.x&&p.x<=b.x+b.width&&p.y>=b.y&&p.y<=b.y+b.height;});
     if(!hit)return;
     selected=hit.id;drag={id:hit.id,point:p,x:hit.x,y:hit.y,box:boxes.get(hit.id)};preventClick=true;
-    canvas.setPointerCapture(event.pointerId);event.preventDefault();event.stopPropagation();renderList();renderControls();onChange();
+    canvas.setPointerCapture(event.pointerId);event.preventDefault();event.stopPropagation();render();onChange();
   },{signal});
   canvas.addEventListener('pointermove',event=>{
     if(!drag)return;const p=point(event),o=layers.find(o=>o.id===drag.id);if(!o)return;
     o.x=clamp(drag.x+(p.x-drag.point.x)/Math.max(1,canvas.width-drag.box.width));o.y=clamp(drag.y+(p.y-drag.point.y)/Math.max(1,canvas.height-drag.box.height));
-    for(const field of ['x','y']){root.querySelector('#cut-overlay-'+field).value=String(Math.round(o[field]*100));root.querySelector(`[data-overlay-output="${field}"]`).textContent=Math.round(o[field]*100)+'%';}
+    render();
     event.preventDefault();onChange();
   },{signal});
   canvas.addEventListener('pointerup',()=>{drag=null;},{signal});
   canvas.addEventListener('pointercancel',()=>{drag=null;preventClick=false;},{signal});
   canvas.addEventListener('click',event=>{if(preventClick){preventClick=false;event.preventDefault();event.stopImmediatePropagation();}},{capture:true,signal});
   for(const o of layers)if(o.type==='image')imageFor(o.imageId);
-  renderList();renderControls();
+  render();
   return {paint,read(duration){
     if(pending)throw new Error('Aguarde o envio das imagens antes de salvar.');
     for(const o of layers){

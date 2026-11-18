@@ -1,12 +1,24 @@
-export function nativeScheduleFields(value={},esc,prefix='native') {
+export function nativeScheduleModel(value={},prefix='native') {
   const p={maxScheduled:10,uploadsPer24h:10,postsPerDay:2,horizonDays:10,externalScheduled:0,...value};
   const local=iso=>iso?new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(iso)).replace(' ','T'):'';
-  const number=(name,label,max,hint)=>`<div class="form-field"><label for="${prefix}-${name}">${label}</label><input id="${prefix}-${name}" name="${name}" type="number" min="${name==='externalScheduled'?0:1}" max="${max}" value="${esc(p[name])}" required>${hint?`<small>${hint}</small>`:''}</div>`;
-  return `<div class="notice">O lote envia os vídeos antecipadamente. A plataforma publica nos horários da rotina, mesmo com o PC desligado após a confirmação. Os limites abaixo são tetos do sistema; a conta pode permitir menos.</div>
-    <div class="field-row">${number('maxScheduled','Máximo de vídeos agendados',1000,'Inclui a fila reservada e os agendamentos ainda futuros.')}${number('externalScheduled','Agendados fora deste sistema',10000,'Reserve capacidade para vídeos agendados manualmente ou por outras ferramentas.')}</div>
-    <div class="field-row">${number('uploadsPer24h','Máximo de uploads em 24 horas',1000,'Considere o limite da sua conta e a cota da API.')}${number('postsPerDay','Máximo de publicações por dia',100,'Considera o calendário deste sistema, no fuso da rotina.')}</div>
-    ${number('horizonDays','Preparar quantos dias à frente?',prefix==='tiktok'?10:365,prefix==='tiktok'?'TikTok: de 15 minutos a 10 dias de antecedência; o sistema reserva pelo menos 20 minutos.':'A antecedência mínima do sistema é de 15 minutos.')}
-    <div class="field-row"><div class="form-field"><label for="${prefix}-startAt">Publicar a partir de (opcional)</label><input id="${prefix}-startAt" name="startAt" type="datetime-local" value="${esc(local(p.startAt))}"></div><div class="form-field"><label for="${prefix}-endAt">Publicar até (opcional)</label><input id="${prefix}-endAt" name="endAt" type="datetime-local" value="${esc(local(p.endAt))}"></div></div><p class="tip">Datas em America/Sao_Paulo. Ao atingir um teto ou o fim do período, os próximos vídeos aguardam. Alterar ou pausar a rotina não cancela agendamentos já confirmados na plataforma.</p>`;
+  const number=(name,label,max,hint)=>({name,label,min:name==='externalScheduled'?0:1,max,value:p[name],hint});
+  return {
+    notice:'O lote envia os vídeos antecipadamente. A plataforma publica nos horários da rotina, mesmo com o PC desligado após a confirmação. Os limites abaixo são tetos do sistema; a conta pode permitir menos.',
+    groups:[
+      [number('maxScheduled','Máximo de vídeos agendados',1000,'Inclui a fila reservada e os agendamentos ainda futuros.'),number('externalScheduled','Agendados fora deste sistema',10000,'Reserve capacidade para vídeos agendados manualmente ou por outras ferramentas.')],
+      [number('uploadsPer24h','Máximo de uploads em 24 horas',1000,'Considere o limite da sua conta e a cota da API.'),number('postsPerDay','Máximo de publicações por dia',100,'Considera o calendário deste sistema, no fuso da rotina.')],
+      [number('horizonDays','Preparar quantos dias à frente?',prefix==='tiktok'?10:365,prefix==='tiktok'?'TikTok: de 15 minutos a 10 dias de antecedência; o sistema reserva pelo menos 20 minutos.':'A antecedência mínima do sistema é de 15 minutos.')],
+    ],
+    dates:[{name:'startAt',label:'Publicar a partir de (opcional)',value:local(p.startAt)},{name:'endAt',label:'Publicar até (opcional)',value:local(p.endAt)}],
+    tip:'Datas em America/Sao_Paulo. Ao atingir um teto ou o fim do período, os próximos vídeos aguardam. Alterar ou pausar a rotina não cancela agendamentos já confirmados na plataforma.',
+  };
+}
+
+export function nativeScheduleFields(value={},esc,prefix='native') {
+  const model=nativeScheduleModel(value,prefix);
+  const number=field=>`<div class="form-field"><label for="${prefix}-${field.name}">${field.label}</label><input id="${prefix}-${field.name}" name="${field.name}" type="number" min="${field.min}" max="${field.max}" value="${esc(field.value)}" required>${field.hint?`<small>${field.hint}</small>`:''}</div>`;
+  return `<div class="notice">${model.notice}</div>${model.groups.map(group=>group.length>1?`<div class="field-row">${group.map(number).join('')}</div>`:group.map(number).join('')).join('')}
+    <div class="field-row">${model.dates.map(field=>`<div class="form-field"><label for="${prefix}-${field.name}">${field.label}</label><input id="${prefix}-${field.name}" name="${field.name}" type="datetime-local" value="${esc(field.value)}"></div>`).join('')}</div><p class="tip">${model.tip}</p>`;
 }
 export function readNativeSchedule(form) {
   const f=new FormData(form),result={};

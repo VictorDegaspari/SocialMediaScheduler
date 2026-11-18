@@ -2,6 +2,7 @@ node_modules
 .venv-cuts
 **/__pycache__
 dist
+public/build
 .env
 .git
 data

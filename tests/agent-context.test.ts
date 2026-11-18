@@ -27,6 +27,14 @@ test('AST seleciona métodos, closures e handlers em código compacto sem execut
   assert.throws(()=>selectSource(fixture,'fixture.ts','missing'),/Unknown symbol/);
 });
 
+test('AST de componentes Vue preserva símbolos e posições do script sem interpretar o template',()=>{
+  const component='<!-- <script>const phantom=1;</script> --><template><p>{{ title }}</p></template>\n<script setup lang="ts">\nconst title="ação";\nfunction seek(time:number){return time+1;}\n</script>\n<style>p{color:red}</style>';
+  const selection=selectSource(component,'fixture.vue','seek');
+  assert.equal(selection.text,'function seek(time:number){return time+1;}');
+  assert.equal(selection.line,4);
+  assert.deepEqual(indexSource(component,'fixture.vue').symbols.map(symbol=>symbol.label),['title','seek']);
+});
+
 test('outline preserva fronteiras de escopo; pesquisa encontra símbolos internos sem seus corpos',()=>{
   const top=outlineSource(fixture,'fixture.ts');
   assert(top.symbols.some(item=>item.name==='Queue'));

@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
+    "predev": "npm run build:frontend",
     "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
-    "build": "tsc",
+    "dev:frontend": "vite build --watch",
+    "build": "tsc && npm run build:frontend",
+    "build:frontend": "vue-tsc --noEmit -p tsconfig.frontend.json && vite build",
     "start": "node --env-file-if-exists=.env dist/server.js",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.frontend.json",
     "test": "tsx --test tests/*.test.ts",
     "test:integration": "bash scripts/test-integration.sh",
     "test:ui": "bash scripts/test-ui.sh",
@@ -31,6 +34,7 @@
     "luxon": "^3.6.1",
     "pg": "^8.16.0",
     "pino": "^9.7.0",
+    "vue": "^3.5.45",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -38,8 +42,11 @@
     "@types/luxon": "^3.6.2",
     "@types/node": "^22.15.0",
     "@types/pg": "^8.15.0",
+    "@vitejs/plugin-vue": "^6.0.11",
     "playwright-core": "^1.52.0",
     "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vite": "^8.3.8",
+    "vue-tsc": "^3.3.14"
   }
 }

@@ -53,6 +53,9 @@
       "public/cuts-split-layout.js",
       "public/cuts-split-layout.d.ts",
       "public/cuts-overlays.js",
+      "public/components/CutOverlayPanel.vue",
+      "public/components/OverlayRange.vue",
+      "public/components/cuts-overlays-view.ts",
       "public/cuts-overlays-layout.js",
       "public/cuts-overlays-layout.d.ts",
       "src/cuts-overlays.ts"
@@ -86,7 +89,8 @@
     "code": [
       "src/pagination.ts",
       "src/dashboard-lists.ts",
-      "public/pagination.js"
+      "public/pagination.js",
+      "public/components/CollectionPagination.vue"
     ],
     "unit": [
       "tests/pagination.test.ts"
@@ -113,7 +117,15 @@
       "src/request-work.ts",
       "src/video-titles.ts",
       "public/requests-panel.js",
-      "public/requests-view.js",
+      "public/components/RequestsPanel.vue",
+      "public/components/RequestOrders.vue",
+      "public/components/RequestCompose.vue",
+      "public/components/RequestProfiles.vue",
+      "public/components/PublishingProfileForm.vue",
+      "public/components/RequestAccounts.vue",
+      "public/components/request-form.ts",
+      "public/components/request-model.ts",
+      "public/components/requests-view.ts",
       "public/requests.css"
     ],
     "unit": [
@@ -185,7 +197,9 @@
       "src/cadence.ts",
       "src/native-schedule.ts",
       "src/calendar.ts",
-      "public/native-schedule.js"
+      "public/native-schedule.js",
+      "public/native-schedule.d.ts",
+      "public/components/NativeScheduleFields.vue"
     ],
     "unit": [
       "tests/native-schedule.test.ts",
@@ -243,6 +257,16 @@
       "src/native-routes.ts",
       "src/tiktok-login.ts",
       "public/connections-view.js",
+      "public/components/ConnectionsPanel.vue",
+      "public/components/ConnectionTitle.vue",
+      "public/components/ConnectionIcon.ts",
+      "public/components/YoutubeConnection.vue",
+      "public/components/TiktokConnection.vue",
+      "public/components/GoogleConnection.vue",
+      "public/components/PostizConnection.vue",
+      "public/components/connection-form.ts",
+      "public/components/connection-types.ts",
+      "public/components/connections-view.ts",
       "public/connections.css",
       "scripts/assistant.mjs"
     ],
@@ -314,6 +338,8 @@
       "compose.yaml",
       "package.json",
       "tsconfig.json",
+      "tsconfig.frontend.json",
+      "vite.config.ts",
       "requirements-cuts.txt",
       "scripts/start.sh",
       "scripts/stop.sh",

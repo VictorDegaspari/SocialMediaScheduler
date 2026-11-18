@@ -11,7 +11,7 @@ const redisUrl=new URL(process.env.REDIS_URL!);redisUrl.pathname='/8';process.en
 const temp=await mkdtemp(join(tmpdir(),'watcher-request-pages-'));
 process.env.DATA_DIR=join(temp,'data');process.env.LOCAL_MEDIA_DIR=join(temp,'media');process.env.LOCAL_MEDIA_HOST_DIR=process.env.LOCAL_MEDIA_DIR;
 await mkdir(process.env.LOCAL_MEDIA_DIR);
-const {pool,redis,initDb}=await import('../src/db.js');
+const {pool,redis,initDb,setSetting}=await import('../src/db.js');
 const {PublicationRequests,requestRoutes}=await import('../src/publication-requests.js');
 const {BrowserBridge,browserRoutes}=await import('../src/browser-bridge.js');
 const {parsePagination}=await import('../src/pagination.js');
@@ -96,6 +96,7 @@ test('continuação por cursor não repete itens após nova inserção ou remoç
 });
 
 test('histórico do navegador é paginado e a tarefa ativa independe da página consultada',async()=>{
+  await setSetting('playwrightMcpExtension',{extensionToken:'test-extension-token'});
   await seedJobs();
   // Place an active task outside the newest history page.
   await pool.query("UPDATE browser_commands SET status='pending',created_at='2026-01-01' WHERE id=$1",[id(1)]);

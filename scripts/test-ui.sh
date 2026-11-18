@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+./scripts/node-local.sh node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.frontend.json
+./scripts/node-local.sh node_modules/vite/bin/vite.js build
 watcher_media_dir=$(docker compose config --format json | python3 -c "import json,sys; print(next(v['source'] for v in json.load(sys.stdin)['services']['app']['volumes'] if v['target']=='/media/local'))")
 mkdir -p "$watcher_media_dir/.qa-ui-local-001"
 cleanup() {

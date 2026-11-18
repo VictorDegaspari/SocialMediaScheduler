@@ -52,8 +52,21 @@ async function green(){return page.locator('#cut-phone-canvas').evaluate(canvas=
 try{
   await page.goto(base);await page.waitForFunction(()=>document.querySelector('#cut-phone-canvas')?.dataset.seeking==='false');
   await revealEditorControl(page,'#cut-overlays');
-  await page.getByRole('button',{name:'Adicionar texto',exact:true}).click();await page.getByLabel('Texto sobre o vídeo',{exact:true}).fill('Texto fixo 100%');
+  await page.getByRole('button',{name:'Adicionar texto',exact:true}).click();
+  const text=page.getByLabel('Texto sobre o vídeo',{exact:true}),literal='<img src=x onerror=alert(1)> & "ação"';
+  await text.fill(literal);await text.evaluate(e=>e.setSelectionRange(4,4));await text.press('X');
+  assert.equal(await text.inputValue(),literal.slice(0,4)+'X'+literal.slice(4));
+  assert(await text.evaluate(e=>document.activeElement===e&&e.selectionStart===5),'reactive updates preserve focus and the caret');
+  await page.waitForFunction(value=>document.querySelector('.cuts-overlay-item>span:nth-child(2)').textContent.startsWith(value),literal.slice(0,4)+'X'+literal.slice(4));
+  assert.equal(await page.locator('#cut-overlay-list img').count(),0,'overlay text remains literal HTML');
+  await text.fill('Texto fixo 100%');
+  await page.getByRole('tab',{name:'Posição e tamanho',exact:true}).click();
+  await page.getByRole('tab',{name:'Posição e tamanho',exact:true}).press('End');
+  await page.getByRole('checkbox',{name:'Durante todo o vídeo',exact:true}).uncheck();
+  assert.equal(await page.getByRole('tab',{name:'Duração',exact:true}).getAttribute('aria-selected'),'true','editing controls preserves the selected tab');
+  await page.getByRole('checkbox',{name:'Durante todo o vídeo',exact:true}).check();
   await range('#cut-overlay-y',70);await range('#cut-overlay-color','#FF00FF');
+  await revealEditorControl(page,'#cut-overlay-text');
   await page.getByLabel('Texto sobre o vídeo',{exact:true}).focus();
   await page.evaluate(async base64=>{const data=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));await navigator.clipboard.write([new ClipboardItem({'image/png':new Blob([data],{type:'image/png'})})]);},png.toString('base64'));
   await page.keyboard.press('Control+V');await page.getByText('Imagem adicionada. Ajuste a posição e a duração.',{exact:true}).waitFor();
@@ -71,6 +84,7 @@ try{
   const saved=await page.evaluate(()=>window.saved);assert.equal(saved.overlays.length,2);assert.equal(saved.overlays[0].text,'Texto fixo 100%');assert.equal(saved.overlays[0].end,null);assert.equal(saved.overlays[1].start,.5);assert.equal(saved.overlays[1].end,1.5);assert(saved.overlays[1].x>.5);assert.equal(saved.start,1);assert.deepEqual(saved.excludedRanges,[{start:3,end:4}]);
   await page.evaluate(overlays=>window.reopen(overlays),saved.overlays);await page.waitForFunction(()=>document.querySelector('#cut-phone-canvas').dataset.seeking==='false');
   await revealEditorControl(page,'#cut-overlay-text');
+  assert.deepEqual(await page.evaluate(()=>window.editor.read().overlays),saved.overlays,'reopening preserves the complete overlay payload');
   assert.equal(await page.locator('.cuts-overlay-item').count(),2);assert.equal(await page.getByLabel('Texto sobre o vídeo',{exact:true}).inputValue(),'Texto fixo 100%');assert(imageGets>=1);assert.equal(uploads,1,'reopening reuses the saved image');
   await page.getByRole('button',{name:/Imagem.*0.5 s/}).click();await revealEditorControl(page,'#cut-overlay-end');await page.getByLabel('Some em (segundos)').fill('99');
   const error=await page.evaluate(()=>{try{window.editor.read();return null;}catch(e){return e.message;}});assert.match(error,/duração final/);

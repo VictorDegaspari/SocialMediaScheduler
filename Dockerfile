@@ -3,9 +3,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY tsconfig.json ./
+COPY tsconfig.frontend.json vite.config.ts ./
 COPY src ./src
-COPY public/cuts-split-layout.js public/cuts-split-layout.d.ts ./public/
-COPY public/cuts-overlays-layout.js public/cuts-overlays-layout.d.ts ./public/
+COPY public ./public
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22.23.4-bookworm-slim
@@ -18,6 +18,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 COPY public ./public
+COPY --from=build /app/public/build ./public/build
 COPY scripts/transcribe-cuts.py ./scripts/transcribe-cuts.py
 RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node

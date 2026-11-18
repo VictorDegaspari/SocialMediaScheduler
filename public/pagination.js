@@ -30,11 +30,16 @@ export function resetEmptyPages(state){
   return changed;
 }
 
-export function renderPagination(meta,scope,esc){
-  if(!meta)return '';
+export function paginationView(meta,scope){
+  if(!meta)return null;
   const current=history(scope);
-  if(!current.index&&!meta.hasMore)return '';
-  return `<nav class="pagination" aria-label="Paginação: ${esc(scope)}"><button type="button" class="button small" data-pagination-scope="${esc(scope)}" data-pagination-direction="prev" ${current.index?'':'disabled'}>← Anterior</button><span class="pagination-label" aria-live="polite">Página ${current.index+1}</span><button type="button" class="button small" data-pagination-scope="${esc(scope)}" data-pagination-direction="next" data-pagination-cursor="${esc(meta.nextCursor||'')}" ${meta.hasMore&&meta.nextCursor?'':'disabled'}>Próxima →</button></nav>`;
+  if(!current.index&&!meta.hasMore)return null;
+  return {page:current.index+1,previousDisabled:!current.index,nextDisabled:!(meta.hasMore&&meta.nextCursor),cursor:meta.nextCursor||''};
+}
+
+export function renderPagination(meta,scope,esc){
+  const page=paginationView(meta,scope);if(!page)return '';
+  return `<nav class="pagination" aria-label="Paginação: ${esc(scope)}"><button type="button" class="button small" data-pagination-scope="${esc(scope)}" data-pagination-direction="prev" ${page.previousDisabled?'disabled':''}>← Anterior</button><span class="pagination-label" aria-live="polite">Página ${page.page}</span><button type="button" class="button small" data-pagination-scope="${esc(scope)}" data-pagination-direction="next" data-pagination-cursor="${esc(page.cursor)}" ${page.nextDisabled?'disabled':''}>Próxima →</button></nav>`;
 }
 
 export function bindPagination({refresh,toast}){

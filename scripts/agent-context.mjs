@@ -1,18 +1,29 @@
 import ts from 'typescript';
+import {parse as parseVue} from 'vue/compiler-sfc';
 import {readFile,realpath,readdir} from 'node:fs/promises';
 import {resolve,relative,extname,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const maxOutput=32_000,defaultOutput=6_000;
-const codeExtensions=new Set(['.ts','.js','.mjs']);
-const rootFiles=new Set(['AGENTS.md','README.md','package.json','tsconfig.json','compose.yaml','Dockerfile','.gitignore','.dockerignore','requirements-cuts.txt']);
+const codeExtensions=new Set(['.ts','.js','.mjs','.vue']);
+const rootFiles=new Set(['AGENTS.md','README.md','package.json','tsconfig.json','tsconfig.frontend.json','vite.config.ts','compose.yaml','Dockerfile','.gitignore','.dockerignore','requirements-cuts.txt']);
 const sourceRoots=new Set(['src','public','scripts','tests','docs','website']);
-const textExtensions=new Set(['.ts','.js','.mjs','.json','.md','.css','.html','.svg','.sh','.py','.yaml','.yml','.txt']);
+const textExtensions=new Set(['.ts','.js','.mjs','.vue','.json','.md','.css','.html','.svg','.sh','.py','.yaml','.yml','.txt']);
 const help='ctx map [area] | outline file[#symbol] [--match=text] | show file[#symbol] | checks area | check\nOutput cap: --max-chars=6000 (max 32000). AST inspection never imports application code.';
 
 export function indexSource(text,filename){
-  const source=ts.createSourceFile(filename,text,ts.ScriptTarget.Latest,true),symbols=[];
+  let script=text;
+  if(extname(filename)==='.vue'){
+    // Mask markup without moving the script's source offsets or line numbers.
+    script=text.replace(/[^\r\n]/g,' ');
+    const {descriptor}=parseVue(text,{filename});
+    for(const block of [descriptor.script,descriptor.scriptSetup].filter(Boolean)){
+      const start=block.loc.start.offset;
+      script=script.slice(0,start)+block.content+script.slice(start+block.content.length);
+    }
+  }
+  const source=ts.createSourceFile(filename,script,ts.ScriptTarget.Latest,true,extname(filename)==='.vue'?ts.ScriptKind.TS:undefined),symbols=[];
   function visit(node,parent=null){
     let name;
     if(ts.isFunctionDeclaration(node)||ts.isClassDeclaration(node)||ts.isInterfaceDeclaration(node)||ts.isTypeAliasDeclaration(node)||ts.isEnumDeclaration(node))name=node.name?.getText(source)||'default';
@@ -81,6 +92,7 @@ function areaOf(areas,name){if(!Object.hasOwn(areas,name))throw new Error('Unkno
 
 export function checkCommands(area){
   const commands=['./scripts/node-local.sh node_modules/typescript/bin/tsc --noEmit'];
+  if(area.ui.length)commands.push('./scripts/node-local.sh node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.frontend.json','./scripts/node-local.sh node_modules/vite/bin/vite.js build');
   if(area.unit.length)commands.push('./scripts/node-local.sh --test '+area.unit.join(' '));
   if(area.integration.length)commands.push('./scripts/test-integration.sh '+area.integration.join(' '));
   const fullUi=area.ui.some(script=>['scripts/check-ui.mjs','scripts/check-native-ui.mjs'].includes(script));
@@ -101,7 +113,7 @@ async function checkManifest(areas){
   async function walk(dir){
     for(const entry of await readdir(resolve(root,dir),{withFileTypes:true})){
       const path=dir+'/'+entry.name;
-      if(entry.isDirectory()&&!entry.name.startsWith('.'))await walk(path);
+      if(entry.isDirectory()&&!entry.name.startsWith('.')&&path!=='public/build')await walk(path);
       else if(entry.isFile()&&codeExtensions.has(extname(entry.name))&&!files.has(path))throw new Error('Unmapped source: '+path);
     }
   }
@@ -134,7 +146,7 @@ export async function run(args){
       const selection=selector?selectSource(file.text,file.path,selector):{text:file.text,line:1};
       output=`${file.path}:${selection.line}${selector?' #'+selector:''}\n${selection.text}`;
     }else{
-      if(!codeExtensions.has(extname(file.path)))throw new Error('Outline supports TS/JS/MJS; use show for other source files.');
+      if(!codeExtensions.has(extname(file.path)))throw new Error('Outline supports TS/JS/MJS/Vue script; use show for other source files.');
       const outline=outlineSource(file.text,file.path,{selector,match:flags.match});
       output=[file.path+(selector?' #'+selector:''),...(outline.imports.length?['imports: '+outline.imports.join(' ')]:[]),...outline.symbols.map(item=>`${item.name} L${item.line}-${item.endLine} ${item.end-item.start}ch`)].join('\n');
     }

@@ -1,56 +1,32 @@
-import {readNativeSchedule} from './native-schedule.js';
-import {resetPagination} from './pagination.js';
-import {requestActions,requestList,requestForm,requestProfiles,requestAccounts} from './requests-view.js';
+import {mountRequestsView,requestViews as views} from './build/requests-view.js';
+import {nativeScheduleModel,readNativeSchedule} from './native-schedule.js';
+import {paginationView,resetPagination} from './pagination.js';
 
-let editing=null,view='orders';
+let editing=null,view='orders',mounted=null;
 const clearedForms=new Set();
-const views=[['orders','Pedidos'],['profiles','Perfis'],['accounts','Contas']];
+const schedule=nativeScheduleModel({},'request');
 
-export function renderRequests(state,helpers) {
-  const p=state.publishing;if(!p)return '<p>Reinicie o serviço para carregar os pedidos.</p>';
-  return `<div id="requests-panel"><div class="page-head requests-page-head"><div><h1>Pedidos e contas</h1><p class="subtitle">Agende seus vídeos e acompanhe os pedidos.</p></div></div>
-    <div class="requests-tabs" role="tablist" aria-label="Pedidos e contas">${views.map(([id,label])=>`<button type="button" role="tab" id="requests-tab-${id}" aria-controls="requests-view-${id}" aria-selected="${view===id}" tabindex="${view===id?'0':'-1'}" data-requests-view="${id}">${label}${id==='profiles'?`<span class="requests-tab-count">${p.profiles.length}</span>`:''}</button>`).join('')}</div>
-    <section id="requests-view-orders" role="tabpanel" aria-labelledby="requests-tab-orders" ${view!=='orders'?'hidden':''}><div class="requests-layout"><div class="requests-main">${requestActions(p,helpers)}${requestList(p,helpers)}</div>${requestForm(p,helpers,!!state.connections.playwrightMcp?.configured)}</div></section>
-    <section id="requests-view-profiles" role="tabpanel" aria-labelledby="requests-tab-profiles" ${view!=='profiles'?'hidden':''}>${requestProfiles(state,editing,helpers)}</section>
-    <section id="requests-view-accounts" role="tabpanel" aria-labelledby="requests-tab-accounts" ${view!=='accounts'?'hidden':''}>${requestAccounts(state,helpers)}</section></div>`;
+export function renderRequests(state) {
+  return state.publishing?'<div id="requests-panel"></div>':'<p>Reinicie o serviço para carregar os pedidos.</p>';
 }
 
-// Polling also refreshes orders while forms and expanded details keep their state.
-export function updateRequests(state,helpers) {
-  const panel=document.querySelector('#requests-panel'),drafts=[];
-  for(const form of panel.querySelectorAll('form')) {
-    if(clearedForms.has(form.id))continue;
-    if(form.id==='publishing-profile-form'&&form.dataset.profileId!==(editing||''))continue;
-    drafts.push({id:form.id,fields:Array.from(form.elements).filter(e=>e.name).map(e=>({name:e.name,type:e.type,value:e.value,checked:e.checked}))});
-  }
-  const details=Array.from(panel.querySelectorAll('details')).map(e=>({id:e.id,open:e.open}));
-  const keepProfile=drafts.some(f=>f.id==='publishing-profile-form');
-  const active=document.activeElement,focusId=panel.contains(active)?active.id:null;
-  panel.outerHTML=renderRequests(state,helpers);
-  for(const draft of drafts) {
-    const form=document.getElementById(draft.id);if(!form)continue;
-    for(const field of draft.fields) {
-      const input=Array.from(form.elements).find(e=>e.name===field.name&&(field.type!=='checkbox'||e.value===field.value));
-      if(!input)continue;
-      if(field.type==='checkbox')input.checked=field.checked;
-      else if(input.tagName!=='SELECT'||Array.from(input.options).some(o=>o.value===field.value))input.value=field.value;
-    }
-  }
-  for(const {id,open} of details) {
-    if(['profile-editor','profile-defaults'].includes(id)&&!keepProfile)continue;
-    const detail=document.getElementById(id);if(detail)detail.open=open;
-  }
-  clearedForms.clear();syncProfileSource();
-  if(focusId)document.getElementById(focusId)?.focus({preventScroll:true});
+export function updateRequests(state,{date}) {
+  const root=document.querySelector('#requests-panel');if(!root)return;
+  if(!state.publishing){destroyRequests();root.outerHTML=renderRequests(state);return;}
+  const profileForm=root.querySelector('#publishing-profile-form');
+  if(profileForm&&profileForm.dataset.profileId!==(editing||''))clearedForms.add('publishing-profile-form');
+  const pagination={requests:paginationView(state.publishing.pagination?.requests,'requests'),actions:paginationView(state.publishing.pagination?.actions,'actions')};
+  const next={state,editing,view,pagination,schedule,date};
+  if(mounted?.root!==root){destroyRequests();mounted={root,...mountRequestsView(root,next)};syncProfileSource();}
+  else void mounted.update(next,[...clearedForms]).then(syncProfileSource);
+  clearedForms.clear();
 }
+
+export function destroyRequests(){mounted?.destroy();mounted=null;}
 
 function selectView(next) {
   if(!views.some(([id])=>id===next))return;
-  view=next;
-  for(const tab of document.querySelectorAll('#requests-panel [role=tab]')) {
-    const selected=tab.dataset.requestsView===view;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;
-  }
-  for(const panel of document.querySelectorAll('#requests-panel [role=tabpanel]'))panel.hidden=panel.id!=='requests-view-'+view;
+  view=next;mounted?.selectView(next);
 }
 
 function syncProfileSource() {

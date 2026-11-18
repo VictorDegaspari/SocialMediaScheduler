@@ -22,7 +22,7 @@ const root=resolve('public'),server=createServer(async(req,res)=>{
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const base='http://127.0.0.1:'+server.address().port;
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
-const page=await browser.newPage({viewport:{width:1440,height:1100}});page.setDefaultTimeout(10_000);
+const page=await browser.newPage({viewport:{width:1440,height:1100}});page.setDefaultTimeout(Number(process.env.UI_TIMEOUT_MS||10_000));
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('status of 503'))errors.push(m.text());});
 await page.addInitScript(()=>{
   const interval=window.setInterval.bind(window);
@@ -50,8 +50,9 @@ await page.route('**/api/**',async route=>{
   await route.fulfill({json:{ok:true}});
 });
 async function poll(){
-  await page.evaluate(()=>{document.activeElement.blur();document.querySelector('#connections-panel').dataset.qaPending='1';window.__qaPoll();});
-  await page.locator('#connections-panel:not([data-qa-pending])').waitFor();
+  const waiting=++fixture.scheduler.queue.waiting;
+  await page.evaluate(()=>{document.activeElement.blur();window.__qaPoll();});
+  await page.waitForFunction(waiting=>document.querySelector('.queue-status')?.textContent.includes(`${waiting} aguardando`),waiting);
 }
 async function saveEngine(engine){
   await page.getByLabel('Quem gerencia as publicações?').selectOption(engine);
@@ -82,7 +83,10 @@ try{
   await page.locator('#youtube-form [name=autoPublishApproved]').uncheck();
   await page.getByText('Credenciais do Google Drive',{exact:true}).click();
   await page.getByLabel('Client ID',{exact:true}).fill('updated-drive');await page.getByLabel('Client Secret',{exact:true}).fill('fake-draft-secret');
+  const driveInput=await page.locator('#client-id').elementHandle(),youtubeForm=await page.locator('#youtube-form').elementHandle();
   await page.getByText('Credenciais do Google Drive',{exact:true}).click();await poll();
+  assert(await driveInput.evaluate(input=>input===document.querySelector('#client-id')),'polling retains the existing credential input');
+  assert(await youtubeForm.evaluate(form=>form===document.querySelector('#youtube-form')),'polling retains the native form and its pending submit state');
   assert.equal(await page.getByLabel('Client ID do YouTube',{exact:true}).inputValue(),'updated-youtube');
   assert.equal(await page.getByLabel('Client ID',{exact:true}).inputValue(),'updated-drive');
   assert.equal(await page.getByLabel('Client Secret',{exact:true}).inputValue(),'fake-draft-secret','unsaved credentials survive polling');
@@ -101,6 +105,12 @@ try{
   assert(await page.locator('#youtube-form [name=autoPublishApproved]').isChecked(),'unedited fields reflect remote state');
 
   await page.getByText('Configurações avançadas',{exact:true}).click();
+  const beforeEngineDraft=calls.length;
+  await page.getByLabel('Quem gerencia as publicações?').selectOption('postiz');await poll();
+  assert.equal(await page.getByLabel('Quem gerencia as publicações?').inputValue(),'postiz','polling preserves an unsaved engine selection');
+  assert(await page.getByRole('heading',{name:'YouTube',exact:true}).isVisible(),'an unsaved selection does not change the publishing engine');
+  await page.getByLabel('Quem gerencia as publicações?').selectOption('local');await poll();
+  assert.equal(calls.length,beforeEngineDraft,'editing the engine selector does not save or authorize anything');
   const extensionInput=page.getByLabel('PLAYWRIGHT_MCP_EXTENSION_TOKEN',{exact:true});
   assert.equal(await extensionInput.getAttribute('type'),'password');await extensionInput.fill('fake-playwright-extension-token');
   await poll();assert.equal(await extensionInput.inputValue(),'fake-playwright-extension-token','polling preserves the token draft');
@@ -139,6 +149,11 @@ try{
   await page.getByRole('button',{name:'Configurar YouTube',exact:true}).click();assert(await page.getByLabel('Client ID do YouTube',{exact:true}).isVisible());
   await page.getByRole('button',{name:'Configurar Google Drive',exact:true}).click();assert(await page.getByLabel('Client ID',{exact:true}).isVisible());
   assert(await page.getByText('Nenhuma conta adicionada',{exact:true}).isVisible());
+  await page.getByLabel('Client Secret',{exact:true}).fill('fake-navigation-draft');
+  await page.locator('.sidebar').getByRole('link',{name:'Pedidos e contas',exact:true}).click();await page.getByRole('heading',{name:'Pedidos e contas',exact:true}).waitFor();
+  await page.locator('.sidebar').getByRole('link',{name:'Conexões',exact:true}).click();await page.getByRole('heading',{name:'Conexões',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('Client Secret',{exact:true}).inputValue(),'','leaving and reopening connections discards unsaved secrets');
   assert.deepEqual(errors,[]);
   console.log('Conexões: status, áreas recolhidas, contas, credenciais, polling, falha/retry, troca de motor, canais, desconexão e telas móveis validados com APIs simuladas.');
-}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
+}catch(error){console.error({errors});throw error;}
+finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
