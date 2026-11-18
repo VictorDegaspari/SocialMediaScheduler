@@ -3,6 +3,7 @@ import { AppError } from './config.js';
 import type { Cue } from './cuts-media.js';
 
 export const captionStyleSchema=z.object({
+  enabled:z.boolean().default(true),
   fontSize:z.number().int().min(24).max(80).default(42),
   color:z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#FFFFFF'),
   highlightColor:z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#FFE600'),
@@ -12,11 +13,14 @@ export const captionStyleSchema=z.object({
   animation:z.enum(['none','fade','pop','karaoke']).default('none')
 });
 export type CaptionStyle=z.infer<typeof captionStyleSchema>;
+export const cutFormatSchema=z.enum(['shorts','video']);
+export type CutFormat=z.infer<typeof cutFormatSchema>;
 export const framingOptionsSchema=z.object({
+  format:cutFormatSchema.default('shorts'),
   mode:z.enum(['fit','blur','crop']).default('fit'),
   focusX:z.number().finite().min(0).max(1).default(0.5),
   focusY:z.number().finite().min(0).max(1).default(0.5),
-  zoom:z.number().finite().min(1).max(3).default(1)
+  zoom:z.number().finite().min(0.25).max(3).default(1)
 });
 export type FramingOptions=z.infer<typeof framingOptionsSchema>;
 export const timeRangeSchema=z.object({start:z.number().finite().min(0),end:z.number().finite().positive()});

@@ -78,7 +78,8 @@ export async function downloadCutSource(url:string,dir:string):Promise<SourceInf
     const duration=Number(metadata.duration);
     if(metadata._type==='playlist'||metadata.entries||metadata.is_live||['is_live','is_upcoming'].includes(metadata.live_status))throw new AppError('Use um vídeo gravado. Playlists e transmissões ao vivo não são aceitas.');
     if(!Number.isFinite(duration)||duration<=0||duration>MAX_SOURCE_SECONDS)throw new AppError('O vídeo de origem precisa ter duração conhecida de até 2 horas.');
-    await command(python(),[...base,'--match-filters','duration <= 7200 & !is_live','--max-filesize',String(MAX_SOURCE_BYTES),'--concurrent-fragments','1','--format','bv[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv[height<=1080]+ba/b[height<=1080]','--merge-output-format','mp4','--remux-video','mp4','--output','source.download.%(ext)s','--',canonical],{cwd:dir,timeout:45*60_000,maxDirBytes:MAX_SOURCE_BYTES});
+    // Select quality before container compatibility; remuxing keeps both streams intact.
+    await command(python(),[...base,'--match-filters','duration <= 7200 & !is_live','--max-filesize',String(MAX_SOURCE_BYTES),'--concurrent-fragments','1','--format','bv+ba/b','--merge-output-format','mp4','--remux-video','mp4','--output','source.download.%(ext)s','--',canonical],{cwd:dir,timeout:45*60_000,maxDirBytes:MAX_SOURCE_BYTES});
     const downloaded=join(dir,'source.download.mp4');
     if((await stat(downloaded)).size>MAX_SOURCE_BYTES)throw new AppError('O vídeo excedeu o limite de download de 2 GiB.');
     const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type','-of','json',downloaded],{timeout:30_000}));
@@ -225,8 +226,9 @@ function alignedWords(cue:Cue):NonNullable<Cue['words']>|undefined {
 }
 
 /** Build timed dialogue from recognized words; missing alignment stays static. */
-function captionAss(captions:Cue[],style:CaptionStyle):{ass:string;warnings:string[]} {
+function captionAss(captions:Cue[],style:CaptionStyle,output:{width:number;height:number}):{ass:string;warnings:string[]} {
   const alignment={bottom:2,middle:5,top:8}[style.position];
+  const scale=output.height/1280;
   const lines:string[]=[],warnings:string[]=[];
   const write=(start:number,end:number,text:string)=>{
     if(end-start<0.005)return;
@@ -256,17 +258,33 @@ function captionAss(captions:Cue[],style:CaptionStyle):{ass:string;warnings:stri
       style.animation==='pop'?`{\\fscx85\\fscy85\\t(0,${Math.min(140,Math.floor(durationMs/2))},\\fscx100\\fscy100)\\fad(${Math.min(40,fadeIn)},${fadeOut})}`:'';
     write(cue.start,cue.end,animation+text);
   }
-  const ass=`[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,DejaVu Sans,${style.fontSize},${assColor(style.color)},${assColor(style.highlightColor)},${assColor(style.outlineColor,style.background==='box'?'50':'00')},&H70000000,-1,0,0,0,100,100,0,0,${style.background==='box'?3:1},${style.background==='box'?8:3},${style.background==='box'?0:1},${alignment},48,48,${style.position==='middle'?0:190},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`+lines.join('\n')+'\n';
+  const ass=`[Script Info]\nScriptType: v4.00+\nPlayResX: ${output.width}\nPlayResY: ${output.height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,DejaVu Sans,${style.fontSize*scale},${assColor(style.color)},${assColor(style.highlightColor)},${assColor(style.outlineColor,style.background==='box'?'50':'00')},&H70000000,-1,0,0,0,100,100,0,0,${style.background==='box'?3:1},${(style.background==='box'?8:3)*scale},${(style.background==='box'?0:1)*scale},${alignment},${48*output.width/720},${48*output.width/720},${style.position==='middle'?0:190*scale},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`+lines.join('\n')+'\n';
   return {ass,warnings};
 }
 
-/** Crop before upscaling: a large zoom does not allocate a huge intermediate. */
-function mobileCrop(width:number,height:number,options:FramingOptions) {
-  const cropHeight=Math.max(2,Math.floor(Math.min(height,width*1280/720)/options.zoom/2)*2);
-  const cropWidth=Math.max(2,Math.floor(cropHeight*720/1280/2)*2);
+/** Crop before scaling, then pad at output size when the viewport exceeds the source. */
+function outputCrop(width:number,height:number,options:FramingOptions,output:{width:number;height:number}) {
+  const zoom=options.mode==='blur'?Math.max(1,options.zoom):options.zoom;
+  const viewportHeight=Math.max(2,Math.floor(Math.min(height,width*output.height/output.width)/zoom/2)*2);
+  const viewportWidth=Math.max(2,Math.floor(viewportHeight*output.width/output.height/2)*2);
+  const cropHeight=Math.max(2,Math.floor(Math.min(height,viewportHeight)/2)*2);
+  const cropWidth=Math.max(2,Math.floor(Math.min(width,viewportWidth)/2)*2);
   const x=Math.max(0,Math.floor((width-cropWidth)*options.focusX/2)*2);
   const y=Math.max(0,Math.floor((height-cropHeight)*options.focusY/2)*2);
-  return `crop=${cropWidth}:${cropHeight}:${x}:${y},scale=720:1280,setsar=1`;
+  const scaledWidth=Math.max(2,Math.round(cropWidth*output.width/viewportWidth/2)*2);
+  const scaledHeight=Math.max(2,Math.round(cropHeight*output.height/viewportHeight/2)*2);
+  const padX=Math.floor((output.width-scaledWidth)*options.focusX/2)*2;
+  const padY=Math.floor((output.height-scaledHeight)*options.focusY/2)*2;
+  return `crop=${cropWidth}:${cropHeight}:${x}:${y},scale=${scaledWidth}:${scaledHeight}:flags=lanczos,pad=${output.width}:${output.height}:${padX}:${padY}:color=black,setsar=1`;
+}
+
+function sourceFrameRate(stream:{avg_frame_rate?:string;r_frame_rate?:string}) {
+  for(const rate of [stream.avg_frame_rate,stream.r_frame_rate]) {
+    if(!rate||!/^\d+(\/\d+)?$/.test(rate))continue;
+    const [numerator,denominator=1]=rate.split('/').map(Number),fps=numerator/denominator;
+    if(Number.isFinite(fps)&&fps>0)return {rate,fps};
+  }
+  return {rate:'30',fps:30};
 }
 
 export type RenderCutInput={
@@ -288,43 +306,48 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
   }
   const relative=timelineCaptions(captions,parts);
   if(!relative.length)throw new AppError('O trecho precisa conter fala e legendas. Ajuste o início ou o fim.');
-  const {ass,warnings}=captionAss(relative,style);
   const assName=`${clipId}.ass`,partialName=`${clipId}.rendering.mp4`,path=join(dir,`${clipId}.mp4`);
-  await writeFile(join(dir,assName),ass,'utf8');
   try {
-    const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type,width,height:stream_tags=rotate:stream_side_data_list','-of','json','source.mp4'],{cwd:dir,timeout:30_000}));
+    const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type,width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate:stream_side_data_list','-of','json','source.mp4'],{cwd:dir,timeout:30_000}));
     const sourceVideo=probe.streams?.find((s:{codec_type:string})=>s.codec_type==='video');
     const rotation=Math.abs(Number(sourceVideo?.side_data_list?.find((d:{rotation?:number})=>d.rotation!==undefined)?.rotation||sourceVideo?.tags?.rotate||0))%180;
     const width=rotation===90?sourceVideo?.height:sourceVideo?.width,height=rotation===90?sourceVideo?.width:sourceVideo?.height;
     if(!width||!height||!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio')||end>Number(probe.format?.duration)+0.05)throw new AppError('O intervalo escolhido ultrapassa o vídeo ou a origem não contém imagem e áudio.');
-    const crop=mobileCrop(width,height,framing);
-    const fit='scale=720:1280:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1';
+    // Full HD is the floor; higher-resolution sources retain their shorter edge.
+    // Multiples of 9 and 16 keep the canvas exact and both dimensions even.
+    const unit=Math.max(120,Math.ceil(Math.min(width,height)/18)*2);
+    const output=framing.format==='video'?{width:16*unit,height:9*unit}:{width:9*unit,height:16*unit};
+    const {rate,fps}=sourceFrameRate(sourceVideo);
+    const {ass,warnings}=style.enabled?captionAss(relative,style,output):{ass:'',warnings:[]};
+    if(style.enabled)await writeFile(join(dir,assName),ass,'utf8');
+    const crop=outputCrop(width,height,framing,output);
+    const fit=`scale=${output.width}:${output.height}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${output.width}:${output.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`;
     const args=['-nostdin','-hide_banner','-loglevel','error','-y'];
     const graph:string[]=[],labels:string[]=[];
     for(let i=0;i<parts.length;i++) {
       const length=parts[i].end-parts[i].start;
-      const frames=Math.max(2,Math.ceil(length*30-1e-7));
+      const frames=Math.max(2,Math.ceil(length*fps-1e-7));
       // Separate seeks skip removed spans even when they are many minutes long.
       // Decoder/filter thread counts keep the maximum 21 inputs bounded.
-      args.push('-threads','1','-ss',String(parts[i].start),'-t',String(length+0.05),'-i','source.mp4');
+      args.push('-threads','1','-ss',String(parts[i].start),'-t',String(length+Math.max(0.05,1/fps)),'-i','source.mp4');
       // concat extrapolates a video's duration from its mean frame interval.
       // Give every part its exact timeline duration before joining, otherwise
       // fractional-frame trims would pad audio and accumulate an AV offset.
-      const base=`[${i}:v:0]trim=duration=${length},setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop_duration=0.1,trim=end_frame=${frames},settb=AVTB,setpts=N*${length/frames}/TB`;
+      const base=`[${i}:v:0]trim=duration=${length},setpts=PTS-STARTPTS,fps=${rate},tpad=stop_mode=clone:stop_duration=${Math.max(0.1,2/fps)},trim=end_frame=${frames},settb=AVTB,setpts=N*${length/frames}/TB`;
       if(framing.mode==='blur') {
         graph.push(`${base},split=2[bg${i}][fg${i}]`);
         graph.push(`[bg${i}]${crop},boxblur=20:2[blur${i}]`);
-        graph.push(`[fg${i}]scale=720:1280:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[front${i}]`);
+        graph.push(`[fg${i}]scale=${output.width}:${output.height}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[front${i}]`);
         graph.push(`[blur${i}][front${i}]overlay=(W-w)/2:(H-h)/2:shortest=1,format=yuv420p[v${i}]`);
       } else graph.push(`${base},${framing.mode==='crop'?crop:fit},format=yuv420p[v${i}]`);
       graph.push(`[${i}:a:0]atrim=duration=${length},asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad=pad_dur=0.1,atrim=end_sample=${Math.round(length*48000)},asetpts=N/SR/TB[a${i}]`);
       labels.push(`[v${i}][a${i}]`);
     }
     graph.push(`${labels.join('')}concat=n=${parts.length}:v=1:a=1[editedv][editeda]`);
-    graph.push(`[editedv]fps=30,ass=${assName}[outv]`);
-    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p','-r','30','-threads','2','-c:a','aac','-b:a','128k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
-    await command('ffmpeg',args,{cwd:dir,timeout:20*60_000});
-    const actual=await validateVideo(join(dir,partialName));
+    graph.push(`[editedv]fps=${rate}${style.enabled?`,ass=${assName}`:''}[outv]`);
+    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset','slow','-crf','16','-pix_fmt','yuv420p','-r',rate,'-threads','2','-c:a','aac','-b:a','320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
+    await command('ffmpeg',args,{cwd:dir,timeout:60*60_000});
+    const actual=await validateVideo(join(dir,partialName),framing.format);
     if(Math.abs(actual.duration-duration)>0.5)throw new AppError('A duração renderizada não corresponde aos trechos mantidos. Confira os tempos do corte.');
     await rename(join(dir,partialName),path);
     return {path,warnings};

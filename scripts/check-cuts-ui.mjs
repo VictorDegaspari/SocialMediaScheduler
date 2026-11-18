@@ -13,7 +13,7 @@ import {replayTimeAt} from '../public/cuts-replay.js';
 const publicRoot=resolve('public'),temp=await mkdtemp(join(tmpdir(),'watcher-cuts-ui-'));
 await promisify(execFile)('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=red:s=180x320:r=30:d=180','-vf',"drawbox=c=green:t=fill:enable='gte(t,60)*lt(t,120)',drawbox=c=blue:t=fill:enable='gte(t,120)'",'-c:v','libx264','-preset','ultrafast','-threads','2','-pix_fmt','yuv420p','-movflags','+faststart',join(temp,'preview.mp4')]);
 const media=await readFile(join(temp,'preview.mp4'));
-const server=createServer(async(req,res)=>{try{const pathname=new URL(req.url,'http://localhost').pathname,filename=resolve(publicRoot,'.'+(pathname==='/'?'/index.html':pathname));if(!filename.startsWith(publicRoot+'/'))throw new Error('not found');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[extname(filename)]||'application/octet-stream');res.end(await readFile(filename));}catch{res.statusCode=404;res.end();}});
+const server=createServer(async(req,res)=>{try{const url=new URL(req.url,'http://localhost'),pathname=url.pathname;if(pathname==='/api/cuts/'+clipId+'/media'&&url.searchParams.get('download')==='1'){res.setHeader('Content-Type','video/mp4');res.setHeader('Content-Disposition','attachment; filename="corte.mp4"');res.end(media);return;}const filename=resolve(publicRoot,'.'+(pathname==='/'?'/index.html':pathname));if(!filename.startsWith(publicRoot+'/'))throw new Error('not found');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[extname(filename)]||'application/octet-stream');res.end(await readFile(filename));}catch{res.statusCode=404;res.end();}});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const base='http://127.0.0.1:'+server.address().port;
 const jobId='11111111-1111-4111-8111-111111111111',clipId='22222222-2222-4222-8222-222222222222',channelId='native:youtube:qa';
@@ -34,7 +34,7 @@ function statePage(url){
   return {...fixture,cuts:{...fixture.cuts,jobs:pageJobs,pagination:{limit,hasMore,nextCursor}}};
 }
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
-const page=await browser.newPage({viewport:{width:1440,height:1050}});
+const page=await browser.newPage({viewport:{width:1440,height:1050},acceptDownloads:true});
 page.on('pageerror',error=>errors.push(error.message));
 // Distinct temporal colors prove the canvas holds the decoded selected frame,
 // rather than merely copying currentTime before the asynchronous seek finishes.
@@ -42,7 +42,7 @@ async function phoneAt(sourceTime,color){
   await page.waitForFunction(({sourceTime,color})=>{
     const canvas=document.querySelector('#cut-phone-canvas');
     if(!canvas||canvas.dataset.seeking!=='false'||Math.abs(Number(canvas.dataset.sourceTime)-sourceTime)>.05)return false;
-    const [red,green,blue]=canvas.getContext('2d').getImageData(360,640,1,1).data;
+    const [red,green,blue]=canvas.getContext('2d').getImageData(canvas.width/2,canvas.height/2,1,1).data;
     return color==='blue'?blue>150&&red<60:color==='green'?green>80&&red<60:red>150&&blue<60;
   },{sourceTime,color});
 }
@@ -53,6 +53,7 @@ async function seekPhone(outputTime){
 await page.route('**/api/**',async route=>{
   const request=route.request(),url=new URL(request.url()),path=url.pathname;
   if(path==='/api/state'){polls++;stateRequests.push(url);return route.fulfill({json:statePage(url)});}
+  if(path==='/api/cuts/'+clipId+'/media'&&url.searchParams.get('download')==='1')return route.continue();
   if(path.endsWith('/source')||path.endsWith('/media')){
     const range=request.headers().range?.match(/^bytes=(\d+)-(\d*)$/);
     if(range){const start=Number(range[1]),end=range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;return route.fulfill({status:206,body:media.subarray(start,end+1),headers:{'Content-Type':'video/mp4','Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':String(end-start+1)}});}
@@ -206,8 +207,19 @@ try{
   assert.equal(await page.getByLabel('Início da legenda 1',{exact:true}).inputValue(),'00:00,001','caption timestamps use the phone timeline, not the source clock');
   assert.equal(await page.getByLabel('Fim da legenda 1',{exact:true}).inputValue(),'00:03');
   await page.getByLabel('Fim da legenda 1',{exact:true}).fill('00:03,125');
-  await page.getByLabel('Enquadramento vertical',{exact:true}).selectOption('crop');
-  await page.getByLabel('Foco horizontal').fill('80');await page.getByLabel('Foco vertical').fill('20');await page.getByLabel('Aproximação').fill('1.5');
+  await page.getByLabel('Enquadramento',{exact:true}).selectOption('crop');
+  await seekPhone(0);await phoneAt(10,'red');
+  const zoom=page.getByLabel('Zoom',{exact:false});
+  for(const value of ['0.25','0.5','1.5']){
+    await zoom.fill(value);
+    await page.waitForFunction(value=>{
+      const ctx=document.querySelector('#cut-phone-canvas').getContext('2d');
+      const pixel=(x,y)=>Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3);
+      const black=(x,y)=>pixel(x,y).every(c=>c<20),red=(x,y)=>pixel(x,y)[0]>150;
+      return red(360,640)&&(value==='1.5'?red(360,100):black(360,100)&&black(50,640))&&(value==='0.25'?black(240,640):red(240,640));
+    },value);
+  }
+  await page.getByLabel('Foco horizontal').fill('80');await page.getByLabel('Foco vertical').fill('20');await zoom.fill('0.5');
   await page.getByLabel('Tamanho da legenda').fill('58');await page.getByLabel('Cor do texto',{exact:true}).fill('#00ffcc');
   await page.getByLabel('Cor de destaque',{exact:true}).fill('#ffcc00');await page.getByLabel('Cor do contorno',{exact:true}).fill('#102030');
   await page.getByLabel('Animação da legenda').selectOption('karaoke');await page.getByLabel('Posição da legenda').selectOption('top');
@@ -232,6 +244,13 @@ try{
   assert.equal(await phoneCaption.isHidden(),true,'a cropped caption waits for the first retained word after the gap');
   await seekPhone(9.25);await phoneAt(21.25,'red');
   assert.equal(await phoneCaption.isVisible(),true);assert.equal(await phone.locator('#cut-phone-caption-text').textContent(),'depois agora.');
+  const captionsEnabled=page.getByRole('checkbox',{name:'Exibir legendas no vídeo',exact:true});
+  assert.equal(await captionsEnabled.isChecked(),true,'existing cuts keep captions enabled');
+  await captionsEnabled.uncheck();
+  assert.equal(await phoneCaption.isHidden(),true,'disabling captions immediately removes the phone overlay');
+  assert.equal(await page.getByLabel('Texto da legenda 1',{exact:true}).inputValue(),'Palavra corrigida, fiel ao áudio.');
+  await captionsEnabled.check();assert.equal(await phoneCaption.isVisible(),true,'enabling captions restores the current cue');
+  await captionsEnabled.uncheck();
   await seekPhone(8);await phoneAt(20,'red');
   assert.equal(await phone.locator('#cut-phone-source-time').textContent(),'Original 00:20');
   assert.equal(Number(await phoneSeek.inputValue()),8,'scrubbing across a removed interval uses the edited timeline');
@@ -263,18 +282,23 @@ try{
   await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
   await page.getByText('Atualizando prévia',{exact:true}).waitFor();
   assert.equal(actions.at(-1).method,'PUT');assert.equal(actions.at(-1).body.revision,2);assert.equal(actions.at(-1).body.captions[0].text,'Palavra corrigida, fiel ao áudio.');assert.equal(actions.at(-1).body.framing,'crop');
-  assert.deepEqual(actions.at(-1).body.framingOptions,{mode:'crop',focusX:.8,focusY:.2,zoom:1.5});
-  assert.deepEqual(actions.at(-1).body.captionStyle,{fontSize:58,color:'#00ffcc',highlightColor:'#ffcc00',outlineColor:'#102030',background:'box',position:'top',animation:'karaoke'});
+  assert.deepEqual(actions.at(-1).body.framingOptions,{format:'shorts',mode:'crop',focusX:.8,focusY:.2,zoom:.5});
+  assert.deepEqual(actions.at(-1).body.captionStyle,{enabled:false,fontSize:58,color:'#00ffcc',highlightColor:'#ffcc00',outlineColor:'#102030',background:'box',position:'top',animation:'karaoke'});
   assert.deepEqual(actions.at(-1).body.excludedRanges,[{start:18,end:20}]);
   assert.equal(actions.at(-1).body.start,10);assert.equal(actions.at(-1).body.end,40);assert.equal(actions.at(-1).body.captions[0].start,10.001);
   assert.equal(actions.at(-1).body.captions[0].end,13.125,'editing a caption at 00:03,125 maps back to the original 00:13,125');
   assert.equal(actions.at(-1).body.captions[0].words,undefined);assert.deepEqual(actions.at(-1).body.captions[1].words,clip.captions[1].words);
   Object.assign(clip,{status:'review',hasMedia:true});await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByRole('button',{name:'Ajustar',exact:true}).click();
+  assert.equal(await page.getByLabel('Zoom',{exact:false}).inputValue(),'0.5','reopening the editor preserves a saved zoom below 1×');
+  assert.equal(await captionsEnabled.isChecked(),false,'reopening the editor preserves disabled captions');
+  assert.equal(await page.getByLabel('Texto da legenda 1',{exact:true}).inputValue(),'Palavra corrigida, fiel ao áudio.');
+  await captionsEnabled.check();
   await page.getByLabel('Começo do corte',{exact:true}).fill('00:09');await page.getByLabel('Fim do corte',{exact:true}).focus();
   assert.equal(await page.getByRole('checkbox',{name:/Usar a transcrição original/}).isChecked(),false);
   await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
   await page.getByText('Atualizando prévia',{exact:true}).waitFor();assert.equal('captions' in actions.at(-1).body,false);assert.equal(actions.at(-1).body.useOriginalCaptions,false);
+  assert.equal(actions.at(-1).body.captionStyle.enabled,true);
   assert.equal(actions.at(-1).body.start,9);assert.equal(actions.at(-1).body.end,40);
   Object.assign(clip,{status:'review',hasMedia:true});await page.getByRole('button',{name:'Atualizar',exact:true}).click();
 
@@ -285,27 +309,71 @@ try{
   await cardGraph.evaluate(svg=>svg.addEventListener('click',event=>{window.__qaCardReplayX=event.clientX;},{once:true}));
   const beforeGraphSelect=actions.length;
   await page.mouse.click(cardBox.x+cardBox.width*.75,cardBox.y+cardBox.height*.45);
-  await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
   const clickedCardTime=replayTimeAt(await page.evaluate(()=>window.__qaCardReplayX),{left:cardBox.x,width:cardBox.width},job.duration);
   assert.equal(parseTimecode(await page.getByLabel('Começo do corte',{exact:true}).inputValue()),clickedCardTime,'the card graph also starts precisely at the clicked time');
   assert.equal(actions.length,beforeGraphSelect,'opening a selection from the card must not save it');
   await page.locator('#cuts-dialog .dialog-head [data-cuts-action="close-dialog"]').click();
   const beforePublish=actions.length;
   await page.getByRole('button',{name:'Postar',exact:true}).click();assert.equal(actions.length,beforePublish);
+  const publishFormat=page.getByLabel('Publicar como',{exact:true}),authorize=page.getByRole('button',{name:'Autorizar e enviar',exact:true});
+  assert.equal(await publishFormat.inputValue(),'shorts');
+  await publishFormat.selectOption('video');
+  assert.equal(await authorize.isDisabled(),true,'changing format requires a new reviewed preview');
+  assert.equal(await page.locator('#cut-format-change').isVisible(),true);
+  await page.locator('#cuts-dialog-form').evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  await page.waitForTimeout(80);assert.equal(actions.length,beforePublish,'a form event cannot upload the previous format');
+  await publishFormat.selectOption('shorts');assert.equal(await authorize.isDisabled(),false);
+  await publishFormat.selectOption('video');await page.getByRole('button',{name:'Ajustar formato',exact:true}).click();
+  const editorFormat=page.getByLabel('Formato no YouTube',{exact:true});
+  assert.equal(await editorFormat.inputValue(),'video');assert.equal(actions.length,beforePublish,'choosing a format opens a draft without publishing');
+  await page.getByLabel('Enquadramento',{exact:true}).selectOption('fit');
+  await seekPhone(0);await phoneAt(9,'red');
+  for(const viewport of [{width:1440,height:1050},{width:390,height:844}]){
+    await page.setViewportSize(viewport);
+    const dimensions=await page.locator('#cut-phone-canvas').evaluate(canvas=>({width:canvas.width,height:canvas.height,ratio:canvas.getBoundingClientRect().width/canvas.getBoundingClientRect().height}));
+    assert.equal(dimensions.width,1920);assert.equal(dimensions.height,1080);assert(Math.abs(dimensions.ratio-16/9)<.002);
+    assert.equal(await page.locator('#cuts-dialog-form').evaluate(form=>form.scrollWidth>form.clientWidth+1),false,'horizontal previews fit desktop and mobile');
+  }
+  await page.setViewportSize({width:1440,height:1050});
+  await editorFormat.scrollIntoViewIfNeeded();await page.screenshot({path:'artifacts/cuts-editor-horizontal.png'});
+  await editorFormat.selectOption('shorts');assert.equal(await page.locator('#cut-phone-canvas').getAttribute('width'),'720');
+  await editorFormat.selectOption('video');
+  await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();await page.getByText('Atualizando prévia',{exact:true}).waitFor();
+  assert.equal(actions.at(-1).body.framingOptions.format,'video');assert.equal(actions.at(-1).method,'PUT');
+  Object.assign(clip,{status:'review',hasMedia:true});await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  await page.getByRole('button',{name:'Ajustar',exact:true}).click();assert.equal(await editorFormat.inputValue(),'video','the saved format persists when reopening');
+  await page.locator('#cuts-dialog .dialog-head [data-cuts-action="close-dialog"]').click();
+  await page.getByRole('button',{name:'Postar',exact:true}).click();
+  assert.equal(await publishFormat.inputValue(),'video');assert.equal(await page.getByLabel('Descrição',{exact:true}).inputValue(),'','regular videos do not get the Shorts description');
   assert.equal(await page.getByLabel('Canal do YouTube').inputValue(),'');
   await page.getByLabel('Canal do YouTube').selectOption(channelId);
   await page.getByLabel('Visibilidade',{exact:true}).selectOption('public');
   await page.getByRole('checkbox',{name:/Revisei o vídeo e a legenda/}).check();
   await page.getByRole('button',{name:'Autorizar e enviar',exact:true}).click();
   await page.getByText('Na fila de envio',{exact:true}).waitFor();
-  assert.equal(actions.at(-1).path,'/api/cuts/'+clipId+'/publish');assert.equal(actions.at(-1).body.revision,4);assert.equal(actions.at(-1).body.channelId,channelId);assert.equal(actions.at(-1).body.visibility,'public');assert.equal(actions.at(-1).body.confirm,true);
-  Object.assign(clip,{status:'posted',hasMedia:false,delivery_status:'published',release_url:'https://www.youtube.com/watch?v=qa123'});await page.getByRole('button',{name:'Atualizar',exact:true}).click();
-  await page.getByText('Publicado no YouTube',{exact:true}).waitFor();assert.equal(await page.getByText('Arquivo local liberado',{exact:true}).count(),1);
+  assert.equal(actions.at(-1).path,'/api/cuts/'+clipId+'/publish');assert.equal(actions.at(-1).body.revision,5);assert.equal(actions.at(-1).body.format,'video');assert.equal(actions.at(-1).body.channelId,channelId);assert.equal(actions.at(-1).body.visibility,'public');assert.equal(actions.at(-1).body.confirm,true);
+  Object.assign(clip,{status:'posted',hasMedia:true,delivery_status:'published',release_url:'https://www.youtube.com/watch?v=qa123'});job.status='completed';await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  await page.getByText('Publicado no YouTube',{exact:true}).waitFor();assert.equal(await page.locator('[data-cut-clip] video').count(),1);
   assert.equal(await page.getByRole('button',{name:'Postar',exact:true}).count(),0);
+  const downloadLink=page.getByRole('link',{name:'Baixar MP4',exact:true});
+  assert((await downloadLink.getAttribute('href')).includes('/api/cuts/'+clipId+'/media'));
+  const [download]=await Promise.all([page.waitForEvent('download'),downloadLink.click()]);
+  assert.deepEqual(await readFile(await download.path()),media,'the posted cut remains downloadable for another platform');
 
   await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/cuts-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:'artifacts/cuts-mobile.png',fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  const postedConfirmation=page.getByRole('alertdialog'),beforePostedDiscard=actions.length;
+  await page.getByRole('button',{name:'Excluir arquivo',exact:true}).click();
+  await postedConfirmation.getByRole('heading',{name:'Excluir arquivo?',exact:true}).waitFor();
+  assert.equal(actions.length,beforePostedDiscard);assert((await postedConfirmation.locator('#confirm-discard-message').textContent()).includes('publicações já existentes'));
+  await postedConfirmation.getByRole('button',{name:'Cancelar',exact:true}).click();await postedConfirmation.waitFor({state:'hidden'});
+  assert.equal(actions.length,beforePostedDiscard);assert.equal(clip.hasMedia,true);
+  await page.getByRole('button',{name:'Excluir arquivo',exact:true}).click();
+  await postedConfirmation.getByRole('button',{name:'Excluir arquivo',exact:true}).click();await postedConfirmation.waitFor({state:'hidden'});
+  await downloadLink.waitFor({state:'hidden'});assert.equal(actions.at(-1).path,'/api/cuts/'+clipId+'/discard');assert.deepEqual(actions.at(-1).body,{confirm:true});
+  assert.equal(clip.release_url,'https://www.youtube.com/watch?v=qa123','manual file deletion keeps the publication link');
   Object.assign(clip,{status:'review',hasMedia:true,delivery_id:null,delivery_status:null,release_url:null});await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   const confirmation=page.getByRole('alertdialog'),beforeDiscard=actions.length;
   await page.getByRole('button',{name:'Descartar',exact:true}).click();

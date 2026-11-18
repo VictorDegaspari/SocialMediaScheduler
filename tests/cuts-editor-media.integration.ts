@@ -18,8 +18,8 @@ const style=(input:unknown={})=>captionStyleSchema.parse(input);
 const framing=(input:unknown={})=>framingOptionsSchema.parse(input);
 const basic:RenderCutInput={start:0,end:2,captions:[{start:0.2,end:1.8,text:'TESTE'}],framing:'fit'};
 async function render(input:RenderCutInput){return renderCut(dir,randomUUID(),input);}
-function frame(path:string,at:number,filter='crop=720:300:0:900') {
-  return execFileSync('ffmpeg',['-v','error','-ss',String(at),'-i',path,'-vf',filter,'-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-'],{maxBuffer:4*1024*1024});
+function frame(path:string,at:number,filter='crop=720:300:0:900',size='720:1280') {
+  return execFileSync('ffmpeg',['-v','error','-ss',String(at),'-i',path,'-vf',`scale=${size},${filter}`,'-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-'],{maxBuffer:4*1024*1024});
 }
 function pixels(bytes:Buffer,match:(r:number,g:number,b:number)=>boolean) {
   let count=0;for(let i=0;i<bytes.length;i+=3)if(match(bytes[i],bytes[i+1],bytes[i+2]))count++;return count;
@@ -65,6 +65,41 @@ test('caption colors, sizes, fade and pop animations are visible in the encoded 
   }
 });
 
+test('captions can be removed from the encoded video and restored without losing text or source',async()=>{
+  const id=randomUUID(),sourceHash=await sha256(source),captions=structuredClone(basic.captions);
+  const initial=await renderCut(dir,id,basic);
+  assert.ok(pixels(frame(initial.path,0.8),white)>100,'existing cuts still show captions by default');
+  const hidden=await renderCut(dir,id,{...basic,captionStyle:style({enabled:false,animation:'karaoke',background:'box'})});
+  assert.equal(pixels(frame(hidden.path,0.8),white),0,'the replacement MP4 contains no burnt-in caption');
+  assert.deepEqual(hidden.warnings,[],'disabled captions do not generate karaoke alignment warnings');
+  assert.ok(Math.abs((await validateVideo(hidden.path)).duration-2)<0.1);
+  assert.ok(Math.abs(frequency(hidden.path,0.3)-440)<15,'removing captions preserves the audio');
+  assert.deepEqual(basic.captions,captions);
+  const restored=await renderCut(dir,id,{...basic,captionStyle:style({enabled:true})});
+  assert.ok(pixels(frame(restored.path,0.8),white)>100,'the same saved caption can be rendered again');
+  assert.equal(await sha256(source),sourceHash);
+});
+
+test('regular videos render in 16:9 with framing, captions and edited audio preserved',async()=>{
+  const captions:Cue[]=[{start:0.4,end:1.4,text:'ANTES'},{start:4.4,end:5.4,text:'DEPOIS'}];
+  const sourceHash=await sha256(source);
+  for(const mode of ['fit','crop','blur'] as const){
+    const {path}=await render({start:0,end:6,captions,framing:mode,framingOptions:framing({format:'video',mode,zoom:mode==='crop'?0.5:1}),excludedRanges:[{start:2,end:4}]});
+    const info=await validateVideo(path,'video');
+    assert.equal(info.width,1920);assert.equal(info.height,1080);assert.ok(Math.abs(info.duration-4)<0.1);
+    assert.ok(pixels(frame(path,0.8,'crop=1000:300:460:780','1920:1080'),white)>100,'captions appear in the horizontal MP4');
+    assert.ok(Math.abs(frequency(path,2.3)-1320)<20,'the removed interval stays out of the horizontal audio');
+    if(mode==='fit'){
+      const left=frame(path,0.2,'crop=80:80:80:500,scale=1:1','1920:1080'),right=frame(path,0.2,'crop=80:80:1760:500,scale=1:1','1920:1080');
+      assert.ok(left[0]>180&&left[1]>180&&left[2]<40,'the full source keeps its left yellow edge');
+      assert.ok(right[0]<40&&right[1]>180&&right[2]>180,'the full source keeps its right cyan edge');
+    }
+  }
+  const hidden=await render({...basic,framingOptions:framing({format:'video'}),captionStyle:style({enabled:false})});
+  assert.equal(pixels(frame(hidden.path,0.8,'crop=1000:300:460:780','1920:1080'),white),0,'captions can also be disabled for a regular video');
+  assert.equal(await sha256(source),sourceHash);
+});
+
 test('karaoke follows real word timestamps and corrected captions without alignment stay static',async()=>{
   const captions:Cue[]=[{start:0.2,end:2.8,text:'UM DOIS TRÊS',words:[{start:0.2,end:0.8,text:'UM'},{start:1,end:1.6,text:'DOIS'},{start:1.8,end:2.8,text:'TRÊS'}]}];
   const result=await render({start:0,end:3,captions,framing:'fit',captionStyle:style({fontSize:48,animation:'karaoke'})});
@@ -88,6 +123,27 @@ test('mobile framing honors pan and zoom, while blurred fill preserves the entir
   assert.ok(background[0]>80,'the portrait padding is filled with blurred source pixels');
   const foreground=frame(blurred.path,0.2,'crop=20:80:10:600,scale=1:1');
   assert.ok(foreground[0]>180&&foreground[1]>180&&foreground[2]<50,'the original left edge remains visible in the foreground');
+});
+
+test('zooming out reveals source edges with black padding and keeps the selected focus',async()=>{
+  const captions:Cue[]=[{start:1,end:1.8,text:'Teste'}];
+  const sample=(path:string,x:number,y:number)=>frame(path,0.2,`crop=8:8:${x}:${y},scale=1:1`);
+  const black=(bytes:Buffer)=>bytes.every(value=>value<20);
+  const half=await render({...basic,captions,framing:'crop',framingOptions:framing({mode:'crop',zoom:0.5,focusX:0})});
+  assert.ok(black(sample(half.path,360,100)),'zooming out leaves space above the image');
+  assert.ok(black(sample(half.path,360,1200)),'zooming out leaves space below the image');
+  assert.ok(sample(half.path,360,640)[0]>180,'the center of the source remains visible');
+  const left=sample(half.path,20,640);assert.ok(yellow(left[0],left[1],left[2]),'left focus reveals the source edge instead of stretching the center');
+  const quarter=await render({...basic,captions,framing:'crop',framingOptions:framing({mode:'crop',zoom:0.25})});
+  assert.ok(black(sample(quarter.path,20,640)),'further zooming out also leaves space at the sides');
+  const fullLeft=sample(quarter.path,90,640);assert.ok(yellow(fullLeft[0],fullLeft[1],fullLeft[2]),'the full left edge is visible');
+  const cyan=sample(quarter.path,630,640);assert.ok(cyan[0]<40&&cyan[1]>180&&cyan[2]>180,'the full right edge is visible too');
+  const corner=await render({...basic,captions,framing:'crop',framingOptions:framing({mode:'crop',zoom:0.25,focusX:1,focusY:1})});
+  assert.ok(black(sample(corner.path,20,1000)),'horizontal focus positions the smaller image on the right');
+  assert.ok(black(sample(corner.path,360,600)),'vertical focus positions the smaller image at the bottom');
+  const bottomRight=sample(corner.path,700,1200);assert.ok(bottomRight[0]<40&&bottomRight[1]>180&&bottomRight[2]>180);
+  const blurred=await render({...basic,captions,framing:'blur',framingOptions:framing({mode:'blur',zoom:0.25})});
+  assert.ok(sample(blurred.path,360,100)[0]>80,'switching to blurred fill keeps the background covered after zooming out');
 });
 
 test('invalid removal through a corrected caption cannot overwrite a complete preview',async()=>{

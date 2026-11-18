@@ -50,6 +50,14 @@ test('preserva a orientação de vídeos com matriz de rotação',async()=>{
   assert.deepEqual(await validateVideo(out),before);
 });
 
+test('aceita vídeo horizontal somente quando o formato de vídeo comum é solicitado',async()=>{
+  const horizontal=join(dir,'regular-video.mp4');
+  execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=red:s=96x54:d=1','-c:v','libx264',horizontal]);
+  await assert.rejects(()=>validateVideo(horizontal),/vertical ou quadrado/);
+  const info=await validateVideo(horizontal,'video');assert.equal(info.width,96);assert.equal(info.height,54);
+  await assert.rejects(()=>validateVideo(source,'video'),/prévia horizontal/);
+});
+
 test('falha na limpeza não substitui o original e remove a saída incompleta',async()=>{
   const bad=join(dir,'bad.mp4'),out=join(dir,'bad-clean.mp4');
   await writeFile(bad,'not a video');

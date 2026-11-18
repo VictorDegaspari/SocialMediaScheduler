@@ -1,6 +1,6 @@
 # Gerador de cortes do YouTube
 
-A aba **Gerador de cortes** recebe um link de vídeo do YouTube, baixa a origem, transcreve o áudio e prepara sugestões de trechos com legendas gravadas na imagem. O resultado é um MP4 vertical 720 × 1280, H.264/AAC, pronto para revisão e upload no fluxo de Shorts do aplicativo. A publicação depende da escolha do canal e do clique do usuário em **Postar**.
+A aba **Gerador de cortes** recebe um link de vídeo do YouTube, baixa a origem na melhor qualidade disponível de imagem e áudio, transcreve o áudio e prepara sugestões de trechos. O resultado é um MP4 H.264/AAC, com ou sem legendas: vertical a partir de 1080 × 1920 para Shorts ou horizontal a partir de 1920 × 1080 para vídeo comum. Fontes com o menor lado acima de 1080 pixels mantêm essa resolução na orientação escolhida; uma origem 4K gera 2160 × 3840 ou 3840 × 2160. A publicação depende da escolha do canal e do clique do usuário em **Postar**.
 
 Use o preview para conferir o contexto, o início/fim do trecho e cada palavra da legenda. A transcrição reconhece a fala no áudio; não traduz, resume, reescreve ou usa títulos do YouTube como legenda. Reconhecimento de voz pode errar nomes próprios, sobreposição de vozes, ruído e música: a interface permite corrigir o texto e renderizar um novo preview antes de enviar. Não há garantia de transcrição perfeita sem essa revisão.
 
@@ -29,11 +29,15 @@ Fontes: [extração de heatmap no yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/
 
 ## Operação
 
-### Editor de legendas e visualização no celular
+### Formato, legendas e prévia
 
-Clique em **Ajustar** para abrir o vídeo original e a prévia em proporção 9:16. Escolha cor do texto, cor de destaque, contorno, tamanho, posição e fundo da legenda. As animações disponíveis são texto estático, fade, entrada com escala e destaque da palavra falada. O destaque usa timestamps reais de palavras; grupos corrigidos sem esse alinhamento ficam estáticos e geram um aviso, preservando o texto revisado.
+Clique em **Ajustar** para abrir o vídeo original e a prévia. Em **Formato no YouTube**, escolha **Shorts · vertical (9:16)** ou **Vídeo · horizontal (16:9)**. A prévia acompanha a proporção selecionada; salve para gerar o MP4 correspondente. Cortes anteriores continuam em Shorts até uma mudança explícita. Ambos os formatos mantêm o limite de três minutos do gerador.
 
-Para enquadrar o vídeo, escolha imagem completa, fundo desfocado ou preenchimento vertical. O preenchimento permite deslocar o foco horizontal/vertical e aplicar zoom. A prévia responde aos ajustes; ao salvar, o FFmpeg gera o arquivo final com as opções escolhidas. Revise a nova versão antes de postar.
+Em **Postar**, o campo **Publicar como** mostra o formato da prévia pronta. Trocar a seleção exige clicar em **Ajustar formato**, gerar e revisar a nova prévia antes de autorizar o envio. A API valida a proporção real do arquivo e a versão revisada; não converte o vídeo durante o upload. Vídeos horizontais não recebem `#Shorts` automaticamente. O YouTube classifica vídeos verticais ou quadrados de até três minutos como Shorts; para vídeo comum, orienta usar uma proporção mais ampla, como 16:9. [Ajuda oficial](https://support.google.com/youtube/answer/15424877?hl=pt-BR).
+
+Desmarque **Exibir legendas no vídeo** para gerar a prévia e o MP4 sem legendas; o texto corrigido e o estilo ficam salvos para reativar depois. Escolha cor do texto, cor de destaque, contorno, tamanho, posição e fundo da legenda. As animações disponíveis são texto estático, fade, entrada com escala e destaque da palavra falada. O destaque usa timestamps reais de palavras; grupos corrigidos sem esse alinhamento ficam estáticos e geram um aviso, preservando o texto revisado.
+
+Para enquadrar o vídeo, escolha imagem completa, fundo desfocado ou preencher o quadro. O preenchimento permite deslocar o foco horizontal/vertical e aproximar ou afastar a imagem com zoom de 0,25× a 3×. Em 1×, a imagem preenche a tela; abaixo disso, mais da origem aparece e as áreas livres ficam pretas. A prévia responde aos ajustes; ao salvar, o FFmpeg gera o arquivo final com as opções escolhidas. Revise a nova versão antes de postar.
 
 O celular tem seus próprios controles: toque na imagem ou no botão de reprodução para reproduzir/pausar, use **−5 s / +5 s** para voltar/avançar e arraste a barra para navegar. Essa barra acompanha a montagem já descontando os trechos removidos. O indicador **Original** mostra a posição correspondente no vídeo de origem. Uma seleção no gráfico ou uma alteração confirmada nos campos de início/fim busca o mesmo instante na imagem; enquanto o quadro é carregado, a prévia indica a busca para não mostrar uma imagem antiga como se fosse a seleção atual.
 
@@ -70,13 +74,14 @@ Instale também FFmpeg com libass, FFprobe e a fonte DejaVu Sans. `CUTS_WHISPER_
 ## Limites e arquivos
 
 - Um vídeo público gravado por tarefa; playlists, transmissões em andamento e vídeos futuros são recusados.
-- Origem com até 2 horas e 2 GiB. O download é limitado a 1080p e monitorado para interromper excesso de tamanho.
+- Origem com até 2 horas e 2 GiB. O download escolhe o melhor vídeo e o melhor áudio disponíveis, sem teto de resolução ou preferência por H.264; a montagem do MP4 preserva os fluxos originais, sem recodificação. O tamanho é monitorado e o excesso interrompe a tarefa, sem trocar silenciosamente para uma qualidade inferior.
+- A exportação prioriza qualidade: H.264 com CRF 16 e preset `slow`, redimensionamento Lanczos e áudio AAC de 320 kb/s. A taxa de quadros segue a origem, inclusive 60 fps e taxas fracionárias como 59,94; 30 fps só é usado quando a origem não informa uma taxa válida. Renderizar pode demorar mais e gerar arquivos maiores. O envio usa os mesmos bytes do MP4 revisado.
 - Trecho final com no máximo 3 minutos. **Manter imagem inteira** adiciona barras para preservar o conteúdo; **Preencher vertical** recorta as laterais no centro.
 - Os campos das legendas usam o tempo da montagem; os limites do corte e das remoções usam o vídeo original. A API mantém as legendas em tempos absolutos da fonte, e o editor converte os dois relógios sem perder o alinhamento das palavras. Na junção, o fim de uma legenda pertence ao trecho anterior e o início ao seguinte.
 - Subprocessos têm tempo máximo e são executados com argumentos separados, sem shell. Controles ASS recebidos no texto são tratados como caracteres visíveis, impedindo comandos de estilo injetados.
-- A origem fica disponível enquanto houver cortes para ajustar. Arquivos de render temporários são removidos após sucesso ou falha; um ajuste que falhe preserva o último preview completo.
-- Downloads gerenciados pelo aplicativo são removidos quando seu fluxo termina. Os originais das pastas monitoradas não são apagados.
-- Até 10 projetos com arquivos pendentes por vez. Poste ou descarte os cortes anteriores para liberar espaço antes de criar novos projetos.
+- A origem e os cortes ficam disponíveis até a exclusão manual, inclusive após postar. Use **Baixar MP4** para reutilizar o corte em outras plataformas e **Excluir arquivo** para removê-lo depois. Arquivos de render temporários são removidos após sucesso ou falha; um ajuste que falhe preserva o último preview completo.
+- Apenas as cópias temporárias de upload são removidas após a confirmação do envio. A fonte e os arquivos finais do gerador são mantidos até a exclusão manual. Os originais das pastas monitoradas não são apagados.
+- Até 10 projetos com arquivos guardados por vez, incluindo projetos já enviados. Exclua manualmente um projeto anterior, ou todos os seus cortes, para liberar a vaga antes de criar outro projeto.
 
 Bloqueios do YouTube, vídeos privados, regiões ou exigência de login podem impedir o download. A mensagem da tarefa informa a falha; o aplicativo não importa cookies do navegador. Atualize a versão fixada do yt-dlp e reconstrua a imagem quando mudanças no YouTube exigirem suporte do projeto.
 

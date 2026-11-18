@@ -17,4 +17,5 @@ Do not eagerly read full source files, README, all docs, lockfiles, generated ou
 - Instructions specific to backend, frontend, tests and scripts live in their local `AGENTS.md`; consult the relevant scope.
 - Preserve existing work and staging. Keep patches scoped; no repository-wide reformatting or identifier shortening for byte count.
 - Validate behavior at boundaries; reuse focused tests. Do not run real publishing/account operations to test a refactor. UI remains pt-BR.
+- For requested video/live cuts, always download the best available source video quality and audio. Preserve that source quality independently of preview/export limits. Prioritize export quality over speed or file size, retain source frame rates and higher resolutions, and never reduce quality during upload.
 - Keep entrypoints small and feature modules cohesive. Separate large presentation templates from orchestration where that reduces context. Comments describe non-obvious invariants; avoid parallel documentation of implementation details.

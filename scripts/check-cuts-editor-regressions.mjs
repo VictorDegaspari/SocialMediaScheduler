@@ -19,7 +19,7 @@ const transcriptEdges=[
   {start:41,end:43,text:'Final falado.',words:[{start:41,end:42,text:'Final'},{start:42,end:43,text:'falado.'}]}
 ];
 const job={id:clip.job_id,duration:10,title:'Fonte sintética',replay_data:{status:'unavailable',points:[]}};
-const fixtureHtml='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/cuts-editor.css"><link rel="stylesheet" href="/fixture.css"><body><main><h1>Página sob o modal</h1><div id="background-long"></div></main><dialog id="cuts-dialog" class="cuts-dialog" data-mode="edit" aria-labelledby="cuts-dialog-title"><div class="dialog-head"><div><span class="eyebrow">GERADOR DE CORTES</span><h2 id="cuts-dialog-title">Editar corte para Shorts</h2></div><button type="button" aria-label="Fechar revisão do corte">×</button></div><form id="cuts-dialog-form"></form></dialog><script type="module" src="/fixture.js"></script></body></html>';
+const fixtureHtml='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/cuts-editor.css"><link rel="stylesheet" href="/fixture.css"><body><main><h1>Página sob o modal</h1><div id="background-long"></div></main><dialog id="cuts-dialog" class="cuts-dialog" data-mode="edit" aria-labelledby="cuts-dialog-title"><div class="dialog-head"><div><span class="eyebrow">GERADOR DE CORTES</span><h2 id="cuts-dialog-title">Editar corte para YouTube</h2></div><button type="button" aria-label="Fechar revisão do corte">×</button></div><form id="cuts-dialog-form"></form></dialog><script type="module" src="/fixture.js"></script></body></html>';
 const fixtureJs=`import {createCutEditor} from '/cuts-editor.js';
 const clip=${JSON.stringify(clip)},job=${JSON.stringify(job)};
 const params=new URL(location.href).searchParams;
@@ -54,7 +54,7 @@ const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/u
 const page=await browser.newPage();page.setDefaultTimeout(10_000);const errors=[];page.on('pageerror',error=>errors.push(error.message));
 try{
   await page.goto('http://127.0.0.1:'+server.address().port);
-  await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
   await mkdir('artifacts',{recursive:true});
   for(const viewport of [{width:1440,height:1050},{width:1366,height:768},{width:390,height:844},{width:320,height:568},{width:844,height:390}]){
     await page.setViewportSize(viewport);
@@ -108,7 +108,7 @@ try{
       await page.getByLabel('Começo do corte',{exact:true}).fill(start);await page.getByLabel('Fim do corte',{exact:true}).fill(end);await page.getByLabel('Título do corte',{exact:true}).focus();
     };
     await page.goto('http://127.0.0.1:'+server.address().port+'/?transcript=fail');
-    await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     assert((await read()).body,'an unchanged window can use existing captions after transcript failure');
     await setWindow('00:02','00:07');assert((await read()).body,'trimming within existing bounds needs no transcript fetch');
     await setWindow('00:00','00:08');assert.match((await read()).error,/transcri/i,'new bounds cannot silently lose source captions after fetch failure');
@@ -124,7 +124,7 @@ try{
     assert.equal(await page.evaluate(()=>window.__transcriptCalls),2,'retry performs exactly one new transcript request');
 
     await page.goto('http://127.0.0.1:'+server.address().port+'/?transcript=hold');
-    await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     assert((await read()).body,'the original window remains editable while transcript loads');
     await setWindow('00:02','00:07');assert((await read()).body,'a local trim remains editable while transcript loads');
     await setWindow('00:00','00:08');assert.match((await read()).error,/aguarde|carreg/i,'expansion waits for the source transcript');
@@ -133,7 +133,7 @@ try{
     assert.equal((await read()).body.start,0,'loading completion preserves the selected window');
 
     await page.goto('http://127.0.0.1:'+server.address().port+'/?timeline=1');
-    await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     const rowFor=async text=>{
       const index=await page.locator('.cuts-cue textarea').evaluateAll((areas,text)=>areas.findIndex(area=>area.value===text),text);
       assert(index>=0,'caption is visible: '+text);return page.locator('.cuts-cue').nth(index);
@@ -195,7 +195,7 @@ try{
     }
 
     await page.goto('http://127.0.0.1:'+server.address().port+'/?edge=1');
-    await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     await setWindow('00:08','00:44');
     await assertTimes('Prefixo falado completo.','00:00','00:01,500');
     await assertTimes('Final falado.','00:33','00:35');
@@ -210,7 +210,7 @@ try{
     await assertTimes('Final falado.','00:33','00:35');
 
     await page.goto('http://127.0.0.1:'+server.address().port+'/?edge=1&transcript=hold');
-    await page.getByRole('heading',{name:'Editar corte para Shorts',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
     await setWindow('00:08','00:44');
     await page.locator('#cut-phone-seek').evaluate(range=>{range.value='0.5';range.dispatchEvent(new Event('input',{bubbles:true}));});
     await page.getByRole('button',{name:'Adicionar linha',exact:true}).click();

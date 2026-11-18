@@ -16,15 +16,15 @@ function getDialog(){
 }
 
 /** Resolve only after an explicit choice; submit stays visible and locked in flight. */
-export async function confirmDiscard({kind,name,onConfirm}){
+export async function confirmDiscard({kind,name,onConfirm,confirmLabel}){
   if(pending)return false;
   pending=true;
   const previousFocus=document.activeElement,modal=getDialog(),project=kind==='project',cancel=modal.querySelector('[data-confirm-cancel]'),submit=modal.querySelector('[data-confirm-submit]');
   await stylesReady;
-  const label=project?'Descartar projeto':'Descartar corte';
+  const label=confirmLabel||(project?'Descartar projeto':'Descartar corte');
   modal.querySelector('#confirm-discard-title').textContent=label+'?';
   modal.querySelector('#confirm-discard-name').textContent=name||(project?'Vídeo do YouTube':'Corte sugerido');
-  modal.querySelector('#confirm-discard-message').textContent=project?'O projeto sairá da lista e suas cópias locais de vídeo serão removidas. O histórico de auditoria e as publicações já existentes serão preservados.':'As cópias locais deste corte serão removidas. O histórico de auditoria e as publicações já existentes serão preservados.';
+  modal.querySelector('#confirm-discard-message').textContent=project?'O projeto sairá da lista e suas cópias locais de vídeo serão removidas. O histórico de auditoria e as publicações já existentes serão preservados.':'As cópias locais deste corte serão removidas. Se for o último corte do projeto, o vídeo original também será removido. O histórico de auditoria e as publicações já existentes serão preservados.';
   cancel.disabled=false;submit.disabled=false;submit.textContent=label;modal.removeAttribute('aria-busy');
   return new Promise((resolve,reject)=>{
     let busy=false,settled=false;
@@ -34,7 +34,7 @@ export async function confirmDiscard({kind,name,onConfirm}){
     const onCancel=event=>{event.preventDefault();if(!busy)modal.close('cancelled');};
     const onCancelClick=()=>{if(!busy)modal.close('cancelled');};
     const onSubmit=async()=>{
-      if(busy)return;busy=true;cancel.disabled=true;submit.disabled=true;submit.textContent='Descartando…';modal.setAttribute('aria-busy','true');
+      if(busy)return;busy=true;cancel.disabled=true;submit.disabled=true;submit.textContent=confirmLabel?'Excluindo…':'Descartando…';modal.setAttribute('aria-busy','true');
       try{await onConfirm();finish(true);modal.close('confirmed');}
       catch(error){finish(false,error);modal.close('failed');}
     };

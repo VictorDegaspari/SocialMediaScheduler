@@ -24,10 +24,18 @@ test('legenda corrigida sem alinhamento não recebe palavras ou tempos inventado
   assert.equal(timelineCaptions(cues,cutTimeline(10,14))[0].text,cues[0].text);
 });
 test('estilos e enquadramento aceitam opções suportadas e recusam filtros ou cores arbitrários',()=>{
+  assert.equal(captionStyleSchema.parse({}).enabled,true);
+  assert.equal(captionStyleSchema.parse({enabled:false}).enabled,false);
+  assert.throws(()=>captionStyleSchema.parse({enabled:'false'}));
   assert.equal(captionStyleSchema.parse({}).fontSize,42);
   assert.equal(captionStyleSchema.parse({color:'#aBcD01',animation:'karaoke',fontSize:64}).animation,'karaoke');
   assert.throws(()=>captionStyleSchema.parse({color:'white;movie=/etc/passwd'}));
   assert.throws(()=>captionStyleSchema.parse({fontSize:500}));
+  assert.equal(framingOptionsSchema.parse({}).format,'shorts');
+  assert.equal(framingOptionsSchema.parse({format:'video'}).format,'video');
+  assert.throws(()=>framingOptionsSchema.parse({format:'invalid'}));
+  assert.equal(framingOptionsSchema.parse({mode:'crop',zoom:0.25}).zoom,0.25);
+  assert.throws(()=>framingOptionsSchema.parse({mode:'crop',zoom:0}));
   assert.throws(()=>framingOptionsSchema.parse({mode:'crop',zoom:4}));
   assert.throws(()=>framingOptionsSchema.parse({mode:'crop',focusX:-1}));
   assert.equal(framingOptionsSchema.parse({mode:'blur'}).mode,'blur');
