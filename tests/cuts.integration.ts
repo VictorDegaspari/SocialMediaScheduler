@@ -23,6 +23,7 @@ const { youtubeScopes }=await import('../src/native-auth.js');
 const { LocalPublisher }=await import('../src/local-publisher.js');
 const { Worker }=await import('../src/worker.js');
 const { cleanupPublishedMedia }=await import('../src/media-cleanup.js');
+const {sha256:sha256File}=await import('../src/media.js');
 await initDb();
 let downloads=0,renders=0,failRender=false,renderInputs:any[]=[];
 const transcript=[{start:5,end:8,text:'Como aprender algo novo?',words:[{start:5,end:5.5,text:'Como'},{start:5.6,end:6.2,text:'aprender'},{start:6.3,end:6.8,text:'algo'},{start:7,end:8,text:'novo?'}]},{start:9,end:13,text:'Pratique todos os dias.'},{start:15,end:19,text:'Assim você melhora.'}];
@@ -50,7 +51,7 @@ const publishBody=(clip:any)=>({channelId:'native:youtube:cuts-channel',title:'T
 
 beforeEach(async()=>{
   globalThis.fetch=originalFetch;downloads=0;renders=0;failRender=false;renderInputs=[];
-  await pool.query('TRUNCATE cuts,cut_jobs,content_claims,deliveries,videos,watches,publication_requests,publishing_profiles,manual_actions,events,connected_accounts,settings CASCADE');
+  await pool.query('TRUNCATE cuts,cut_jobs,content_claims,deliveries,videos,watches,publication_requests,publishing_profiles,manual_actions,events,connected_accounts,settings,browser_commands,browser_agent,browser_settings CASCADE');
   await rm(process.env.DATA_DIR!,{recursive:true,force:true});await mkdir(process.env.DATA_DIR!);
   await saveConnectedAccount('youtube','cuts-channel','Canal de cortes',{
     access_token:'test-access',refresh_token:'test-refresh',expiry_date:Date.now()+86400000,scope:youtubeScopes.join(' '),channelId:'cuts-channel'
@@ -328,6 +329,25 @@ test('cores, animação e enquadramento persistem sem substituir legendas corrig
   assert.deepEqual(clip.captions,captions);assert.equal(renderInputs.at(-1).captionStyle.fontSize,60);assert.equal(renderInputs.at(-1).framingOptions.focusX,0.8);
 });
 
+test('webcam e vídeo persistem com ajustes independentes e recusam regiões inválidas',async()=>{
+  await create();await service.tick();let clip=await currentClip();
+  const captions=structuredClone(clip.captions),sourceHash=await sha256File(join(cutDirectory(clip.job_id),'source.mp4'));
+  const pane={fit:'crop',focusX:.2,focusY:.7,zoom:1.5,region:{x:.7,y:.1,width:.3,height:.4}};
+  const split={topRatio:.4,webcam:pane,content:{...pane,fit:'fit',zoom:.5,region:{x:0,y:.4,width:.7,height:.6}}};
+  const input={title:clip.title,start:5,end:13,framing:'fit',framingOptions:{mode:'split',split},revision:clip.revision};
+  assert.equal((await call('/'+clip.id,{...input,framingOptions:{mode:'split',split:{...split,webcam:{...pane,region:{...pane.region,width:.5}}}}},'PUT')).status,400);
+  assert.equal((await currentClip()).revision,clip.revision);
+  const saved=await call('/'+clip.id,input,'PUT');assert.equal(saved.status,202,await saved.clone().text());await service.tick();clip=await currentClip();
+  assert.equal(clip.framing_options.mode,'split');assert.deepEqual(clip.framing_options.split,split);assert.deepEqual(renderInputs.at(-1).framingOptions.split,split);
+  const restarted=new CutsService(media);const restored=(await restarted.state()).jobs[0].clips[0];
+  assert.deepEqual(restored.framing_options,clip.framing_options);assert.deepEqual(restored.captions,captions);
+  assert.equal((await call('/'+clip.id,input,'PUT')).status,409,'an old editor cannot replace the new layout');
+  const renamed=await call('/'+clip.id,{title:'Reação revisada',start:5,end:13,revision:clip.revision},'PUT');assert.equal(renamed.status,202,await renamed.clone().text());await service.tick();
+  assert.deepEqual((await currentClip()).framing_options.split,split,'unrelated edits preserve both regions');
+  assert.equal(await sha256File(join(cutDirectory(clip.job_id),'source.mp4')),sourceHash);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM deliveries')).rows[0].n,0);
+});
+
 test('desativar e reativar legendas preserva o texto corrigido e a opção entre ajustes',async()=>{
   await create();await service.tick();let clip=await currentClip();
   assert.equal(clip.caption_style.enabled,true,'projetos anteriores continuam com legendas');
@@ -412,4 +432,41 @@ test('falha temporária do YouTube conserva o mapa de replay já consultado',asy
     assert.equal((await call('/jobs/'+job+'/analyze',{})).status,202);await service.tick();
     const replay=(await state()).jobs[0].replay_data;assert.equal(replay.status,'available');assert.equal(replay.points.length,1);assert.match(replay.message,/consultado anteriormente/);
   } finally {media.replay=previous;}
+});
+
+test('corte publica agora no TikTok com consentimento, conta e bytes preservados e aceita outro destino',async()=>{
+  const {BrowserBridge}=await import('../src/browser-bridge.js');
+  await create();await service.tick();let clip=await currentClip();
+  const original=await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4'));
+  const body={...publishBody(clip),channelId:'browser:tiktok:default',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false}};
+  assert.equal((await call('/'+clip.id+'/publish',{...body,confirm:false})).status,400);
+  assert.equal((await call('/'+clip.id+'/publish',{...body,revision:clip.revision+1})).status,409);
+  const first=await call('/'+clip.id+'/publish',body);assert.equal(first.status,202,await first.clone().text());const {deliveryId}=await first.json();
+  assert.equal((await (await call('/'+clip.id+'/publish',body)).json()).deliveryId,deliveryId);
+  const delivery=(await pool.query('SELECT * FROM deliveries WHERE id=$1',[deliveryId])).rows[0];
+  assert.equal(delivery.engine,'browser');assert.equal(delivery.payload.publishNow,true);assert.ok(delivery.approved_at);assert.equal(delivery.planned_at,null);
+  assert.deepEqual(await readFile(join(process.env.DATA_DIR!,delivery.local_file)),original);
+  const bridge=new BrowserBridge(),instanceId=randomUUID(),report={instanceId,profileSaved:true,externalBusy:false,desktop:true,activeJobId:null};
+  await bridge.poll(report);await bridge.tick();const {job}=await bridge.poll(report);
+  assert.equal(job.publishNow,true);assert.equal(job.publishAt,undefined);assert.equal(job.profileId,'default');
+  await assert.rejects(()=>bridge.finish(job.id,{instanceId,result:'published'}),/não confirmou/);
+  await bridge.progress(job.id,{instanceId,stage:'browser_upload_started'});
+  await bridge.progress(job.id,{instanceId,stage:'browser_published'});await bridge.finish(job.id,{instanceId,result:'published'});
+  await service.retirePublished();clip=await currentClip();assert.equal(clip.status,'posted');
+  assert.deepEqual(await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4')),original);
+  assert.equal((await call('/'+clip.id+'/publish',publishBody(clip))).status,202);
+  clip=await currentClip();assert.equal(clip.publications.length,2);assert.equal(clip.delivery_id,deliveryId);
+  assert.equal((await call('/'+clip.id+'/discard',{confirm:true})).status,409,'um segundo destino pendente protege o arquivo mesmo com o primeiro confirmado');
+});
+
+test('biblioteca filtra projetos sem arquivos antes de paginar e inclui cortes ainda não publicados',async()=>{
+  const ids=[];
+  for(let i=0;i<2;i++){ids.push(await create());await service.tick();}
+  const pending=await create();
+  const {parsePagination}=await import('../src/pagination.js');
+  let page=await service.state(parsePagination({limit:'1'},{scope:'cutFolders'}));
+  const found=[page.jobs[0].id];assert.ok(!found.includes(pending));assert.equal(page.jobs[0].clips[0].hasMedia,true);assert.equal(page.pagination.hasMore,true);
+  page=await service.state(parsePagination({limit:'1',cursor:page.pagination.nextCursor!},{scope:'cutFolders'}));found.push(page.jobs[0].id);
+  assert.deepEqual(new Set(found),new Set(ids));assert.equal(page.pagination.hasMore,false);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM deliveries')).rows[0].n,0);
 });

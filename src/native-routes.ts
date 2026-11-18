@@ -5,6 +5,10 @@ import { z } from 'zod';
 import { AppError,appUrl,dataDir,encrypt,decrypt } from './config.js';
 import { pool,getSetting,setSetting,event } from './db.js';
 import { metadataSchema } from './domain.js';
+import {sha256} from './media.js';
+import {tiktokCaption} from './tiktok-caption.js';
+import {genericVideoTitle} from './video-titles.js';
+import {join} from 'node:path';
 import { youtubeStatus } from './native-api.js';
 import {cleanupPublishedMedia} from './media-cleanup.js';
 import {tiktokLoginMode,validateTiktokCallback,tiktokCodeChallenge,type TikTokLoginMode} from './tiktok-login.js';
@@ -114,22 +118,29 @@ for(const provider of ['youtube','tiktok']) {
   });
 }
 nativeRoutes.get('/api/native/deliveries/:id',async(req,res)=>{
-  const {rows:[row]}=await pool.query("SELECT id,provider,status,payload,local_file,error FROM deliveries WHERE id=$1 AND engine='local'",[uuid.parse(req.params.id)]);
+  const {rows:[row]}=await pool.query("SELECT id,engine,provider,status,payload,local_file,error FROM deliveries WHERE id=$1 AND engine IN ('local','browser')",[uuid.parse(req.params.id)]);
   if(!row)throw new AppError('Envio local não encontrado.',404);
-  res.json({id:row.id,provider:row.provider,status:row.status,payload:row.payload,hasMedia:!!row.local_file,error:row.error});
+  res.json({id:row.id,engine:row.engine,provider:row.provider,status:row.status,payload:row.payload,hasMedia:!!row.local_file,error:row.error});
 });
 nativeRoutes.get('/api/native/deliveries/:id/media',async(req,res)=>{
-  const {rows:[row]}=await pool.query("SELECT local_file FROM deliveries WHERE id=$1 AND engine='local'",[uuid.parse(req.params.id)]);
+  const {rows:[row]}=await pool.query("SELECT local_file FROM deliveries WHERE id=$1 AND engine IN ('local','browser')",[uuid.parse(req.params.id)]);
   if(!row?.local_file || !/^[\da-f-]+\.native\.mp4$/.test(row.local_file))throw new AppError('Cópia local não disponível.',404);
   res.setHeader('Cache-Control','no-store');res.sendFile(row.local_file,{root:dataDir});
 });
 nativeRoutes.post('/api/native/deliveries/:id/approve',async(req,res)=>{
-  const id=uuid.parse(req.params.id),input=z.object({confirm:z.literal(true),metadata:metadataSchema}).parse(req.body);
+  const id=uuid.parse(req.params.id),input=z.object({confirm:z.literal(true),metadata:metadataSchema,publishNow:z.literal(true).optional()}).parse(req.body);
   if(!input.metadata.ready)throw new AppError('Marque o vídeo como pronto antes de aprovar.');
-  const {rows:[row]}=await pool.query("SELECT * FROM deliveries WHERE id=$1 AND engine='local' AND status='review'",[id]);
+  const {rows:[row]}=await pool.query("SELECT * FROM deliveries WHERE id=$1 AND status='review' AND (engine='local' OR engine='browser' AND request_id IS NULL AND payload->>'manualPublication'='true')",[id]);
   if(!row)throw new AppError('Este envio não está aguardando revisão.');
-  if(!(await nativeChannels()).some(c=>c.id===row.integration_id&&!c.disabled))throw new AppError('Conecte a mesma conta antes de aprovar o envio.');
-  const payload={...row.payload,metadata:input.metadata,automatic:false};
+  if(row.engine==='browser'){
+    if(!input.publishNow||!row.integration_id.startsWith('browser:tiktok:'))throw new AppError('Confirme a publicação imediata neste perfil.');
+    if(!(await pool.query('SELECT id FROM browser_profiles WHERE id=$1',[row.integration_id.slice('browser:tiktok:'.length)])).rowCount)throw new AppError('O perfil selecionado não está mais disponível.',409);
+    if(input.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||input.metadata.tiktok.commercialContent||input.metadata.tiktok.ownBrand)throw new AppError('Confira a publicação pública e as declarações do TikTok.');
+    if(genericVideoTitle(input.metadata.title))throw new AppError('Escreva um título que descreva o conteúdo antes de postar.');
+    try{tiktokCaption(input.metadata);}catch{throw new AppError('A legenda do TikTok excede 2.200 caracteres.');}
+    if(!row.local_file||await sha256(join(dataDir,row.local_file))!==row.payload.assetSha256)throw new AppError('O arquivo da prévia mudou. Prepare o vídeo novamente.',409);
+  }else if(!(await nativeChannels()).some(c=>c.id===row.integration_id&&!c.disabled))throw new AppError('Conecte a mesma conta antes de aprovar o envio.');
+  const payload={...row.payload,metadata:input.metadata,automatic:false,...(row.engine==='browser'?{publishNow:true}:{})};
   const result=await pool.query("UPDATE deliveries SET payload=$2,status='pending',approved_at=now(),error=NULL,retry_at=NULL,updated_at=now() WHERE id=$1 AND status='review'",[id,JSON.stringify(payload)]);
   if(!result.rowCount)throw new AppError('Este envio já foi aprovado ou alterado.');
   await event('info','Envio aprovado para a fila local.',undefined,row.video_id);res.json({ok:true});
@@ -142,9 +153,18 @@ nativeRoutes.post('/api/native/deliveries/:id/retry',async(req,res)=>{
 });
 nativeRoutes.post('/api/native/deliveries/:id/cancel',async(req,res)=>{
   const id=uuid.parse(req.params.id);
-  const {rows:[row]}=await pool.query("UPDATE deliveries SET status='cancelled',local_file=NULL,error=NULL,updated_at=now() WHERE id=$1 AND engine='local' AND status IN ('review','pending','retry','failed') AND session IS NULL AND post_id IS NULL RETURNING video_id",[id]);
-  if(!row)throw new AppError('Somente envios que ainda não iniciaram uma sessão podem ser cancelados.');
-  await pool.query('DELETE FROM content_claims WHERE delivery_id=$1',[id]);
+  const db=await pool.connect();let row;
+  try{
+    await db.query('BEGIN');await db.query('SELECT pg_advisory_xact_lock(74839200)');
+    const result=await db.query(`UPDATE deliveries d SET status='cancelled',local_file=NULL,error=NULL,updated_at=now()
+      WHERE d.id=$1 AND (d.engine='local' OR d.engine='browser' AND d.request_id IS NULL AND d.payload->>'manualPublication'='true')
+      AND d.status IN ('preparing','review','pending','retry','failed') AND d.session IS NULL AND d.post_id IS NULL AND (d.engine='local' OR d.upload_started_at IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM browser_commands b WHERE b.delivery_id=d.id AND (b.upload_started OR b.status IN ('running','cancel_requested')))
+      RETURNING d.video_id`,[id]);
+    row=result.rows[0];if(!row)throw new AppError('Somente envios que ainda não iniciaram uma sessão podem ser cancelados.');
+    await db.query("UPDATE browser_commands SET status='cancelled',finished_at=now() WHERE delivery_id=$1 AND status='pending'",[id]);
+    await db.query('DELETE FROM content_claims WHERE delivery_id=$1',[id]);await db.query('COMMIT');
+  }catch(error){await db.query('ROLLBACK');throw error;}finally{db.release();}
   // Filename is generated from the UUID, never accepted from the request.
   const {rm}=await import('node:fs/promises');const {join}=await import('node:path');
   await rm(join(dataDir,id+'.native.mp4'),{force:true});

@@ -45,12 +45,12 @@ test('failed rerender leaves the previous preview intact',async()=>{
   assert.ok(!(await readdir(dir)).some(name=>name.endsWith('.ass')||name.includes('.rendering.')));
 });
 
-test('exports both orientations at 4K and 59.94 fps while keeping the original source',async()=>{
+test('exports both orientations and split layout at 4K and 59.94 fps while keeping the original source',async()=>{
   const qualityDir=await mkdtemp(join(dir,'4k-')),source=join(qualityDir,'source.mp4');
   execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=3840x2160:r=60000/1001:d=0.6','-f','lavfi','-i','sine=frequency=440:duration=0.6','-c:v','libx264','-preset','ultrafast','-threads','2','-pix_fmt','yuv420p','-c:a','aac','-shortest',source]);
   const before=await sha256(source);
-  for(const format of ['shorts','video'] as const) {
-    const {path}=await renderCut(qualityDir,randomUUID(),{start:0,end:0.5,captions:[{start:0.01,end:0.49,text:'Qualidade original.'}],framing:'crop',framingOptions:{format,mode:'crop',focusX:0.5,focusY:0.5,zoom:1},captionStyle:noCaptions});
+  for(const format of ['shorts','video'] as const)for(const mode of ['crop','split'] as const){
+    const {path}=await renderCut(qualityDir,randomUUID(),{start:0,end:0.5,captions:[{start:0.01,end:0.49,text:'Qualidade original.'}],framing:mode==='split'?'fit':'crop',framingOptions:{format,mode,focusX:0.5,focusY:0.5,zoom:1},captionStyle:noCaptions});
     const info=await validateVideo(path,format);
     assert.deepEqual([info.width,info.height],format==='shorts'?[2160,3840]:[3840,2160]);
     const video=JSON.parse(execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=r_frame_rate,nb_frames','-of','json',path],{encoding:'utf8'})).streams[0];

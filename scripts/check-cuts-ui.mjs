@@ -22,7 +22,7 @@ const clip={id:clipId,job_id:jobId,title:'Um exemplo de corte',start_seconds:10,
 clip.captions.push({start:17.5,end:23,text:'Antes depois agora.',words:[{start:17.5,end:18,text:'Antes'},{start:21,end:22,text:'depois'},{start:22,end:23,text:'agora.'}]});
 const job={id:jobId,url:'https://www.youtube.com/watch?v=dQw4w9WgXcQ',title:'Vídeo de exemplo',duration:180,replay_data:{status:'available',source:'youtube_most_replayed',message:'Mapa público de replay.',points:[{start:0,end:60,value:.2},{start:60,end:120,value:1},{start:120,end:180,value:.4}]},status:'review',created_at:'2026-11-17T12:00:00Z',clips:[clip]};
 const discardedJob={id:'00000000-0000-4000-8000-000000000000',title:'Projeto já descartado',status:'discarded',created_at:'2026-11-17T15:00:00Z',clips:[]};
-const fixture={cuts:{dependencies:{ready:true,details:[]},channels:[{id:channelId,name:'Canal de teste',disabled:false}],jobs:[job,discardedJob]},scheduler:{paused:false,queue:{}},stats:{watches:0,pending:0,sent:0,attention:0},watches:[],publishing:{actions:[]}};
+const fixture={cuts:{dependencies:{ready:true,details:[]},channels:[{id:channelId,name:'Canal de teste',identifier:'youtube',disabled:false}],jobs:[job,discardedJob]},scheduler:{paused:false,queue:{}},stats:{watches:0,pending:0,sent:0,attention:0},watches:[],publishing:{actions:[]}};
 const actions=[],errors=[],stateRequests=[];let polls=0,leakDiscarded=true,discardGate=null;
 function statePage(url){
   const jobs=fixture.cuts.jobs.filter(item=>item.status!=='discarded').sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id.localeCompare(a.id));
@@ -309,7 +309,7 @@ try{
   await cardGraph.evaluate(svg=>svg.addEventListener('click',event=>{window.__qaCardReplayX=event.clientX;},{once:true}));
   const beforeGraphSelect=actions.length;
   await page.mouse.click(cardBox.x+cardBox.width*.75,cardBox.y+cardBox.height*.45);
-  await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'Editar corte',exact:true}).waitFor();
   const clickedCardTime=replayTimeAt(await page.evaluate(()=>window.__qaCardReplayX),{left:cardBox.x,width:cardBox.width},job.duration);
   assert.equal(parseTimecode(await page.getByLabel('Começo do corte',{exact:true}).inputValue()),clickedCardTime,'the card graph also starts precisely at the clicked time');
   assert.equal(actions.length,beforeGraphSelect,'opening a selection from the card must not save it');
@@ -355,7 +355,7 @@ try{
   assert.equal(actions.at(-1).path,'/api/cuts/'+clipId+'/publish');assert.equal(actions.at(-1).body.revision,5);assert.equal(actions.at(-1).body.format,'video');assert.equal(actions.at(-1).body.channelId,channelId);assert.equal(actions.at(-1).body.visibility,'public');assert.equal(actions.at(-1).body.confirm,true);
   Object.assign(clip,{status:'posted',hasMedia:true,delivery_status:'published',release_url:'https://www.youtube.com/watch?v=qa123'});job.status='completed';await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByText('Publicado no YouTube',{exact:true}).waitFor();assert.equal(await page.locator('[data-cut-clip] video').count(),1);
-  assert.equal(await page.getByRole('button',{name:'Postar',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Postar',exact:true}).count(),1,'um corte enviado continua disponível para outro destino');
   const downloadLink=page.getByRole('link',{name:'Baixar MP4',exact:true});
   assert((await downloadLink.getAttribute('href')).includes('/api/cuts/'+clipId+'/media'));
   const [download]=await Promise.all([page.waitForEvent('download'),downloadLink.click()]);

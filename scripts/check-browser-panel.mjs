@@ -1,12 +1,23 @@
 import {chromium} from 'playwright-core';
 import assert from 'node:assert/strict';
-import {mkdir} from 'node:fs/promises';
-const base=process.env.APP_URL||'http://localhost:4317';
+import {mkdir,readFile} from 'node:fs/promises';
+import {createServer} from 'node:http';
+import {resolve,extname} from 'node:path';
+import {execFileSync} from 'node:child_process';
+const publicRoot=resolve('public');
+const server=createServer(async(req,res)=>{try{const url=new URL(req.url,'http://localhost'),file=resolve(publicRoot,'.'+(url.pathname==='/'?'/index.html':url.pathname));if(!file.startsWith(publicRoot+'/'))throw Error('Not found');res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[extname(file)]||'application/octet-stream');res.end(await readFile(file));}catch{res.statusCode=404;res.end();}});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const base='http://127.0.0.1:'+server.address().port;
 const fixture={
   browser:{configured:true,rootPath:'/videos',config:{folder:'/videos',enabled:false,cadence:'daily',intervalMinutes:720,times:['08:00','20:00'],timezone:'America/Sao_Paulo',stripMetadata:true,nextAt:null,revision:0},agent:{online:true,desktop:true,externalBusy:false,profileSaved:true,lastSeen:null},active:null,jobs:[]},
   scheduler:{paused:false,queue:{backend:'BullMQ + Redis'}},watches:[],stats:{pending:0,sent:0,attention:0},videos:[],events:[],
   connections:{local:{rootPath:'/videos'},google:{configured:false,connected:false,clientId:'',callbackUrl:base+'/auth/google/callback'},postiz:{configured:false,baseUrl:'',youtubeSchedulingApproved:false},native:{engine:'local',youtube:{configured:false,connected:false,clientId:'',account:'',autoPublishApproved:false,callbackUrl:base+'/auth/youtube/callback'},tiktok:{configured:false,connected:false,clientKey:'',account:'',loginMode:'desktop',desktopAvailable:true,httpsRequired:false,callbackUrl:base+'/auth/tiktok/callback'}}}
 };
+const cutId='22222222-2222-4222-8222-222222222222',jobId='33333333-3333-4333-8333-333333333333',videoId='44444444-4444-4444-8444-444444444444',deliveryId='55555555-5555-4555-8555-555555555555',profileId='66666666-6666-4666-8666-666666666666';
+const metadata={schemaVersion:1,ready:true,title:'Uma corrida no pôr do sol',description:'Minha legenda.',hashtags:[],youtube:{visibility:'private',madeForKids:false,containsSyntheticMedia:false,tags:[]},tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false,allowComment:false,allowDuet:false,allowStitch:false,commercialContent:false,ownBrand:false,contentPostingMethod:'DIRECT_POST'}};
+fixture.cutFolders={channels:[{id:'browser:tiktok:'+profileId,name:'Perfil secundário',identifier:'tiktok-browser',disabled:false}],jobs:[{id:jobId,title:'Meu projeto',status:'review',clips:[{id:cutId,job_id:jobId,title:metadata.title,status:'review',revision:3,hasMedia:true,start_seconds:0,end_seconds:4,framing_options:{format:'shorts',mode:'fit'},captions:[],publications:[]}]}],pagination:{limit:20,hasMore:false,nextCursor:null}};
+fixture.cuts=fixture.cutFolders;
+const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=90x160:d=4','-c:v','libx264','-pix_fmt','yuv420p','-movflags','frag_keyframe+empty_moov','-f','mp4','-'],{maxBuffer:1024*1024});
 const actions=[],errors=[];
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
 const page=await browser.newPage({viewport:{width:1440,height:1100}});
@@ -15,8 +26,14 @@ await page.route('**/api/**',async route=>{
   const request=route.request(),path=new URL(request.url()).pathname;
   if(path==='/api/state')return route.fulfill({json:fixture});
   if(path==='/api/integrations')return route.fulfill({json:[]});
+  if(path==='/api/cuts/library')return route.fulfill({json:fixture.cutFolders});
+  if(path==='/api/browser/videos')return route.fulfill({json:{items:[{id:videoId,title:metadata.title,name:'original.mp4',version:'source-version-1',folder:'Minha pasta'}],pagination:{hasMore:false,nextCursor:null}}});
+  if(path==='/api/native/deliveries/'+deliveryId)return route.fulfill({json:{id:deliveryId,engine:'browser',provider:'tiktok',status:'review',hasMedia:true,payload:{metadata,channelName:'Perfil secundário'}}});
+  if(path.endsWith('/media'))return route.fulfill({body:media,contentType:'video/mp4'});
   assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');
   const body=request.postDataJSON();actions.push({path,body});
+  if(path==='/api/browser/videos/'+videoId+'/prepare')return route.fulfill({json:{id:deliveryId}});
+  if(path==='/api/native/deliveries/'+deliveryId+'/approve'||path==='/api/cuts/'+cutId+'/publish')return route.fulfill({json:{ok:true,deliveryId}});
   if(path==='/api/browser/config')Object.assign(fixture.browser.config,body,{nextAt:'2026-11-15T22:00:00Z'});
   else if(path==='/api/browser/login'||path==='/api/browser/run'){
     const job={id:'11111111-1111-4111-8111-111111111111',kind:path.endsWith('login')?'login':'upload',origin:'manual',status:'running',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:'2026-11-15T12:00:00-03:00'};
@@ -115,6 +132,34 @@ try{
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Formulário YouTube ultrapassou a tela: '+width);
   }
   await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+  await page.setViewportSize({width:1440,height:1100});
+  await page.goto(base+'/#watches');await page.getByRole('heading',{name:'Cortes do aplicativo',exact:true}).waitFor();
+  const libraryVideo=page.locator('#cuts-library video');await libraryVideo.evaluate(async video=>{video.dataset.qaPreserved='yes';video.loop=true;video.muted=true;await video.play();});
+  fixture.cutFolders.jobs[0].title='Projeto atualizado';
+  await Promise.all([page.waitForResponse(response=>new URL(response.url()).pathname==='/api/state'),page.evaluate(()=>window.dispatchEvent(new Event('hashchange')))]);
+  assert.equal(await libraryVideo.getAttribute('data-qa-preserved'),'yes','o polling de Minhas pastas preserva o player em reprodução');
+  await libraryVideo.evaluate(video=>video.pause());
+  await page.getByRole('button',{name:'Postar no TikTok',exact:true}).click();
+  const cutForm=page.locator('#cuts-dialog-form');assert.equal(await cutForm.getByLabel('Onde postar?').inputValue(),'tiktok');
+  await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/tiktok-publish-now.png',fullPage:true});
+  await cutForm.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);
+  const beforeCut=actions.length;await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();assert.equal(actions.length,beforeCut,'sem consentimento o corte não é enviado');
+  assert.equal(await cutForm.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await cutForm.getByRole('checkbox',{name:/Revisei este vídeo/}).check();
+  await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();await page.locator('#cuts-dialog').waitFor({state:'hidden'});
+  assert.equal(actions.at(-1).path,'/api/cuts/'+cutId+'/publish');assert.equal(actions.at(-1).body.channelId,'browser:tiktok:'+profileId);assert.equal(actions.at(-1).body.tiktok.privacyLevel,'PUBLIC_TO_EVERYONE');assert.equal(actions.at(-1).body.revision,3);
+  await page.goto(base+'/#browser');await page.getByRole('button',{name:'Postar agora no TikTok',exact:true}).click();
+  const picker=page.locator('#browser-publish-dialog');await picker.getByLabel('Origem do vídeo').selectOption('folders');await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(videoId);
+  await picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click();
+  const review=page.locator('#delivery-form');await review.getByRole('button',{name:'Autorizar e postar agora',exact:true}).waitFor();
+  assert.equal(actions.at(-1).body.profileId,profileId);assert.equal(actions.at(-1).body.version,'source-version-1');assert.equal(await review.locator('video').count(),1);
+  await review.getByLabel('Título do vídeo').fill('Minha corrida revisada');assert.equal(await review.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await review.getByRole('checkbox',{name:/Autorizo o envio deste vídeo/}).check();
+  await review.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();await page.locator('#delivery-dialog').waitFor({state:'hidden'});
+  assert.equal(actions.at(-1).path,'/api/native/deliveries/'+deliveryId+'/approve');assert.equal(actions.at(-1).body.publishNow,true);assert.equal(actions.at(-1).body.metadata.title,'Minha corrida revisada');
+  await page.getByRole('button',{name:'Postar agora no TikTok',exact:true}).click();
+  await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(cutId);await picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click();
+  await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).waitFor();assert.equal(await cutForm.getByLabel('Perfil do TikTok').inputValue(),'browser:tiktok:'+profileId);
+  await cutForm.getByRole('button',{name:'Cancelar',exact:true}).click();
+  await page.setViewportSize({width:320,height:844});await page.goto(base+'/#watches');await page.getByRole('heading',{name:'Cortes do aplicativo',exact:true}).waitFor();assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'a biblioteca cabe no celular');await page.screenshot({path:'artifacts/cuts-library-mobile.png',fullPage:true});
   assert.deepEqual(errors,[]);
   console.log('Painel validado: rotinas, login, interrupção, lote TikTok com limites/datas, formulário YouTube e telas móveis. Todos os comandos foram simulados.');
-}finally{await browser.close();}
+}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

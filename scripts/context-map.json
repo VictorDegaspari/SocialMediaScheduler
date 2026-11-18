@@ -8,7 +8,10 @@
       "scripts/transcribe-cuts.py",
       "public/cuts-panel.js",
       "public/confirm-dialog.js",
-      "public/cuts-list.css"
+      "public/cuts-list.css",
+      "src/cut-publications.ts",
+      "public/cut-publish.js",
+      "src/cuts-framing.ts"
     ],
     "unit": [
       "tests/cuts-media.test.ts",
@@ -42,22 +45,28 @@
       "public/cuts-replay.js",
       "public/cuts-time.js",
       "public/cuts-editor.css",
-      "public/cuts-captions.js"
+      "public/cuts-captions.js",
+      "public/cuts-split.js",
+      "public/cuts-split-layout.js",
+      "public/cuts-split-layout.d.ts"
     ],
     "unit": [
       "tests/cuts-edit.test.ts",
       "tests/cuts-playback.test.ts",
       "tests/cuts-replay.test.ts",
       "tests/cuts-time.test.ts",
-      "tests/cuts-captions.test.ts"
+      "tests/cuts-captions.test.ts",
+      "tests/cuts-split.test.ts"
     ],
     "integration": [
-      "tests/cuts-editor-media.integration.ts"
+      "tests/cuts-editor-media.integration.ts",
+      "tests/cuts-split-media.integration.ts"
     ],
     "ui": [
       "scripts/check-cuts-ui.mjs",
       "scripts/check-cuts-editor-regressions.mjs",
-      "scripts/check-cuts-panel-sessions.mjs"
+      "scripts/check-cuts-panel-sessions.mjs",
+      "scripts/check-cuts-split-ui.mjs"
     ],
     "docs": [
       "docs/GERADOR-DE-CORTES.md"
@@ -126,7 +135,10 @@
       "src/browser-login.ts",
       "scripts/browser-agent.mjs",
       "scripts/tiktok-browser.mjs",
-      "public/browser-panel.js"
+      "public/browser-panel.js",
+      "src/browser-publications.ts",
+      "src/tiktok-caption.ts",
+      "public/browser-publish.js"
     ],
     "unit": [
       "tests/browser.test.ts",

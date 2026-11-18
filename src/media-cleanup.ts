@@ -20,7 +20,7 @@ export function canRemovePreparedMedia(delivery:RetainedDelivery):boolean {
   return ['cancelled','duplicate'].includes(delivery.status)&&!delivery.session&&!delivery.upload_started_at&&!delivery.post_id;
 }
 
-const facts=`SELECT d.id,d.engine,d.status,d.post_id,d.local_file,d.session,d.upload_started_at,
+export const retainedDeliveryQuery=`SELECT d.id,d.video_id,d.engine,d.status,d.post_id,d.local_file,d.session,d.upload_started_at,
   jsonb_build_object('manualConfirmed',d.payload->'manualConfirmed') AS payload,
   EXISTS(SELECT 1 FROM browser_commands b WHERE b.delivery_id=d.id AND b.upload_started
   AND ((b.status='scheduled' AND b.phase='browser_scheduled') OR
@@ -40,7 +40,7 @@ export async function cleanupPublishedMedia(deliveryId?:string):Promise<{removed
       try {ids=(await readdir(dataDir)).filter(name=>nativeFilename.test(name)).map(name=>name.slice(0,-'.native.mp4'.length));}
       catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
     }
-    const {rows}=await pool.query<RetainedDelivery>(facts+(deliveryId?' WHERE d.id=$1':` WHERE d.engine IN ('local','browser')
+    const {rows}=await pool.query<RetainedDelivery>(retainedDeliveryQuery+(deliveryId?' WHERE d.id=$1':` WHERE d.engine IN ('local','browser')
       AND d.status IN ('processing','scheduled','published','private','unlisted','inbox','completed','failed','cancelled','duplicate')
       AND (d.local_file IS NOT NULL OR d.id=ANY($1::uuid[]))`),[deliveryId||ids]);
     for(const delivery of rows) {
@@ -50,7 +50,7 @@ export async function cleanupPublishedMedia(deliveryId?:string):Promise<{removed
       try {
         // Independent destinations usually have independent files. Preserve any
         // legacy/shared file still required by another review or upload session.
-        const {rows:references}=await pool.query<RetainedDelivery>(facts+' WHERE d.local_file=$1',[filename]);
+        const {rows:references}=await pool.query<RetainedDelivery>(retainedDeliveryQuery+' WHERE d.local_file=$1',[filename]);
         if(references.some(reference=>!canRemovePreparedMedia(reference)))continue;
         const path=join(dataDir,filename);
         let exists=false;

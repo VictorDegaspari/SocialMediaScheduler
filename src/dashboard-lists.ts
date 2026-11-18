@@ -27,7 +27,7 @@ export async function listVideos(page:PageOptions){
   const values:unknown[]=[];
   const where=keysetClause(page,'v.updated_at','v.id',values),limit=pageLimit(page,values);
   const {rows}=await pool.query(`SELECT v.id,v.name,v.status,v.error,v.created_at,w.name AS watch_name,
-    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',d.id,'engine',d.engine,'provider',d.provider,'status',d.status,'postId',d.post_id,'url',d.release_url,'error',d.error,'plannedAt',d.planned_at)) FROM deliveries d WHERE d.video_id=v.id),'[]') AS deliveries,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',d.id,'engine',d.engine,'provider',d.provider,'status',d.status,'postId',d.post_id,'url',d.release_url,'error',d.error,'plannedAt',d.planned_at,'manualPublication',d.payload->'manualPublication','channelName',d.payload->>'channelName')) FROM deliveries d WHERE d.video_id=v.id),'[]') AS deliveries,
     ${cursorFields('v.updated_at','v.id')}
     FROM videos v JOIN watches w ON w.id=v.watch_id WHERE true${where}
     ORDER BY v.updated_at DESC,v.id DESC${limit}`,values);

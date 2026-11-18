@@ -58,17 +58,18 @@ app.get('/api/state',async(req,res)=>{
   const eventsPage=parsePagination(req.query,{scope:'events',prefix:'events',idType:'bigint'});
   const videosPage=parsePagination(req.query,{scope:'videos',prefix:'videos'});
   const cutsPage=parsePagination(req.query,{scope:'cuts',prefix:'cuts',defaultLimit:10});
+  const cutFoldersPage=parsePagination(req.query,{scope:'cutFolders',prefix:'cutFolders',defaultLimit:10});
   const requestsPage=parsePagination(req.query,{scope:'requests',prefix:'requests'});
   const actionsPage=parsePagination(req.query,{scope:'actions',prefix:'actions'});
   const browserPage=parsePagination(req.query,{scope:'browser',prefix:'browser'});
-  const [google,tokens,postiz,paused,heartbeat,watches,stats,activities,videos,publishing,browser,cuts,native,queue]=await Promise.all([
+  const [google,tokens,postiz,paused,heartbeat,watches,stats,activities,videos,publishing,browser,cuts,cutFolders,native,queue]=await Promise.all([
     getSetting<GoogleConfig>('google'),getSetting<Credentials>('googleTokens'),getSetting<PostizConfig>('postiz'),
     getSetting<boolean>('paused'),getSetting<string>('heartbeat'),
     listWatches(watchesPage),dashboardStats(),listEvents(eventsPage),listVideos(videosPage),
-    publicationRequests.context({requests:requestsPage,actions:actionsPage}),browserBridge.state(browserPage),cutsService.state(cutsPage),
+    publicationRequests.context({requests:requestsPage,actions:actionsPage}),browserBridge.state(browserPage),cutsService.state(cutsPage),cutsService.state(cutFoldersPage),
     nativeConnectionState(),scheduler.state()
   ]);
-  res.json({publishing,browser,cuts,
+  res.json({publishing,browser,cuts,cutFolders,
     connections:{native,local:{rootPath:localMediaHostDir},google:{configured:!!google,connected:!!tokens?.refresh_token,clientId:google?.clientId || '',callbackUrl:`${appUrl}/auth/google/callback`},postiz:{configured:!!postiz,baseUrl:postiz?.baseUrl || '',youtubeSchedulingApproved:postiz?.youtubeSchedulingApproved || false}},
     scheduler:{paused:!!paused,heartbeat,timezone:'America/Sao_Paulo',queue},
     watches:watches.items,stats,events:activities.items,videos:videos.items,

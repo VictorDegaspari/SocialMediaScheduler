@@ -2,10 +2,10 @@ let dialog,pending=false,stylesReady;
 
 function getDialog(){
   if(dialog)return dialog;
-  const stylesheet=document.createElement('link');
+  const existing=document.querySelector('link[data-cuts-styles]'),stylesheet=existing||document.createElement('link');
   stylesheet.rel='stylesheet';stylesheet.href=new URL('./cuts-list.css',import.meta.url).href;
-  stylesReady=new Promise(resolve=>{stylesheet.addEventListener('load',resolve,{once:true});stylesheet.addEventListener('error',resolve,{once:true});});
-  document.head.append(stylesheet);
+  stylesReady=stylesheet.sheet?Promise.resolve():new Promise(resolve=>{stylesheet.addEventListener('load',resolve,{once:true});stylesheet.addEventListener('error',resolve,{once:true});});
+  if(!existing)document.head.append(stylesheet);
   dialog=document.createElement('dialog');
   dialog.id='confirm-discard-dialog';dialog.className='confirm-discard-dialog';
   dialog.setAttribute('role','alertdialog');

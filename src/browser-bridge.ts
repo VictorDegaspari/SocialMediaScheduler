@@ -12,6 +12,7 @@ import { LocalFiles } from './local.js';
 import { nextRun } from './domain.js';
 import { nativeScheduleSchema,planNativeDate,validScheduleDate,uploadBudgetAvailable,reservedCapacityAllowed,type Reservation } from './native-schedule.js';
 import {cleanupPublishedMedia} from './media-cleanup.js';
+import {browserPublicationRoutes,recoverBrowserPreparations} from './browser-publications.js';
 import {cursorFields,keysetClause,pageLimit,paginateRows,parsePagination,type PageOptions} from './pagination.js';
 
 const ACTIVE = ['pending','running','cancel_requested'];
@@ -119,7 +120,7 @@ export class BrowserBridge {
         cadence=EXCLUDED.cadence,interval_minutes=EXCLUDED.interval_minutes,times=EXCLUDED.times,strip_metadata=EXCLUDED.strip_metadata,
         next_at=EXCLUDED.next_at,retry_at=NULL,mode=EXCLUDED.mode,native_schedule=EXCLUDED.native_schedule,source_type=EXCLUDED.source_type,pack_defaults=EXCLUDED.pack_defaults,revision=browser_settings.revision+1`,
         [folder.hostPath,input.enabled,input.cadence,input.intervalMinutes,JSON.stringify(input.times),input.stripMetadata,input.mode==='native_schedule'||input.cadence==='interval'?new Date():next(config),input.mode,JSON.stringify(input.nativeSchedule),input.sourceType,JSON.stringify(input.packDefaults)]);
-      await db.query("UPDATE browser_commands SET status='cancelled',message='Configuração alterada antes do envio.',finished_at=now() WHERE status='pending' AND kind='upload'");
+      await db.query("UPDATE browser_commands SET status='cancelled',message='Configuração alterada antes do envio.',finished_at=now() WHERE status='pending' AND kind='upload' AND config->>'requestManaged' IS DISTINCT FROM 'true'");
       if(!input.enabled)await db.query("UPDATE browser_commands SET status='cancelled',message='Rotina pausada antes da execução.',finished_at=now() WHERE status='pending' AND origin='schedule'");
     });
     await event('info',input.enabled?'Rotina do TikTok navegador salva e ativada.':'Configuração do TikTok navegador salva; rotina automática pausada.');
@@ -145,6 +146,15 @@ export class BrowserBridge {
   }
   async tick(){
     const paused=await getSetting<boolean>('paused');
+    await recoverBrowserPreparations();
+    if(!paused){
+      const {rows:deliveries}=await pool.query(`SELECT d.*,v.sha256 AS original_hash,v.name,v.file_id FROM deliveries d JOIN videos v ON v.id=d.video_id
+        WHERE d.engine='browser' AND d.status='pending' AND d.request_id IS NULL AND d.approved_at IS NOT NULL AND d.payload->>'publishNow'='true'
+        ORDER BY d.created_at,d.id`);
+      for(const delivery of deliveries){
+        if(await this.enqueueDelivery(delivery,delivery.integration_id.slice('browser:tiktok:'.length),{...await configuration(),mode:'review',publishNow:true,requestManaged:true,enabled:false}))break;
+      }
+    }
     await atomic(async db=>{
       await recover(db);
       if(paused)return;
@@ -194,12 +204,12 @@ export class BrowserBridge {
       if(job.request_id&&job.kind==='upload'){const {rows:[r]}=await db.query('SELECT config FROM publication_requests WHERE id=$1',[job.request_id]);if(!r||!validScheduleDate('tiktok',new Date(job.planned_at),r.config.policy)){await db.query("UPDATE browser_commands SET status='cancelled',phase='stale_schedule',message='A data reservada venceu antes do upload.',finished_at=now() WHERE id=$1",[job.id]);return {job:null,cancel:false};}const reservations=await accountCalendar('browser:tiktok:'+(job.config.profileId||'default'),db);if(!uploadBudgetAvailable(r.config.policy,reservations)||!reservedCapacityAllowed(new Date(job.planned_at),r.config.cadence,r.config.policy,reservations)){await db.query("UPDATE browser_commands SET status='cancelled',phase='capacity_wait',message='Aguardando limite da conta; o vídeo permanece na fila.',finished_at=now() WHERE id=$1",[job.id]);return {job:null,cancel:false};}}
       const profileId=job.config.profileId||'default',profile=input.profiles?.[profileId]||(profileId==='default'?input:null);
       if(!profile||profile.externalBusy||(job.kind==='upload'&&!profile.profileSaved))return {job:null,cancel:false};
-      if(job.kind==='upload'&&!job.request_id&&(await db.query('SELECT id FROM browser_settings WHERE blocked_until>now()')).rowCount)return {job:null,cancel:false};
+      if(job.kind==='upload'&&!job.request_id&&!job.config.requestManaged&&(await db.query('SELECT id FROM browser_settings WHERE blocked_until>now()')).rowCount)return {job:null,cancel:false};
       if(job.kind==='upload'&&job.config.publishNow) {
-        const policy=nativeScheduleSchema.parse(job.config.nativeSchedule),reservations=await accountCalendar('browser:tiktok:'+profileId,db,job.delivery_id);
+        const policy=(await configuration(db)).nativeSchedule,reservations=await accountCalendar('browser:tiktok:'+profileId,db,job.delivery_id);
         const cooldown=await getSetting<string>('uploadCooldown:browser:tiktok:'+profileId);
         if((cooldown&&Date.parse(cooldown)>Date.now())||!uploadBudgetAvailable(policy,reservations))return {job:null,cancel:false};
-        if(!reservedCapacityAllowed(new Date(),{cadence:'interval',interval_minutes:1,times:['08:00'],timezone:'America/Sao_Paulo'},policy,[...reservations,{plannedAt:new Date()}]))return {job:null,cancel:false};
+        if(!reservedCapacityAllowed(new Date(),{cadence:'interval',interval_minutes:1,times:['08:00'],timezone:'America/Sao_Paulo'},{...policy,maxScheduled:Number.MAX_SAFE_INTEGER,externalScheduled:0},[...reservations,{plannedAt:new Date()}]))return {job:null,cancel:false};
         if(job.delivery_id)await db.query('UPDATE deliveries SET planned_at=now() WHERE id=$1',[job.delivery_id]);
       }
       if(job.kind==='upload'&&job.config.mode==='native_schedule'&&!job.request_id) {
@@ -219,17 +229,32 @@ export class BrowserBridge {
       const existing=await db.query("SELECT id FROM browser_commands WHERE delivery_id=$1 AND (status NOT IN ('cancelled','failed') OR upload_started)",[delivery.id]);if(existing.rowCount)return existing.rows[0].id;
       const {rows:[agent]}=await db.query('SELECT * FROM browser_agent WHERE id=true');
       const profile=agent?.profiles?.[profileId]||(profileId==='default'?{profileSaved:agent?.profile_saved,externalBusy:agent?.external_busy}:null);
-      if(!online(agent)||!agent.desktop||!profile?.profileSaved||profile.externalBusy)return;
-      if(await busy(db))return;
+      const waiting=async(message:string)=>{if(config.publishNow)await db.query("UPDATE deliveries SET error=$2 WHERE id=$1 AND status='pending'",[delivery.id,message]);};
+      if(!online(agent)||!agent.desktop){await waiting('Aguardando o agente conectado com uma sessão gráfica aberta.');return;}
+      if(!profile?.profileSaved){await waiting('Abra o login do perfil TikTok escolhido em Conexões e conclua a autenticação.');return;}
+      if(profile.externalBusy||await busy(db)){await waiting('Aguardando a conclusão da tarefa ou janela aberta no Chrome.');return;}
       // Keep quota-blocked media in the delivery queue instead of holding the
       // single desktop agent and preventing login/uploads for other profiles.
-      if(!uploadBudgetAvailable(config.nativeSchedule,await accountCalendar('browser:tiktok:'+profileId,db)))return;
+      if(!uploadBudgetAvailable(config.nativeSchedule,await accountCalendar('browser:tiktok:'+profileId,db))){await waiting('Aguardando capacidade no limite de uploads desta conta.');return;}
+      if(config.publishNow){
+        const cooldown=await getSetting<string>('uploadCooldown:browser:tiktok:'+profileId),reservations=await accountCalendar('browser:tiktok:'+profileId,db,delivery.id);
+        if(cooldown&&Date.parse(cooldown)>Date.now()){await waiting('Aguardando o prazo de nova tentativa informado pelo TikTok.');return;}
+        if(!reservedCapacityAllowed(new Date(),{cadence:'interval',interval_minutes:1,times:['08:00'],timezone:'America/Sao_Paulo'},
+          {...config.nativeSchedule,maxScheduled:Number.MAX_SAFE_INTEGER,externalScheduled:0},[...reservations,{plannedAt:new Date()}])){await waiting('Aguardando capacidade no limite diário desta conta.');return;}
+      }
       const media={metadata:delivery.payload.metadata,assetSha256:delivery.payload.assetSha256,hash:delivery.original_hash,name:delivery.name,sourceId:delivery.file_id};
-      if(config.publishNow&&(delivery.request_id||config.mode!=='review'||delivery.payload.nativeSchedule||!delivery.approved_at))throw new AppError('Publicação imediata exige uma única entrega aprovada, sem agendamento.');
+      if(config.publishNow){
+        const {rows:[current]}=await db.query('SELECT status,approved_at,payload,integration_id FROM deliveries WHERE id=$1 FOR UPDATE',[delivery.id]);
+        if(!current||current.status!=='pending'||!current.approved_at||!current.payload.publishNow)return;
+        if(current.integration_id!=='browser:tiktok:'+profileId||!(await db.query('SELECT id FROM browser_profiles WHERE id=$1',[profileId])).rowCount)return;
+        if(delivery.request_id||config.mode!=='review'||delivery.payload.nativeSchedule||!delivery.approved_at)throw new AppError('Publicação imediata exige uma única entrega aprovada, sem agendamento.');
+      }
       const id=randomUUID();
       await db.query(`INSERT INTO browser_commands(id,kind,origin,config,planned_at,request_id,delivery_id,message)
-        VALUES($1,'upload','schedule',$2,$3,$4,$5,'Aguardando o agente para agendar na conta selecionada.')`,
-        [id,JSON.stringify({...config,profileId,requestManaged:true,media}),config.publishNow?null:delivery.planned_at,delivery.request_id,delivery.id]);
+        VALUES($1,'upload',$6,$2,$3,$4,$5,$7)`,
+        [id,JSON.stringify({...config,profileId,requestManaged:true,media}),config.publishNow?null:delivery.planned_at,delivery.request_id,delivery.id,
+          config.publishNow?'manual':'schedule',config.publishNow?'Aguardando o agente para postar agora na conta selecionada.':'Aguardando o agente para agendar na conta selecionada.']);
+      if(config.publishNow)await db.query('UPDATE deliveries SET error=NULL WHERE id=$1',[delivery.id]);
       return id;
     });
   }
@@ -250,7 +275,7 @@ export class BrowserBridge {
       if(new Date(job.lease_until).getTime()<Date.now())throw new AppError('A confirmação chegou após perder o controle da tarefa.',409);
       if(job.kind==='login'&&!['done','failed','cancelled'].includes(input.result))throw new AppError('Resultado incompatível com login.');
       if(job.kind==='upload'&&input.result==='done')throw new AppError('Preparar upload não comprova publicação.');
-      if(job.config.mode==='native_schedule'&&input.result==='review')throw new AppError('O lote exige confirmação de agendamento no TikTok.');
+      if((job.config.mode==='native_schedule'||job.config.publishNow)&&input.result==='review')throw new AppError('Este envio exige confirmação da publicação ou do agendamento no TikTok.');
       if(input.result==='scheduled'&&(job.config.mode!=='native_schedule'||job.phase!=='browser_scheduled'||!job.upload_started))throw new AppError('O TikTok não confirmou este agendamento.');
       if(input.result==='published'&&(!job.config.publishNow||job.phase!=='browser_published'||!job.upload_started))throw new AppError('O TikTok não confirmou esta publicação imediata.');
       if(input.result==='duplicate'&&job.upload_started)throw new AppError('Um upload iniciado não pode ser descartado como duplicado.');
@@ -263,7 +288,7 @@ export class BrowserBridge {
       if(job.request_id&&status==='unknown')await db.query(`INSERT INTO manual_actions(id,request_id,kind,message) VALUES($1,$2,'unknown_upload','Confira o envio no TikTok Studio antes de continuar; a publicação pode ter sido iniciada.')
         ON CONFLICT(request_id,kind) DO UPDATE SET resolved_at=NULL,message=EXCLUDED.message`,[randomUUID(),job.request_id]);
       await advance(db,{...job,status},status==='empty');
-      if(job.phase==='platform_limit'){await setSetting('uploadCooldown:browser:tiktok:'+(job.config.profileId||'default'),new Date(Date.now()+86400_000).toISOString());if(!job.request_id)await db.query("UPDATE browser_settings SET blocked_until=now()+interval '24 hours' WHERE id=true");}
+      if(job.phase==='platform_limit'){await setSetting('uploadCooldown:browser:tiktok:'+(job.config.profileId||'default'),new Date(Date.now()+86400_000).toISOString());if(!job.request_id&&!job.config.requestManaged)await db.query("UPDATE browser_settings SET blocked_until=now()+interval '24 hours' WHERE id=true");}
       return status;
     });
     if(['scheduled','completed','duplicate'].includes(status)){const {rows:[row]}=await pool.query('SELECT delivery_id FROM browser_commands WHERE id=$1',[id]);if(row?.delivery_id)await cleanupPublishedMedia(row.delivery_id);}
@@ -280,6 +305,7 @@ export function browserAgentAuthorized(header:string|undefined){
 }
 export const browserBridge=new BrowserBridge();
 export const browserRoutes=Router();
+browserRoutes.use(browserPublicationRoutes);
 browserRoutes.get('/api/browser/jobs',async(req,res)=>res.json(await browserBridge.jobs(parsePagination(req.query,{scope:'browser'}))));
 browserRoutes.post('/api/browser/config',async(req,res)=>res.json({ok:true,config:await browserBridge.save(req.body)}));
 browserRoutes.post('/api/browser/login',async(_req,res)=>res.status(202).json({id:await browserBridge.request('login')}));

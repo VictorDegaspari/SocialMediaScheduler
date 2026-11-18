@@ -1,3 +1,5 @@
+import {tiktokCaption} from './tiktok-caption.js';
+export {tiktokCaption} from './tiktok-caption.js';
 import type { Locator, Page } from 'playwright-core';
 import { mkdir, open, readFile, readdir, rename, rm, writeFile, chmod } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -84,13 +86,7 @@ export class BrowserJournal {
   }
 }
 
-export function tiktokCaption(metadata: Metadata) {
-  const caption = [metadata.title, metadata.description,
-    metadata.hashtags.map(tag => '#' + tag.replace(/^#+/, '').replace(/\s+/g, '')).join(' ')]
-    .filter(Boolean).join('\n\n');
-  if ([...caption].length > 2200) throw new Error('Legenda excede 2.200 caracteres. Ajuste o JSON antes do upload.');
-  return caption;
-}
+
 
 /** Uses the existing filesystem adapter, stability checks and media preparation. */
 export async function nextBrowserVideo(mediaDirectory: string, workDirectory: string, journal: BrowserJournal, stripMetadata = true) {

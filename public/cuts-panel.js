@@ -3,8 +3,9 @@ import {formatTimecode} from './cuts-time.js';
 import {replayTimeAt} from './cuts-replay.js';
 import {confirmDiscard} from './confirm-dialog.js';
 import {renderPagination,resetPagination} from './pagination.js';
+import {cutPublishFields,updateCutDestination,readTiktokFields} from './cut-publish.js';
 const jobLabels={queued:'Na fila',downloading:'Baixando vídeo',transcribing:'Transcrevendo áudio',selecting:'Selecionando momentos',rendering:'Gerando prévias',review:'Pronto para revisar',failed:'Precisa de atenção',discarded:'Descartado',completed:'Concluído'};
-const clipLabels={queued:'Na fila',rendering:'Atualizando prévia',review:'Revisar corte',publishing:'Envio solicitado',posted:'Enviado ao YouTube',discarded:'Descartado',failed:'Precisa de atenção'};
+const clipLabels={queued:'Na fila',rendering:'Atualizando prévia',review:'Revisar corte',publishing:'Envio solicitado',posted:'Enviado',discarded:'Descartado',failed:'Precisa de atenção'};
 const deliveryLabels={pending:'Na fila de envio',retry:'Aguardando nova tentativa',submitting:'Enviando ao YouTube',processing:'Processando no YouTube',published:'Publicado no YouTube',scheduled:'Agendado no YouTube',private:'Privado no YouTube',unlisted:'Não listado no YouTube',unknown:'Conferir envio no histórico',failed:'Confira o envio no histórico',cancelled:'Envio cancelado'};
 let current={jobs:[],channels:[],dependencies:{ready:false,details:[]}},helpers,editing=null,apiClient;
 const jobSignatures=new Map();
@@ -14,11 +15,19 @@ function safeLink(value){try{const url=new URL(value);return url.protocol==='htt
 function remember(state,h){helpers=h;current=state.cuts||{jobs:[],channels:[],dependencies:{ready:false,details:['Reinicie o serviço para carregar o gerador de cortes.']}};}
 function visibleJobs(){return (current.jobs||[]).filter(job=>job.status!=='discarded');}
 function dependencyNotice(){const {esc}=helpers,d=current.dependencies||{};return d.ready?'<span class="cuts-ready"><span class="dot"></span> Gerador disponível</span>':`<div class="notice"><strong>Preparação necessária</strong><p>${(d.details||['O gerador ainda está sendo preparado.']).map(esc).join('<br>')}</p></div>`;}
+function publicationList(clip){
+  const {esc}=helpers;
+  return (clip.publications||[]).map(delivery=>{
+    const platform=delivery.provider==='youtube'?'YouTube':'TikTok',url=delivery.release_url||(delivery.provider==='youtube'&&delivery.post_id?'https://www.youtube.com/watch?v='+encodeURIComponent(delivery.post_id):null);
+    const label={pending:'Na fila',retry:'Aguardando nova tentativa',submitting:'Enviando',processing:'Processando',published:'Publicado',scheduled:'Agendado',private:'Privado',unlisted:'Não listado',completed:'Publicado',failed:'Precisa de atenção',cancelled:'Cancelado',unknown:'Conferir no histórico'}[delivery.status]||delivery.status;
+    return `<div class="cut-publication"><strong>${platform} · ${esc(delivery.channel_name||'Conta selecionada')}</strong><span>${esc(label)}</span>${url?`<a href="${esc(safeLink(url))}" target="_blank" rel="noreferrer">Abrir no ${platform}</a>`:''}${delivery.error?`<small>${esc(delivery.error)}</small>`:''}</div>`;
+  }).join('');
+}
 function clipCard(clip,job){
   const {esc,badge,icon}=helpers,editable=clip.status==='review'&&clip.hasMedia&&!clip.delivery_id;
   const downloadable=clip.hasMedia&&['review','publishing','posted','failed'].includes(clip.status),deletable=clip.hasMedia&&['review','posted','failed'].includes(clip.status);
-  const status=clip.delivery_status?deliveryLabels[clip.delivery_status]||clipLabels[clip.status]:clipLabels[clip.status];
-  return `<article class="cuts-clip" data-cut-clip="${esc(clip.id)}" data-format="${clip.framing_options?.format==='video'?'video':'shorts'}"><div class="cuts-player-wrap">${clip.hasMedia?`<video class="cuts-player" controls playsinline preload="metadata" aria-label="Prévia de ${esc(clip.title)}" src="/api/cuts/${encodeURIComponent(clip.id)}/media?v=${Number(clip.revision)||0}"></video>`:`<div class="cuts-player-empty">${icon(clip.status==='posted'?'check':'play')}<span>${clip.status==='posted'?'Arquivo local indisponível':clip.status==='discarded'?'Arquivo excluído':'A prévia aparecerá aqui'}</span></div>`}</div><div class="cuts-clip-content"><div class="cuts-clip-heading"><h3>${esc(clip.title||'Corte sugerido')}</h3>${badge(status||clip.status,['failed','unknown'].includes(clip.delivery_status)||clip.status==='failed'?'amber':['posted','discarded'].includes(clip.status)?'gray':'')}</div><p class="cuts-timing">${stamp(clip.start_seconds)} → ${stamp(clip.end_seconds)} <span>· ${stamp(clip.output_duration??Math.max(0,Number(clip.end_seconds)-Number(clip.start_seconds)-(clip.excluded_ranges||[]).reduce((n,r)=>n+r.end-r.start,0)))} de vídeo · ${clip.framing_options?.format==='video'?'Vídeo 16:9':'Shorts 9:16'} · ${{fit:'Imagem completa',blur:'Fundo desfocado',crop:'Recorte com foco'}[clip.framing_options?.mode||clip.framing]||'Imagem completa'}</span></p>${clip.reason?`<p class="cuts-reason">${esc(clip.reason)}</p>`:''}${(clip.render_warnings||[]).map(w=>`<p class="tip cuts-render-warning">${esc(w)}</p>`).join('')}${clip.error?`<p class="error-banner">${esc(clip.error)}</p>`:''}${editable||downloadable||deletable?`<div class="cuts-actions">${editable?`<button class="button primary small" data-cuts-action="publish" data-id="${esc(clip.id)}">${icon('youtube')} Postar</button><button class="button small" data-cuts-action="edit" data-id="${esc(clip.id)}">${icon('edit')} Ajustar</button>`:''}${downloadable?`<a class="button small" href="/api/cuts/${encodeURIComponent(clip.id)}/media?download=1&amp;v=${Number(clip.revision)||0}" download="${esc((clip.title||'corte')+'.mp4')}">Baixar MP4</a>`:''}${deletable?`<button class="button ghost danger small" data-cuts-action="discard" data-id="${esc(clip.id)}">${clip.status==='posted'?'Excluir arquivo':'Descartar'}</button>`:''}</div>`:''}${clip.status==='failed'&&!clip.delivery_id?`<button class="button small" data-cuts-action="edit" data-id="${esc(clip.id)}">Ajustar e gerar novamente</button>`:''}${clip.release_url?`<a class="section-link" href="${esc(safeLink(clip.release_url))}" target="_blank" rel="noreferrer">Abrir no YouTube ${icon('external')}</a>`:''}${clip.delivery_id?'<p class="tip">Acompanhe o envio em <a href="#history">Histórico</a>. O arquivo fica disponível para baixar e usar em outras plataformas. Exclua manualmente quando terminar.</p>':''}</div></article>`;
+  const status=clip.publications?.length?clipLabels[clip.status]:(clip.delivery_status?deliveryLabels[clip.delivery_status]||clipLabels[clip.status]:clipLabels[clip.status]);
+  return `<article class="cuts-clip" data-cut-clip="${esc(clip.id)}" data-format="${clip.framing_options?.format==='video'?'video':'shorts'}"><div class="cuts-player-wrap">${clip.hasMedia?`<video class="cuts-player" controls playsinline preload="metadata" aria-label="Prévia de ${esc(clip.title)}" src="/api/cuts/${encodeURIComponent(clip.id)}/media?v=${Number(clip.revision)||0}"></video>`:`<div class="cuts-player-empty">${icon(clip.status==='posted'?'check':'play')}<span>${clip.status==='posted'?'Arquivo local indisponível':clip.status==='discarded'?'Arquivo excluído':'A prévia aparecerá aqui'}</span></div>`}</div><div class="cuts-clip-content"><div class="cuts-clip-heading"><h3>${esc(clip.title||'Corte sugerido')}</h3>${badge(status||clip.status,['failed','unknown'].includes(clip.delivery_status)||clip.status==='failed'?'amber':['posted','discarded'].includes(clip.status)?'gray':'')}</div><p class="cuts-timing">${stamp(clip.start_seconds)} → ${stamp(clip.end_seconds)} <span>· ${stamp(clip.output_duration??Math.max(0,Number(clip.end_seconds)-Number(clip.start_seconds)-(clip.excluded_ranges||[]).reduce((n,r)=>n+r.end-r.start,0)))} de vídeo · ${clip.framing_options?.format==='video'?'Vídeo 16:9':'Shorts 9:16'} · ${{fit:'Imagem completa',blur:'Fundo desfocado',crop:'Recorte com foco',split:'Webcam em cima + vídeo embaixo'}[clip.framing_options?.mode||clip.framing]||'Imagem completa'}</span></p>${clip.reason?`<p class="cuts-reason">${esc(clip.reason)}</p>`:''}${(clip.render_warnings||[]).map(w=>`<p class="tip cuts-render-warning">${esc(w)}</p>`).join('')}${clip.error?`<p class="error-banner">${esc(clip.error)}</p>`:''}${editable||downloadable||deletable?`<div class="cuts-actions">${downloadable?`<button class="button primary small" data-cuts-action="publish" data-id="${esc(clip.id)}">${icon('upload')} Postar</button><button class="button small" data-cuts-action="publish-tiktok" data-platform="tiktok" data-id="${esc(clip.id)}">${icon('tiktok')} Postar no TikTok</button>`:''}${editable?`<button class="button small" data-cuts-action="edit" data-id="${esc(clip.id)}">${icon('edit')} Ajustar</button>`:''}${downloadable?`<a class="button small" href="/api/cuts/${encodeURIComponent(clip.id)}/media?download=1&amp;v=${Number(clip.revision)||0}" download="${esc((clip.title||'corte')+'.mp4')}">Baixar MP4</a>`:''}${deletable?`<button class="button ghost danger small" data-cuts-action="discard" data-id="${esc(clip.id)}">${clip.status==='posted'?'Excluir arquivo':'Descartar'}</button>`:''}</div>`:''}${clip.status==='failed'&&!clip.delivery_id?`<button class="button small" data-cuts-action="edit" data-id="${esc(clip.id)}">Ajustar e gerar novamente</button>`:''}${publicationList(clip)}${clip.release_url&&!clip.publications?.length?`<a class="section-link" href="${esc(safeLink(clip.release_url))}" target="_blank" rel="noreferrer">Abrir no YouTube ${icon('external')}</a>`:''}${clip.delivery_id?'<p class="tip">Acompanhe o envio em <a href="#history">Histórico</a>. O arquivo fica disponível para baixar e usar em outras plataformas. Exclua manualmente quando terminar.</p>':''}</div></article>`;
 }
 function jobCard(job){
   const {esc,badge,date}=helpers,clips=job.clips||[];
@@ -37,8 +46,11 @@ export function updateCuts(state,h){
   remember(state,h);const root=document.querySelector('#cuts-panel');if(!root)return;
   root.querySelector('#cuts-dependencies').innerHTML=dependencyNotice();
   const create=root.querySelector('#cuts-create-form [type="submit"]');if(!create.dataset.busy)create.disabled=!current.dependencies?.ready;
-  const container=root.querySelector('#cuts-jobs'),jobs=visibleJobs(),ids=new Set(jobs.map(j=>j.id));
   root.querySelector('#cuts-pagination').innerHTML=renderPagination(current.pagination,'cuts',h.esc);
+  syncCutJobs(root.querySelector('#cuts-jobs'),visibleJobs(),jobCard,emptyJobs());
+}
+function syncCutJobs(container,jobs,renderJob,empty){
+  const ids=new Set(jobs.map(job=>job.id));
   container.querySelectorAll('[data-cut-job]').forEach(node=>{if(!ids.has(node.dataset.cutJob)){node.remove();jobSignatures.delete(node.dataset.cutJob);}});
   if(jobs.length)container.querySelector('.cuts-empty')?.remove();
   for(const job of [...jobs].reverse()){
@@ -46,11 +58,11 @@ export function updateCuts(state,h){
     if(old&&jobSignatures.get(job.id)===signature)continue;
     // Keep the playing element and the review that the user is reading stable.
     if(old&&([...old.querySelectorAll('video')].some(v=>!v.paused)||editing?.jobId===job.id))continue;
-    const holder=document.createElement('div');holder.innerHTML=jobCard(job);const node=holder.firstElementChild;
+    const holder=document.createElement('div');holder.innerHTML=renderJob(job);const node=holder.firstElementChild;
     if(old)old.replaceWith(node);else container.prepend(node);
     jobSignatures.set(job.id,signature);
   }
-  if(!jobs.length&&!container.querySelector('.cuts-empty'))container.innerHTML=emptyJobs();
+  if(!jobs.length&&!container.querySelector('.cuts-empty'))container.innerHTML=empty;
 }
 
 function findClip(id){for(const job of current.jobs||[]){const clip=(job.clips||[]).find(c=>c.id===id);if(clip)return {job,clip};}throw new Error('Este corte não está mais disponível. Atualize o painel.');}
@@ -58,20 +70,40 @@ function openEditor(id,seek,format){
   const {clip,job}=findClip(id);editing?.editor?.destroy();
   document.querySelectorAll('#cuts-dialog-form video').forEach(video=>video.pause());
   editing={mode:'edit',id,jobId:job.id,revision:clip.revision};
-  document.querySelector('#cuts-dialog-title').textContent='Editar corte para YouTube';
+  document.querySelector('#cuts-dialog-title').textContent='Editar corte';
   document.querySelector('#cuts-dialog').dataset.mode='edit';
   editing.editor=createCutEditor({clip:format?{...clip,framing_options:{...clip.framing_options,format}}:clip,job,esc:helpers.esc,api:apiClient});
   document.querySelector('#cuts-dialog').showModal();
   if(seek!==undefined){editing.editor.selectReplayStart(seek);const details=document.querySelector('.cuts-replay-details');details.open=true;details.scrollIntoView({block:'nearest'});}
 }
-function openPublish(id){
+function openPublish(id,platform='youtube'){
   const {clip,job}=findClip(id),{esc}=helpers,format=clip.framing_options?.format||'shorts';editing={mode:'publish',id,jobId:job.id,revision:clip.revision,format};
-  const channels=(current.channels||[]).filter(c=>!c.disabled);
-  editing.canPublish=channels.length>0;
-  document.querySelector('#cuts-dialog-title').textContent='Postar corte no YouTube';
+  document.querySelector('#cuts-dialog-title').textContent='Postar corte';
   delete document.querySelector('#cuts-dialog').dataset.mode;
-  document.querySelector('#cuts-dialog-form').innerHTML=`${clip.hasMedia?`<video class="cuts-publish-preview" controls playsinline preload="metadata" src="/api/cuts/${encodeURIComponent(clip.id)}/media?v=${Number(clip.revision)||0}" aria-label="Prévia final do corte"></video>`:''}<div class="notice">Confira o formato, o enquadramento e as legendas, quando ativadas. O envio usa exatamente esta versão da prévia.</div><div class="form-field"><label for="cut-publish-format">Publicar como</label><select id="cut-publish-format" name="format">${cutFormats.map(([value,label])=>`<option value="${value}" ${value===format?'selected':''}>${label}</option>`).join('')}</select></div><div id="cut-format-change" class="notice" hidden>O formato escolhido precisa de uma nova prévia. Ajuste e confira antes de postar.<button class="button small" type="button" data-cuts-action="edit-format" data-id="${esc(id)}">Ajustar formato</button></div><div class="form-field"><label for="cut-channel">Canal do YouTube</label><select id="cut-channel" name="channelId" required><option value="">Escolha o canal de destino</option>${channels.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>${!channels.length?'<small>Conecte um canal do YouTube em <a href="#connections" data-cuts-action="close-dialog">Conexões</a> para postar.</small>':''}</div><div class="form-field"><label for="cut-post-title">Título no YouTube</label><input id="cut-post-title" name="title" maxlength="100" value="${esc(clip.title)}" required></div><div class="form-field"><label for="cut-post-description">Descrição</label><textarea id="cut-post-description" name="description" rows="3" maxlength="4900">${format==='shorts'?'#Shorts':''}</textarea></div><div class="form-field"><label for="cut-visibility">Visibilidade</label><select id="cut-visibility" name="visibility"><option value="private">Privado</option><option value="unlisted">Não listado</option><option value="public">Público</option></select></div><label class="checkbox"><input type="checkbox" name="madeForKids"><span>Este conteúdo é destinado a crianças.</span></label><label class="checkbox"><input type="checkbox" name="containsSyntheticMedia"><span>Contém conteúdo realista alterado ou gerado por IA.</span></label><label class="checkbox"><input type="checkbox" name="confirm" required><span>Revisei o vídeo e a legenda e autorizo o envio ao canal e com a visibilidade escolhidos acima.</span></label><div class="dialog-footer"><button class="button" type="button" data-cuts-action="close-dialog">Cancelar</button><button class="button primary" type="submit" ${channels.length?'':'disabled'}>Autorizar e enviar</button></div>`;
+  const form=document.querySelector('#cuts-dialog-form');form.innerHTML=cutPublishFields(clip,esc,platform);
+  editing.canPublish=updateCutDestination(form,clip,current.channels||[],esc);
+  form.querySelector('[type="submit"]').disabled=!editing.canPublish;
   document.querySelector('#cuts-dialog').showModal();
+}
+
+export function openCutPublication({clip,job},channels,h,channelId){
+  remember({cuts:{...current,jobs:[{...job,clips:[clip]}],channels}},h);
+  openPublish(clip.id,'tiktok');
+  document.querySelector('#cuts-dialog-form').elements.namedItem('channelId').value=channelId;
+}
+
+function libraryJobs(){return visibleJobs().map(job=>({...job,clips:(job.clips||[]).filter(clip=>clip.hasMedia&&clip.status!=='discarded')})).filter(job=>job.clips.length);}
+function libraryJob(job){return `<section class="panel cuts-job" data-cut-job="${helpers.esc(job.id)}"><div class="cuts-job-heading"><h3>${helpers.esc(job.title||'Cortes gerados')}</h3></div><div class="cuts-clips">${job.clips.map(clip=>clipCard(clip,job)).join('')}</div></section>`;}
+const emptyLibrary='<div class="panel empty-state cuts-empty"><h3>Nenhum corte com arquivo disponível</h3><p>Os cortes prontos aparecem nesta pasta automaticamente.</p></div>';
+export function renderCutLibrary(state,h){
+  remember({...state,cuts:state.cutFolders||state.cuts},h);const groups=libraryJobs();
+  for(const job of groups)jobSignatures.set(job.id,JSON.stringify(job));
+  return `<section id="cuts-library" class="cuts-library"><div class="page-head"><div><h2>Cortes do aplicativo</h2><p>Seus cortes ficam guardados aqui para assistir, baixar e postar no YouTube ou TikTok.</p></div><a class="button" href="#cuts">Gerar novos cortes</a></div><div id="cut-library-jobs">${groups.length?groups.map(libraryJob).join(''):emptyLibrary}</div><div id="cut-library-pagination">${renderPagination(current.pagination,state.cutFolders?'cutFolders':'cuts',h.esc)}</div></section>`;
+}
+export function updateCutLibrary(state,h){
+  remember({...state,cuts:state.cutFolders||state.cuts},h);const root=document.querySelector('#cuts-library');if(!root)return;
+  root.querySelector('#cut-library-pagination').innerHTML=renderPagination(current.pagination,state.cutFolders?'cutFolders':'cuts',h.esc);
+  syncCutJobs(root.querySelector('#cut-library-jobs'),libraryJobs(),libraryJob,emptyLibrary);
 }
 
 export function bindCuts({api,refresh,toast}){
@@ -89,7 +121,7 @@ export function bindCuts({api,refresh,toast}){
     form.querySelector('#cut-format-change').hidden=!changed;
     form.querySelector('[type="submit"]').disabled=changed||!editing.canPublish||Boolean(editing.pending);
   }
-  dialog.addEventListener('change',event=>{if(event.target.name==='format')publishFormat();});
+  dialog.addEventListener('change',event=>{if(editing?.mode!=='publish')return;if(event.target.name==='platform'){const form=document.querySelector('#cuts-dialog-form');editing.canPublish=updateCutDestination(form,findClip(editing.id).clip,current.channels||[],helpers.esc);form.elements.namedItem('confirm').checked=false;}if(['platform','format'].includes(event.target.name))publishFormat();});
   document.addEventListener('submit',async event=>{
     const form=event.target;if(!['cuts-create-form','cuts-dialog-form'].includes(form.id))return;
     event.preventDefault();const button=form.querySelector('[type="submit"]'),session=form.id==='cuts-dialog-form'?editing:null;
@@ -105,7 +137,7 @@ export function bindCuts({api,refresh,toast}){
         await api(path(session.id),body,'PUT');if(editing===session&&dialog.open)dialog.close();await refresh(true);toast('Ajustes salvos. Aguarde a nova prévia antes de postar.');
       }else if(session?.mode==='publish'){
         if(f.get('format')!==session.format)throw new Error('Gere e confira a prévia no formato escolhido antes de postar.');
-        await api(path(session.id)+'/publish',{format:session.format,channelId:f.get('channelId'),title:f.get('title'),description:f.get('description'),visibility:f.get('visibility'),madeForKids:f.has('madeForKids'),containsSyntheticMedia:f.has('containsSyntheticMedia'),confirm:f.has('confirm'),revision:session.revision});if(editing===session&&dialog.open)dialog.close();await refresh(true);toast('Envio autorizado e colocado na fila. Acompanhe a confirmação no histórico.');
+        await api(path(session.id)+'/publish',{format:session.format,channelId:f.get('channelId'),title:f.get('title'),description:f.get('description'),visibility:f.get('visibility'),madeForKids:f.has('madeForKids'),containsSyntheticMedia:f.has('containsSyntheticMedia'),confirm:f.has('confirm'),revision:session.revision,...(f.get('platform')==='tiktok'?{tiktok:readTiktokFields(form)}:{})});if(editing===session&&dialog.open)dialog.close();await refresh(true);toast('Envio autorizado e colocado na fila. Acompanhe a confirmação no histórico.');
       }
     }catch(error){if(session&&editing===session&&dialog.open)feedback(form,error.message);toast(error.message,true);}finally{if(session)session.pending=false;button.disabled=false;delete button.dataset.busy;if(form.id==='cuts-create-form')button.disabled=!current.dependencies?.ready;if(editing===session&&dialog.open)publishFormat();}
   });
@@ -115,7 +147,7 @@ export function bindCuts({api,refresh,toast}){
     try{
       if(action==='refresh')await refresh(true);
       else if(action==='edit')openEditor(id);
-      else if(action==='publish')openPublish(id);
+      else if(action==='publish'||action==='publish-tiktok')openPublish(id,action==='publish-tiktok'?'tiktok':button.dataset.platform||'youtube');
       else if(action==='edit-format'){
         if(editing?.mode!=='publish'||editing.pending)return;
         const format=document.querySelector('#cuts-dialog-form').elements.namedItem('format').value;

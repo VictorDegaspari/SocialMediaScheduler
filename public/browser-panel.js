@@ -1,6 +1,7 @@
 import {packDefaultsFields,readPackDefaults} from './pack-source.js';
 import {nativeScheduleFields,readNativeSchedule} from './native-schedule.js';
 import {renderPagination,resetPagination} from './pagination.js';
+import {immediatePublicationCard} from './browser-publish.js';
 const labels={scheduled:'Agendado no TikTok',pending:'Na fila',running:'Em andamento',cancel_requested:'Interrompendo',review:'Preparado no Chrome',empty:'Sem vídeo novo',done:'Janela encerrada',failed:'Atenção',unknown:'Conferir envio',cancelled:'Interrompido'};
 
 export function renderBrowserPanel(state,{icon,badge,esc,date}){
@@ -11,7 +12,7 @@ export function renderBrowserPanel(state,{icon,badge,esc,date}){
   const active=b.active;
   const jobRows=b.jobs.map(j=>`<tr><td><strong>${j.kind==='login'?'Login no TikTok':'Envio de vídeo'}</strong><small>${esc(j.filename||'')}${j.origin==='schedule'?' · Rotina automática':''}</small></td><td>${badge(j.phase==='browser_review_required'&&j.status==='running'?'Revisão no Chrome':labels[j.status]||j.status,['failed','unknown'].includes(j.status)?'amber':['pending','running'].includes(j.status)?'':'gray')}</td><td>${esc(j.message||'Aguardando execução.')}${j.planned_at?`<small>Publicação reservada: ${date(j.planned_at,true)}</small>`:''}</td><td>${date(j.created_at,true)}</td></tr>`).join('');
   return `<div class="page-head"><div><span class="eyebrow">VÍDEOS LOCAIS · CHROME NO SEU COMPUTADOR</span><h1>TikTok pelo navegador</h1><p class="subtitle">Escolha a pasta e os horários para preparar vídeos ou preencher o agendador do TikTok.</p></div><button class="button" data-browser-action="refresh">${icon('refresh')} Atualizar status</button></div>
-  <div class="browser-layout">
+  ${immediatePublicationCard({icon})}<div class="browser-layout">
     <section class="panel connection-card platform-card browser-status-card" data-platform="tiktok">
       <div class="connection-title"><div class="folder-icon">${icon('tiktok')}</div><h2>Sua conexão com o Chrome</h2>${badge(a.online?'Agente conectado':'Desconectado',a.online?'':'gray')}</div>
       <p class="browser-state" role="status">${esc(status)}</p>

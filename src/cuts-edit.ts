@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {defaultSplitLayout} from '../public/cuts-split-layout.js';
 import { AppError } from './config.js';
 import type { Cue } from './cuts-media.js';
 
@@ -15,12 +16,24 @@ export const captionStyleSchema=z.object({
 export type CaptionStyle=z.infer<typeof captionStyleSchema>;
 export const cutFormatSchema=z.enum(['shorts','video']);
 export type CutFormat=z.infer<typeof cutFormatSchema>;
+const splitDefaults=defaultSplitLayout();
+const splitRegionSchema=z.object({
+  x:z.number().finite().min(0).max(0.99),y:z.number().finite().min(0).max(0.99),
+  width:z.number().finite().min(0.01).max(1),height:z.number().finite().min(0.01).max(1)
+}).refine(region=>region.x+region.width<=1+1e-9&&region.y+region.height<=1+1e-9,'A região precisa ficar dentro do vídeo original.');
+const splitPaneSchema=z.object({region:splitRegionSchema,fit:z.enum(['fit','crop']).default('crop'),
+  focusX:z.number().finite().min(0).max(1).default(0.5),focusY:z.number().finite().min(0).max(1).default(0.5),zoom:z.number().finite().min(0.25).max(3).default(1)});
+export const splitLayoutSchema=z.object({
+  topRatio:z.number().finite().min(0.2).max(0.7).default(splitDefaults.topRatio),
+  webcam:splitPaneSchema.default(splitDefaults.webcam),content:splitPaneSchema.default(splitDefaults.content)
+});
 export const framingOptionsSchema=z.object({
   format:cutFormatSchema.default('shorts'),
-  mode:z.enum(['fit','blur','crop']).default('fit'),
+  mode:z.enum(['fit','blur','crop','split']).default('fit'),
   focusX:z.number().finite().min(0).max(1).default(0.5),
   focusY:z.number().finite().min(0).max(1).default(0.5),
-  zoom:z.number().finite().min(0.25).max(3).default(1)
+  zoom:z.number().finite().min(0.25).max(3).default(1),
+  split:splitLayoutSchema.optional()
 });
 export type FramingOptions=z.infer<typeof framingOptionsSchema>;
 export const timeRangeSchema=z.object({start:z.number().finite().min(0),end:z.number().finite().positive()});

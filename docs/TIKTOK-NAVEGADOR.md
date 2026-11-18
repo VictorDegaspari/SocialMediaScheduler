@@ -6,6 +6,10 @@ O script não precisa de client key ou aprovação de escopo OAuth TikTok: usa u
 
 ## Usar pelo painel local
 
+Para publicar um vídeo específico sem agendar, use **Postar agora no TikTok**. Escolha **Cortes do aplicativo** ou **Vídeos das minhas pastas**, selecione o perfil e abra a prévia. Um MP4 já encontrado em Minhas pastas pode ser revisado mesmo sem JSON: preencha o título e a legenda nessa etapa. Confira também permissões e declarações antes de **Autorizar e postar agora**. A preparação da prévia não inicia upload. Esse envio é individual e não altera os horários da rotina; a publicação pública só é registrada após uma confirmação nova do TikTok Studio. Login, limites da conta ou uma confirmação incerta ficam visíveis no painel e no histórico.
+
+Os cortes também ficam em **Minhas pastas → Cortes do aplicativo**, com reprodução, download e o botão **Postar no TikTok**. O arquivo revisado é copiado para o envio sem reduzir a qualidade. Um corte pode ter envios independentes para YouTube e TikTok; a repetição para a mesma conta reutiliza o envio existente.
+
 Abra **http://localhost:4317/#browser**, pela opção **TikTok navegador** do menu ou pelo atalho em Conexões. Todos os controles desta rotina ficam nessa tela:
 
 1. **Abrir login do TikTok:** o agente abre um Chrome comum no Ubuntu. Entre manualmente, preferencialmente por QR code, confira a conta e feche as janelas desse perfil.

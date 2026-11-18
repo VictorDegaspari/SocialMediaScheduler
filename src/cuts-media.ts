@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { AppError, dataDir } from './config.js';
 import { validateVideo } from './media.js';
 import { captionStyleSchema, framingOptionsSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
+import {cutFramingFilters} from './cuts-framing.js';
 import { normalizeHeatmap, replayFromMetadata, replayInterest, type ReplayData } from './cuts-heatmap.js';
 
 export type Cue = { start:number; end:number; text:string; words?:{start:number;end:number;text:string}[] };
@@ -262,22 +263,6 @@ function captionAss(captions:Cue[],style:CaptionStyle,output:{width:number;heigh
   return {ass,warnings};
 }
 
-/** Crop before scaling, then pad at output size when the viewport exceeds the source. */
-function outputCrop(width:number,height:number,options:FramingOptions,output:{width:number;height:number}) {
-  const zoom=options.mode==='blur'?Math.max(1,options.zoom):options.zoom;
-  const viewportHeight=Math.max(2,Math.floor(Math.min(height,width*output.height/output.width)/zoom/2)*2);
-  const viewportWidth=Math.max(2,Math.floor(viewportHeight*output.width/output.height/2)*2);
-  const cropHeight=Math.max(2,Math.floor(Math.min(height,viewportHeight)/2)*2);
-  const cropWidth=Math.max(2,Math.floor(Math.min(width,viewportWidth)/2)*2);
-  const x=Math.max(0,Math.floor((width-cropWidth)*options.focusX/2)*2);
-  const y=Math.max(0,Math.floor((height-cropHeight)*options.focusY/2)*2);
-  const scaledWidth=Math.max(2,Math.round(cropWidth*output.width/viewportWidth/2)*2);
-  const scaledHeight=Math.max(2,Math.round(cropHeight*output.height/viewportHeight/2)*2);
-  const padX=Math.floor((output.width-scaledWidth)*options.focusX/2)*2;
-  const padY=Math.floor((output.height-scaledHeight)*options.focusY/2)*2;
-  return `crop=${cropWidth}:${cropHeight}:${x}:${y},scale=${scaledWidth}:${scaledHeight}:flags=lanczos,pad=${output.width}:${output.height}:${padX}:${padY}:color=black,setsar=1`;
-}
-
 function sourceFrameRate(stream:{avg_frame_rate?:string;r_frame_rate?:string}) {
   for(const rate of [stream.avg_frame_rate,stream.r_frame_rate]) {
     if(!rate||!/^\d+(\/\d+)?$/.test(rate))continue;
@@ -320,8 +305,6 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
     const {rate,fps}=sourceFrameRate(sourceVideo);
     const {ass,warnings}=style.enabled?captionAss(relative,style,output):{ass:'',warnings:[]};
     if(style.enabled)await writeFile(join(dir,assName),ass,'utf8');
-    const crop=outputCrop(width,height,framing,output);
-    const fit=`scale=${output.width}:${output.height}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${output.width}:${output.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`;
     const args=['-nostdin','-hide_banner','-loglevel','error','-y'];
     const graph:string[]=[],labels:string[]=[];
     for(let i=0;i<parts.length;i++) {
@@ -333,15 +316,13 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
       // concat extrapolates a video's duration from its mean frame interval.
       // Give every part its exact timeline duration before joining, otherwise
       // fractional-frame trims would pad audio and accumulate an AV offset.
-      const base=`[${i}:v:0]trim=duration=${length},setpts=PTS-STARTPTS,fps=${rate},tpad=stop_mode=clone:stop_duration=${Math.max(0.1,2/fps)},trim=end_frame=${frames},settb=AVTB,setpts=N*${length/frames}/TB`;
-      if(framing.mode==='blur') {
-        graph.push(`${base},split=2[bg${i}][fg${i}]`);
-        graph.push(`[bg${i}]${crop},boxblur=20:2[blur${i}]`);
-        graph.push(`[fg${i}]scale=${output.width}:${output.height}:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[front${i}]`);
-        graph.push(`[blur${i}][front${i}]overlay=(W-w)/2:(H-h)/2:shortest=1,format=yuv420p[v${i}]`);
-      } else graph.push(`${base},${framing.mode==='crop'?crop:fit},format=yuv420p[v${i}]`);
+      const base=`[${i}:v:0]trim=duration=${length},setpts=PTS-STARTPTS,fps=${rate},tpad=stop_mode=clone:stop_duration=${Math.max(0.1,2/fps)}`;
+      graph.push(...cutFramingFilters(base,i,{width,height},output,framing));
+      // Framesync filters reset EOF timing. Finalize after composition so a
+      // fractional frame rate keeps the last frame and the exact part duration.
+      graph.push(`[v${i}]trim=end_frame=${frames},settb=AVTB,setpts=N*${length/frames}/TB[timedv${i}]`);
       graph.push(`[${i}:a:0]atrim=duration=${length},asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad=pad_dur=0.1,atrim=end_sample=${Math.round(length*48000)},asetpts=N/SR/TB[a${i}]`);
-      labels.push(`[v${i}][a${i}]`);
+      labels.push(`[timedv${i}][a${i}]`);
     }
     graph.push(`${labels.join('')}concat=n=${parts.length}:v=1:a=1[editedv][editeda]`);
     graph.push(`[editedv]fps=${rate}${style.enabled?`,ass=${assName}`:''}[outv]`);

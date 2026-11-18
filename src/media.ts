@@ -33,7 +33,7 @@ export async function sha256(path:string):Promise<string> {
   return hash.digest('hex');
 }
 
-export async function validateVideo(path:string,format:CutFormat='shorts') {
+export async function validateVideo(path:string,format:CutFormat|'any'='shorts') {
   let stdout:string;
   try {
     // The enclosing list exists in FFmpeg 4.4 (Ubuntu 22.04) and newer releases.

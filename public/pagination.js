@@ -1,4 +1,4 @@
-const defaults={watches:20,events:20,videos:20,cuts:10,requests:20,actions:20,browser:20};
+const defaults={watches:20,events:20,videos:20,cuts:10,cutFolders:10,requests:20,actions:20,browser:20};
 const histories=new Map();
 const history=scope=>{
   if(!Object.hasOwn(defaults,scope))throw new Error('Lista de paginação desconhecida.');
@@ -21,7 +21,7 @@ export function paginationQuery(){
 // Deletions or resolved actions can empty an older page while it is open.
 export function resetEmptyPages(state){
   const collections={watches:[state.watches,state.pagination?.watches],events:[state.events,state.pagination?.events],videos:[state.videos,state.pagination?.videos],
-    cuts:[state.cuts?.jobs,state.cuts?.pagination],requests:[state.publishing?.requests,state.publishing?.pagination?.requests],
+    cuts:[state.cuts?.jobs,state.cuts?.pagination],cutFolders:[state.cutFolders?.jobs,state.cutFolders?.pagination],requests:[state.publishing?.requests,state.publishing?.pagination?.requests],
     actions:[state.publishing?.actions,state.publishing?.pagination?.actions],browser:[state.browser?.jobs,state.browser?.pagination]};
   let changed=false;
   for(const [scope,[items,meta]] of Object.entries(collections)){

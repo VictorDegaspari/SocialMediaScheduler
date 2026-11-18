@@ -6,20 +6,18 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { AppError, dataDir, errorMessage, logger } from './config.js';
 import { pool } from './db.js';
-import { nativeChannels, publisherEngine } from './native-auth.js';
-import { metadataSchema } from './domain.js';
-import { sha256, validateVideo } from './media.js';
+import { publisherEngine } from './native-auth.js';
+import { cutDestinations,cutPublishSchema,publishCut } from './cut-publications.js';
 import { cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue } from './cuts-media.js';
-import { stageCutUpload, sweepCutUploadFiles } from './cuts-upload-files.js';
-import { canRemovePreparedMedia, type RetainedDelivery } from './media-cleanup.js';
-import { captionStyleSchema, cutFormatSchema, framingOptionsSchema, timeRangeSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
+import { sweepCutUploadFiles } from './cuts-upload-files.js';
+import { canRemovePreparedMedia,retainedDeliveryQuery, type RetainedDelivery } from './media-cleanup.js';
+import { captionStyleSchema, framingOptionsSchema, timeRangeSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
 import { fetchCutHeatmap, type ReplayData } from './cuts-heatmap.js';
 import { cursorFields, keysetClause, pageLimit, paginateRows, parsePagination, type PageOptions } from './pagination.js';
 
 const uuid=z.string().uuid();
 const stages=['queued','downloading','transcribing','selecting','rendering'];
 const terminal=['posted','discarded'];
-const accepted=['processing','private','unlisted','published','scheduled','completed','failed'];
 const root=()=>join(dataDir,'cuts');
 export const cutDirectory=(id:string)=>join(root(),uuid.parse(id));
 const lockKey=(id:string)=>'drive-watcher:cuts:'+id;
@@ -115,9 +113,8 @@ async function ensureDiscardable(db:PoolClient,clips:Clip[]) {
   if(clips.some(clip=>clip.status==='publishing'))throw new AppError('Aguarde a confirmação dos envios antes de excluir os arquivos.',409);
   const ids=[...new Set(clips.map(clip=>clip.delivery_id).filter((id):id is string=>!!id))];
   if(!ids.length)return;
-  const {rows}=await db.query<RetainedDelivery>(`SELECT id,engine,status,post_id,local_file,session,upload_started_at,
-    jsonb_build_object('manualConfirmed',payload->'manualConfirmed') AS payload FROM deliveries WHERE id=ANY($1::uuid[])`,[ids]);
-  if(rows.length!==ids.length||rows.some(delivery=>!canRemovePreparedMedia(delivery)))
+  const {rows}=await db.query<RetainedDelivery>(retainedDeliveryQuery+' WHERE d.video_id=ANY($1::uuid[]) OR d.id=ANY($2::uuid[])',[clips.map(clip=>clip.id),ids]);
+  if(ids.some(id=>!rows.some(delivery=>delivery.id===id))||rows.some(delivery=>!canRemovePreparedMedia(delivery)))
     throw new AppError('Há um envio sem confirmação. Confira ou resolva o envio no histórico antes de excluir os arquivos.',409);
 }
 
@@ -138,21 +135,23 @@ export class CutsService {
   async state(page:PageOptions=parsePagination({},{scope:'cuts',defaultLimit:10})) {
     const values:unknown[]=[];
     const [dependencies,channels,result]=await Promise.all([
-      this.dependencies(),nativeChannels(),pool.query(`SELECT j.id,j.url,j.status,j.title,j.duration,j.error,j.replay_data,j.analysis_message,j.created_at,${cursorFields('j.created_at','j.id')}
-        FROM cut_jobs j WHERE j.status<>'discarded'${keysetClause(page,'j.created_at','j.id',values)}
+      this.dependencies(),cutDestinations(),pool.query(`SELECT j.id,j.url,j.status,j.title,j.duration,j.error,j.replay_data,j.analysis_message,j.created_at,${cursorFields('j.created_at','j.id')}
+        FROM cut_jobs j WHERE j.status<>'discarded'${page.scope==='cutFolders'?" AND EXISTS(SELECT 1 FROM cuts c WHERE c.job_id=j.id AND c.local_file IS NOT NULL AND c.status IN ('review','publishing','posted','failed'))":''}${keysetClause(page,'j.created_at','j.id',values)}
         ORDER BY j.created_at DESC,j.id DESC${pageLimit(page,values)}`,values)
     ]);
     const {items:jobs,pagination}=paginateRows(result.rows,page);
     const clips=await pool.query(`SELECT c.*,d.status AS delivery_status,d.error AS delivery_error,d.release_url,d.post_id
       FROM cuts c LEFT JOIN deliveries d ON d.id=c.delivery_id
       WHERE c.job_id=ANY($1::uuid[]) ORDER BY c.created_at,c.id`,[jobs.map(j=>j.id)]);
+    const {rows:publications}=await pool.query(`SELECT id,video_id,integration_id,provider,engine,status,error,post_id,release_url,payload->>'channelName' AS channel_name
+      FROM deliveries WHERE video_id=ANY($1::uuid[]) ORDER BY created_at,id`,[clips.rows.map(clip=>clip.id)]);
     const mapped=await Promise.all(clips.rows.map(async c=>{
       const {local_file:localFile,...rest}=c;
-      return {...rest,caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
+      return {...rest,publications:publications.filter(delivery=>delivery.video_id===c.id),caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
         output_duration:c.output_duration??c.end_seconds-c.start_seconds,error:c.error||c.delivery_error,hasMedia:!!localFile&&await exists(join(cutDirectory(c.job_id),c.id+'.mp4')),
         release_url:c.release_url||(c.post_id?'https://www.youtube.com/watch?v='+encodeURIComponent(c.post_id):null)};
     }));
-    return {dependencies,channels:channels.filter(c=>c.identifier==='youtube'),jobs:jobs.map(j=>({...j,clips:mapped.filter(c=>c.job_id===j.id)})),pagination};
+    return {dependencies,channels,jobs:jobs.map(j=>({...j,clips:mapped.filter(c=>c.job_id===j.id)})),pagination};
   }
   start() {
     const wake=()=>{void this.tick().catch(()=>logger.error({event:'cuts_tick_failed'},'O gerador de cortes será reavaliado no próximo ciclo.'));};
@@ -256,12 +255,18 @@ export class CutsService {
       try {
         await withJob(item.id,false,async(db,job)=>{
           const {rows:clips}=await db.query(`SELECT c.*,d.status AS delivery_status,d.post_id FROM cuts c LEFT JOIN deliveries d ON d.id=c.delivery_id WHERE c.job_id=$1 FOR UPDATE OF c`,[job.id]);
+          const {rows:deliveries}=await db.query<RetainedDelivery&{video_id:string}>(retainedDeliveryQuery+' WHERE d.video_id=ANY($1::uuid[])',[clips.map(clip=>clip.id)]);
           await ensureDiscardable(db,clips.filter(clip=>clip.status==='discarded'));
           for(const clip of clips) {
-            if(clip.status==='publishing'&&clip.post_id&&accepted.includes(clip.delivery_status)) {
-              await db.query("UPDATE cuts SET status='posted',error=NULL,updated_at=now() WHERE id=$1",[clip.id]);clip.status='posted';
-            } else if(clip.status==='publishing'&&clip.delivery_status==='cancelled') {
-              await db.query("UPDATE cuts SET status='failed',error='Envio cancelado. O arquivo foi mantido para reutilização.',updated_at=now() WHERE id=$1",[clip.id]);clip.status='failed';
+            if(clip.status==='publishing') {
+              const uploads=deliveries.filter(delivery=>delivery.video_id===clip.id);
+              const confirmed=uploads.some(delivery=>canRemovePreparedMedia(delivery)&&!['cancelled','duplicate'].includes(delivery.status));
+              const pending=uploads.some(delivery=>!canRemovePreparedMedia(delivery)&&!['failed','cancelled','duplicate'].includes(delivery.status));
+              if(confirmed&&!pending){
+                await db.query("UPDATE cuts SET status='posted',error=NULL,updated_at=now() WHERE id=$1",[clip.id]);clip.status='posted';
+              }else if(!pending&&uploads.length){
+                await db.query("UPDATE cuts SET status='failed',error='Confira os envios no histórico. O arquivo foi mantido para reutilização.',updated_at=now() WHERE id=$1",[clip.id]);clip.status='failed';
+              }
             }
             if(clip.status==='discarded') {
               await removeCutFiles(job.id,clip.id);
@@ -288,6 +293,7 @@ export const cutsService=new CutsService();
 export function createCutsRoutes(service:CutsService=cutsService) {
 const cutsRoutes=Router();
 cutsRoutes.get('/api/cuts',async(req,res)=>{res.json(await service.state(parsePagination(req.query,{scope:'cuts',defaultLimit:10})));});
+cutsRoutes.get('/api/cuts/library',async(req,res)=>{res.json(await service.state(parsePagination(req.query,{scope:'cutFolders',defaultLimit:10})));});
 cutsRoutes.get('/api/cuts/jobs/:id/source',async(req,res)=>{
   const id=uuid.parse(req.params.id);
   const {rows:[job]}=await pool.query('SELECT id FROM cut_jobs WHERE id=$1',[id]);
@@ -374,41 +380,9 @@ cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
 });
 
 cutsRoutes.post('/api/cuts/:id/publish',async(req,res)=>{
-  if(await publisherEngine()!=='local')throw new AppError('Selecione Motor local em Conexões para postar os cortes pelo YouTube direto.',409);
-  const id=uuid.parse(req.params.id);
-  const input=z.object({format:cutFormatSchema.optional(),channelId:z.string().startsWith('native:youtube:').max(250),title:z.string().trim().min(1).max(100),description:z.string().max(4900).default(''),visibility:z.enum(['private','unlisted','public']).default('private'),madeForKids:z.boolean().default(false),containsSyntheticMedia:z.boolean().default(false),confirm:z.literal(true),revision:z.number().int().positive()}).parse(req.body);
-  const channels=await nativeChannels(),channel=channels.find(c=>c.id===input.channelId&&c.identifier==='youtube'&&!c.disabled);
-  if(!channel)throw new AppError('Conecte e selecione o canal YouTube que deve receber este corte.',409);
-  const result=await withJob(id,true,async(db,job,clip)=>{
-    if(!clip)throw new AppError('Corte não encontrado.',404);
-    if(clip.delivery_id) {
-      const {rows:[delivery]}=await db.query('SELECT integration_id FROM deliveries WHERE id=$1',[clip.delivery_id]);
-      if(delivery?.integration_id!==input.channelId)throw new AppError('Este corte já foi autorizado para outro canal. Acompanhe o envio no histórico.',409);
-      return {deliveryId:clip.delivery_id,reused:true};
-    }
-    if(clip.status!=='review'||!clip.local_file)throw new AppError('Aguarde uma prévia pronta para autorizar o envio.',409);
-    if(clip.revision!==input.revision)throw new AppError('A prévia mudou. Confira a versão atual antes de postar.',409);
-    const source=join(cutDirectory(job.id),id+'.mp4');
-    const format=framingOptionsSchema.parse(clip.framing_options||{}).format;
-    if(input.format&&input.format!==format)throw new AppError('O formato escolhido precisa de uma nova prévia. Ajuste o corte e confira antes de postar.',409);
-    await validateVideo(source,format);
-    const hash=await sha256(source),deliveryId=randomUUID();
-    const filename=deliveryId+'.native.mp4';
-    const metadata=metadataSchema.parse({title:input.title,description:input.description,hashtags:format==='shorts'?['Shorts']:[],youtube:{visibility:input.visibility,madeForKids:input.madeForKids,containsSyntheticMedia:input.containsSyntheticMedia}});
-    // Hidden, non-scanning watch lets the existing durable uploader own retries and sessions.
-    await db.query(`INSERT INTO watches(id,name,folder_id,folder_url,source_type,enabled,initialized,managed_by_cuts,next_scan_at,next_upload_at)
-      VALUES($1,$2,$3,$4,'local',true,true,true,'9999-12-31','9999-12-31') ON CONFLICT(id) DO NOTHING`,[job.id,'Cortes · '+(job.title||'YouTube').slice(0,80),'cuts:'+job.id,job.url]);
-    await db.query(`INSERT INTO videos(id,watch_id,file_id,name,parent_id,status,sha256,metadata,size)
-      VALUES($1,$2,$3,$4,$8,'sent',$5,$6,$7)`,[id,job.id,id,input.title+'.mp4',hash,JSON.stringify(metadata),(await stat(source)).size,job.id]);
-    await db.query(`INSERT INTO deliveries(id,video_id,integration_id,provider,engine,status,payload,local_file,approved_at)
-      VALUES($1,$2,$3,'youtube','local','pending',$4,$5,now())`,[deliveryId,id,channel.id,JSON.stringify({metadata,channelName:channel.name,assetSha256:hash,stripMetadata:true,automatic:false,nativeSchedule:false}),filename]);
-    const {rows:[claim]}=await db.query(`INSERT INTO content_claims(sha256,integration_id,delivery_id) VALUES($1,$2,$3)
-      ON CONFLICT(sha256,integration_id) DO UPDATE SET sha256=EXCLUDED.sha256 RETURNING delivery_id`,[hash,channel.id,deliveryId]);
-    if(claim.delivery_id!==deliveryId)throw new AppError('Este mesmo vídeo já foi registrado para esse canal. Confira o histórico.',409);
-    await stageCutUpload({jobId:job.id,clipId:id,deliveryId,sha256:hash,source});
-    await db.query("UPDATE cuts SET title=$2,status='publishing',delivery_id=$3,error=NULL,updated_at=now() WHERE id=$1",[id,input.title,deliveryId]);
-    return {deliveryId,reused:false};
-  });
+  const id=uuid.parse(req.params.id),input=cutPublishSchema.parse(req.body);
+  if(input.channelId.startsWith('native:youtube:')&&await publisherEngine()!=='local')throw new AppError('Selecione Motor local em Conexões para postar os cortes pelo YouTube direto.',409);
+  const result=await withJob(id,true,(db,job,clip)=>publishCut(db,job,clip,cutDirectory(job.id),input));
   res.status(202).json(result);
 });
 
