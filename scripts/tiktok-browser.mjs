@@ -57,7 +57,7 @@ process.on('SIGINT',stop);process.on('SIGTERM',stop);
 async function browser(){
   const current=await chromium.launchPersistentContext(profile,{
     ...sharedProfileOptions,
-    executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:false,
+    executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:false,slowMo:args['publish-now']?100:0,
     viewport:{width:1360,height:900},timezoneId:'America/Sao_Paulo',acceptDownloads:false,chromiumSandbox:true
   });
   context=current;
@@ -85,7 +85,8 @@ async function attempt(){
   if(stopped){await rm(candidate.directory,{recursive:true,force:true});return false;}
   let job,started=false,current;
   try{
-    if((args['schedule-at']||args['publish-now'])&&(candidate.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||candidate.metadata.tiktok.commercialContent||candidate.metadata.tiktok.ownBrand))throw new BrowserActionRequired('page_changed','Este vídeo exige revisão manual: a publicação automática precisa de privacidade pública explícita e declarações comerciais conferidas.');
+    if((args['schedule-at']||args['publish-now'])&&candidate.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE')throw new BrowserActionRequired('page_changed','Este vídeo precisa de privacidade pública explícita antes da publicação.');
+    if(args['schedule-at']&&(candidate.metadata.tiktok.commercialContent||candidate.metadata.tiktok.ownBrand))throw new BrowserActionRequired('page_changed','Este agendamento exige revisão das declarações comerciais no Chrome.');
     current=await browser();
     const page=current.pages()[0]||await current.newPage();
     await page.goto(TIKTOK_UPLOAD_URL,{waitUntil:'domcontentloaded',timeout:60_000});

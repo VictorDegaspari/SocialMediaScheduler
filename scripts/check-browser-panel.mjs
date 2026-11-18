@@ -33,7 +33,10 @@ await page.route('**/api/**',async route=>{
   assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');
   const body=request.postDataJSON();actions.push({path,body});
   if(path==='/api/browser/videos/'+videoId+'/prepare')return route.fulfill({json:{id:deliveryId}});
-  if(path==='/api/native/deliveries/'+deliveryId+'/approve'||path==='/api/cuts/'+cutId+'/publish')return route.fulfill({json:{ok:true,deliveryId}});
+  if(path==='/api/native/deliveries/'+deliveryId+'/approve'||path==='/api/cuts/'+cutId+'/publish'){
+    fixture.browser.active={id:'77777777-7777-4777-8777-777777777777',kind:'upload',status:'pending',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:new Date().toISOString()};
+    return route.fulfill({json:{ok:true,deliveryId}});
+  }
   if(path==='/api/browser/config')Object.assign(fixture.browser.config,body,{nextAt:'2026-11-15T22:00:00Z'});
   else if(path==='/api/browser/login'||path==='/api/browser/run'){
     const job={id:'11111111-1111-4111-8111-111111111111',kind:path.endsWith('login')?'login':'upload',origin:'manual',status:'running',phase:'opening',message:'Abrindo o Chrome no computador.',created_at:'2026-11-15T12:00:00-03:00'};
@@ -144,17 +147,18 @@ try{
   await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/tiktok-publish-now.png',fullPage:true});
   await cutForm.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);
   const beforeCut=actions.length;await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();assert.equal(actions.length,beforeCut,'sem consentimento o corte não é enviado');
-  assert.equal(await cutForm.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await cutForm.getByRole('checkbox',{name:/Revisei este vídeo/}).check();
+  assert.equal(await cutForm.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await cutForm.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).check();await cutForm.getByRole('checkbox',{name:'Promove minha marca',exact:true}).check();await cutForm.getByRole('checkbox',{name:/Revisei este vídeo/}).check();
   await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();await page.locator('#cuts-dialog').waitFor({state:'hidden'});
-  assert.equal(actions.at(-1).path,'/api/cuts/'+cutId+'/publish');assert.equal(actions.at(-1).body.channelId,'browser:tiktok:'+profileId);assert.equal(actions.at(-1).body.tiktok.privacyLevel,'PUBLIC_TO_EVERYONE');assert.equal(actions.at(-1).body.revision,3);
+  assert.equal(actions.at(-1).path,'/api/cuts/'+cutId+'/publish');assert.equal(actions.at(-1).body.channelId,'browser:tiktok:'+profileId);assert.equal(actions.at(-1).body.tiktok.privacyLevel,'PUBLIC_TO_EVERYONE');assert.equal(actions.at(-1).body.revision,3);assert.equal(actions.at(-1).body.tiktok.commercialContent,true);assert.equal(actions.at(-1).body.tiktok.ownBrand,true);
+  await page.waitForFunction(()=>location.hash==='#browser');await page.getByText('Publicação pelo Playwright',{exact:true}).waitFor();assert.equal(await page.locator('.browser-progress .cuts-spinner').evaluate(el=>getComputedStyle(el).animationName),'cuts-spin');
   await page.goto(base+'/#browser');await page.getByRole('button',{name:'Postar agora no TikTok',exact:true}).click();
   const picker=page.locator('#browser-publish-dialog');await picker.getByLabel('Origem do vídeo').selectOption('folders');await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(videoId);
   await picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click();
   const review=page.locator('#delivery-form');await review.getByRole('button',{name:'Autorizar e postar agora',exact:true}).waitFor();
   assert.equal(actions.at(-1).body.profileId,profileId);assert.equal(actions.at(-1).body.version,'source-version-1');assert.equal(await review.locator('video').count(),1);
-  await review.getByLabel('Título do vídeo').fill('Minha corrida revisada');assert.equal(await review.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await review.getByRole('checkbox',{name:/Autorizo o envio deste vídeo/}).check();
+  await review.getByLabel('Título do vídeo').fill('Minha corrida revisada');assert.equal(await review.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await review.getByRole('checkbox',{name:'Promove minha marca',exact:true}).check();await review.getByRole('checkbox',{name:/Autorizo o envio deste vídeo/}).check();
   await review.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();await page.locator('#delivery-dialog').waitFor({state:'hidden'});
-  assert.equal(actions.at(-1).path,'/api/native/deliveries/'+deliveryId+'/approve');assert.equal(actions.at(-1).body.publishNow,true);assert.equal(actions.at(-1).body.metadata.title,'Minha corrida revisada');
+  assert.equal(actions.at(-1).path,'/api/native/deliveries/'+deliveryId+'/approve');assert.equal(actions.at(-1).body.publishNow,true);assert.equal(actions.at(-1).body.metadata.title,'Minha corrida revisada');assert.equal(actions.at(-1).body.metadata.tiktok.ownBrand,true);assert.equal(actions.at(-1).body.metadata.tiktok.commercialContent,false);assert.equal(await page.evaluate(()=>location.hash),'#browser');
   await page.getByRole('button',{name:'Postar agora no TikTok',exact:true}).click();
   await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(cutId);await picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click();
   await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).waitFor();assert.equal(await cutForm.getByLabel('Perfil do TikTok').inputValue(),'browser:tiktok:'+profileId);

@@ -274,7 +274,9 @@
       "src/config.ts",
       "public/app.js",
       "public/index.html",
-      "public/styles.css"
+      "public/styles.css",
+      "public/folders-view.js",
+      "public/folders.css"
     ],
     "unit": [],
     "integration": [
@@ -282,7 +284,8 @@
     ],
     "ui": [
       "scripts/check-ui.mjs",
-      "scripts/check-pagination-ui.mjs"
+      "scripts/check-pagination-ui.mjs",
+      "scripts/check-folders-ui.mjs"
     ],
     "docs": [],
     "depends": []

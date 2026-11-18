@@ -215,19 +215,19 @@ async function manualVideo(){
   return {path,videoId,version:file.version!,metadata};
 }
 
-test('vídeo da pasta só publica agora após prévia e consentimento específico, preservando bytes e conta',async()=>{
+test('vídeo comercial da pasta só publica pelo navegador após prévia e consentimento, preservando bytes e conta',async()=>{
   const video=await manualVideo(),hash=await sha256(video.path);
   const routine=await bridge.save(config({mode:'native_schedule',enabled:false}));
   const prepared=await post('/api/browser/videos/'+video.videoId+'/prepare',{profileId:'default',version:video.version});
   assert.equal(prepared.status,201,await prepared.clone().text());const {id}=await prepared.json();
   const preview=await fetch(base+'/api/native/deliveries/'+id+'/media');assert.deepEqual(Buffer.from(await preview.arrayBuffer()),await readFile(video.path));
   await bridge.poll(report());await bridge.tick();assert.equal((await bridge.state()).jobs.length,0,'preparar uma prévia não autoriza upload');
-  const metadata=metadataSchema.parse({...video.metadata,tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE'}});
+  const metadata=metadataSchema.parse({...video.metadata,tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',commercialContent:true,ownBrand:true}});
   assert.equal((await post('/api/native/deliveries/'+id+'/approve',{confirm:true,metadata})).status,400);
   assert.equal((await post('/api/native/deliveries/'+id+'/approve',{confirm:false,metadata,publishNow:true})).status,400);
   assert.equal((await post('/api/native/deliveries/'+id+'/approve',{confirm:true,metadata,publishNow:true})).status,200);
   await bridge.tick();await bridge.tick();assert.equal((await bridge.state()).jobs.length,1);
-  const {job}=await bridge.poll(report());assert.equal(job.publishNow,true);assert.equal(job.publishAt,undefined);assert.equal(job.profileId,'default');assert.equal(job.media.assetSha256,hash);
+  const {job}=await bridge.poll(report());assert.equal(job.publishNow,true);assert.equal(job.publishAt,undefined);assert.equal(job.profileId,'default');assert.equal(job.media.assetSha256,hash);assert.equal(job.media.metadata.tiktok.commercialContent,true);assert.equal(job.media.metadata.tiktok.ownBrand,true);
   await assert.rejects(()=>bridge.finish(job.id,{instanceId,result:'review'}),/confirmação/);
   await assert.rejects(()=>bridge.finish(job.id,{instanceId,result:'published'}),/não confirmou/);
   await bridge.progress(job.id,{instanceId,stage:'browser_upload_started'});

@@ -1,13 +1,12 @@
 import {cutFormats} from './cuts-editor.js';
 
 export function tiktokFields(){
-  return `<fieldset data-tiktok-fields hidden disabled><legend>Publicação no TikTok</legend><p class="tip">O vídeo será publicado agora, com visibilidade pública, no perfil escolhido.</p><label class="checkbox"><input type="checkbox" name="tiktokMadeWithAI"><span>Contém conteúdo realista alterado ou gerado por IA.</span></label><label class="checkbox"><input type="checkbox" name="allowComment"><span>Permitir comentários</span></label><label class="checkbox"><input type="checkbox" name="allowDuet"><span>Permitir duetos</span></label><label class="checkbox"><input type="checkbox" name="allowStitch"><span>Permitir costura</span></label><label class="checkbox"><input type="checkbox" name="commercialContent"><span>Conteúdo comercial ou parceria paga</span></label><label class="checkbox"><input type="checkbox" name="ownBrand"><span>Promove minha marca</span></label></fieldset>`;
+  return `<fieldset data-tiktok-fields hidden disabled><legend>Publicação no TikTok</legend><p class="tip">O Chrome será aberto pelo Playwright para publicar agora no perfil escolhido, com visibilidade pública. Acompanhe as etapas na tela TikTok pelo navegador.</p><label class="checkbox"><input type="checkbox" name="tiktokMadeWithAI"><span>Contém conteúdo realista alterado ou gerado por IA.</span></label><label class="checkbox"><input type="checkbox" name="allowComment"><span>Permitir comentários</span></label><label class="checkbox"><input type="checkbox" name="allowDuet"><span>Permitir duetos</span></label><label class="checkbox"><input type="checkbox" name="allowStitch"><span>Permitir costura</span></label><label class="checkbox"><input type="checkbox" name="commercialContent"><span>Conteúdo comercial ou parceria paga</span></label><label class="checkbox"><input type="checkbox" name="ownBrand"><span>Promove minha marca</span></label></fieldset>`;
 }
 
 export function readTiktokFields(form){
   const f=new FormData(form);
-  if(f.has('commercialContent')||f.has('ownBrand'))throw new Error('Conteúdo comercial exige revisão no TikTok Studio. Use a preparação para revisão no Chrome.');
-  return {privacyLevel:'PUBLIC_TO_EVERYONE',contentPostingMethod:'DIRECT_POST',madeWithAI:f.has('tiktokMadeWithAI'),allowComment:f.has('allowComment'),allowDuet:f.has('allowDuet'),allowStitch:f.has('allowStitch'),commercialContent:false,ownBrand:false};
+  return {privacyLevel:'PUBLIC_TO_EVERYONE',contentPostingMethod:'DIRECT_POST',madeWithAI:f.has('tiktokMadeWithAI'),allowComment:f.has('allowComment'),allowDuet:f.has('allowDuet'),allowStitch:f.has('allowStitch'),commercialContent:f.has('commercialContent'),ownBrand:f.has('ownBrand')};
 }
 
 export function cutPublishFields(clip,esc,platform='youtube'){

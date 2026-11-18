@@ -265,8 +265,8 @@ export async function setTikTokCaption(page:Page,editor:Locator,caption:string) 
   throw new BrowserActionRequired('page_changed','O TikTok não preservou o título e a legenda revisados.');
 }
 
-async function configureTikTokPublication(page:Page,metadata:Metadata) {
-  if(metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||metadata.tiktok.commercialContent||metadata.tiktok.ownBrand)
+async function configureTikTokPublication(page:Page,metadata:Metadata,allowCommercial=false) {
+  if(metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||!allowCommercial&&(metadata.tiktok.commercialContent||metadata.tiktok.ownBrand))
     throw new BrowserActionRequired('page_changed','A publicação automática exige privacidade pública explícita e declarações comerciais conferidas.');
   await checkBrowserGate(page);
   const privacy=page.getByRole('combobox',{name:/who can watch|quem pode assistir|privacidade|privacy/i});
@@ -318,10 +318,32 @@ async function configureTikTokPermissions(page:Page,metadata:Metadata) {
     else await ai.setChecked(metadata.tiktok.madeWithAI);
   }
   if(await ai.isChecked()!==metadata.tiktok.madeWithAI)throw new BrowserActionRequired('page_changed','O TikTok não preservou a declaração de IA escolhida.');
-  const commercial=page.locator('[data-e2e="disclose_content_container"] input[type="checkbox"][role="switch"]');
-  if(await commercial.count()===1&&await commercial.isChecked()) {
-    await commercial.locator('..').click();
-    if(await commercial.isChecked())throw new BrowserActionRequired('page_changed','Confira a declaração comercial do vídeo.');
+  await configureTikTokCommercialContent(page,metadata);
+}
+
+async function configureTikTokCommercialContent(page:Page,metadata:Metadata){
+  const {commercialContent,ownBrand}=metadata.tiktok,enabled=commercialContent||ownBrand;
+  const name=/^(?:Disclose (?:commercial |video |post )?content|Content disclosure|Divulgar conteúdo(?: comercial)?|Divulgação de conteúdo|Declarar conteúdo comercial)/i;
+  const disclosure=page.locator('[data-e2e="disclose_content_container"] input[type="checkbox"][role="switch"]')
+    .or(page.getByRole('checkbox',{name})).or(page.getByRole('switch',{name}));
+  if(!enabled&&await disclosure.count()===0)return;
+  if(await disclosure.count()!==1)throw new BrowserActionRequired('page_changed','Confira a divulgação de conteúdo comercial na janela do Chrome aberta.');
+  if(await disclosure.isChecked()!==enabled){
+    // Studio's controlled switch toggles from its wrapper; clicking the input
+    // itself can toggle twice (native input + React handler) and undo the choice.
+    const studio=disclosure.locator('xpath=ancestor::*[@data-e2e="disclose_content_container"]');
+    if(await studio.count()===1)await disclosure.locator('..').click({timeout:5000});
+    else await setTikTokChecked(disclosure,enabled);
+  }
+  if(await disclosure.isChecked()!==enabled)throw new BrowserActionRequired('page_changed','O TikTok não preservou a declaração comercial escolhida.');
+  if(!enabled)return;
+  for(const [name,checked] of [
+    [/^(?:Your brand|Own brand|Sua marca|Minha marca)\b/i,ownBrand],
+    [/^(?:Branded content|Paid partnership|Conteúdo de marca|Parceria paga)\b/i,commercialContent]
+  ] as const){
+    const control=page.getByRole('checkbox',{name}).or(page.getByRole('switch',{name}));
+    if(await control.count()!==1)throw new BrowserActionRequired('page_changed','Confira as opções de marca própria e parceria paga no Chrome aberto.');
+    await setTikTokChecked(control,checked);
   }
 }
 
@@ -329,6 +351,7 @@ async function setTikTokChecked(control:Locator,checked:boolean) {
   if(await control.isChecked()===checked)return;
   const label=control.locator('xpath=ancestor::label[1]');
   if(await label.count()===1)await label.click({timeout:5000});
+  else if(await control.getAttribute('aria-hidden')==='true')await control.locator('..').click({timeout:5000});
   else await control.setChecked(checked,{timeout:5000});
   if(checked&&await control.getAttribute('type')==='radio'&&await control.inputValue()==='schedule') {
     const page=control.page();
@@ -344,7 +367,7 @@ async function setTikTokChecked(control:Locator,checked:boolean) {
 
 /** One explicitly authorized immediate publication, with a fresh acknowledgement. */
 export async function publishTikTokUpload(page:Page,metadata:Metadata,timeout=180_000) {
-  await configureTikTokPublication(page,metadata);
+  await configureTikTokPublication(page,metadata,true);
   const now=page.getByRole('radio',{name:/^(Now|Agora|Publicar agora|Post now)$/i});
   if(await now.count()===1)await setTikTokChecked(now,true);
   const scheduled=page.getByRole('switch',{name:/^(Schedule|Agendar|Programar)$/i}).or(page.getByRole('checkbox',{name:/^(Schedule|Agendar|Programar)$/i}));

@@ -4,6 +4,8 @@ Esta opção usa Playwright e uma janela real do Google Chrome no computador. No
 
 O script não precisa de client key ou aprovação de escopo OAuth TikTok: usa uma sessão de login no site. Isso não representa aprovação do TikTok para automação do navegador, não equivale a Direct Post e não remove restrições da plataforma. A interface pode mudar ou apresentar verificações. CAPTCHA e pedidos de autenticação interrompem a automação; precisam ser resolvidos por você, sem mecanismos de evasão.
 
+Ao clicar em **Autorizar e postar agora**, tanto em um corte quanto em um vídeo das pastas, o painel abre **TikTok pelo navegador** para acompanhar o andamento. O agente abre o Chrome visível controlado pelo Playwright, preserva o perfil escolhido e publica a cópia revisada. As escolhas de **parceria paga**, **minha marca**, permissões e IA são conferidas nos controles do Studio; marcar conteúdo comercial não bloqueia mais o formulário. Se os controles esperados não estiverem disponíveis, a janela permanece aberta para revisão e o app não registra uma publicação sem confirmação.
+
 ## Usar pelo painel local
 
 Para publicar um vídeo específico sem agendar, use **Postar agora no TikTok**. Escolha **Cortes do aplicativo** ou **Vídeos das minhas pastas**, selecione o perfil e abra a prévia. Um MP4 já encontrado em Minhas pastas pode ser revisado mesmo sem JSON: preencha o título e a legenda nessa etapa. Confira também permissões e declarações antes de **Autorizar e postar agora**. A preparação da prévia não inicia upload. Esse envio é individual e não altera os horários da rotina; a publicação pública só é registrada após uma confirmação nova do TikTok Studio. Login, limites da conta ou uma confirmação incerta ficam visíveis no painel e no histórico.

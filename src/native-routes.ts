@@ -135,7 +135,7 @@ nativeRoutes.post('/api/native/deliveries/:id/approve',async(req,res)=>{
   if(row.engine==='browser'){
     if(!input.publishNow||!row.integration_id.startsWith('browser:tiktok:'))throw new AppError('Confirme a publicação imediata neste perfil.');
     if(!(await pool.query('SELECT id FROM browser_profiles WHERE id=$1',[row.integration_id.slice('browser:tiktok:'.length)])).rowCount)throw new AppError('O perfil selecionado não está mais disponível.',409);
-    if(input.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||input.metadata.tiktok.commercialContent||input.metadata.tiktok.ownBrand)throw new AppError('Confira a publicação pública e as declarações do TikTok.');
+    if(input.metadata.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE')throw new AppError('Confira a publicação pública e as declarações do TikTok.');
     if(genericVideoTitle(input.metadata.title))throw new AppError('Escreva um título que descreva o conteúdo antes de postar.');
     try{tiktokCaption(input.metadata);}catch{throw new AppError('A legenda do TikTok excede 2.200 caracteres.');}
     if(!row.local_file||await sha256(join(dataDir,row.local_file))!==row.payload.assetSha256)throw new AppError('O arquivo da prévia mudou. Prepare o vídeo novamente.',409);

@@ -1,0 +1,71 @@
+.my-folders{min-width:0}
+.folders-page-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.folders-shortcuts{display:flex;gap:8px;padding-bottom:20px;margin-bottom:26px;border-bottom:1px solid var(--border)}
+.folders-shortcuts button{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:7px;background:#fff;padding:9px 14px;color:var(--ink);font-size:12px}
+.folders-shortcuts button:hover{background:#eef4e8;border-color:#a3b596}
+.folders-shortcuts svg{width:16px;height:16px;color:#5d7853}
+.my-folders .cuts-library{margin-bottom:42px;scroll-margin-top:20px}
+.my-folders .cuts-library>.page-head{margin-bottom:18px;align-items:center}
+.my-folders .cuts-library .page-head h2{font-size:19px}
+.my-folders .cuts-library .page-head p{margin-top:5px}
+.my-folders #cut-library-jobs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:18px}
+.cuts-library-project{display:contents}
+.cuts-library-card{background:#fff;display:flex;flex-direction:column;box-shadow:0 2px 3px #173e3404}
+.cuts-library-card .cuts-player-wrap{position:relative;overflow:hidden;aspect-ratio:16/10}
+.my-folders .cuts-library-card .cuts-player,.my-folders .cuts-library-card[data-format="video"] .cuts-player{width:100%;height:100%;aspect-ratio:auto;object-fit:contain}
+.cuts-library-card .cuts-clip-content{padding:16px;display:flex;flex-direction:column;gap:12px}
+.cuts-library-source{font-size:10px;color:var(--muted);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin:0}
+.cuts-library-card .cuts-clip-heading{gap:8px}
+.cuts-library-card .cuts-clip-heading h3{font-size:14px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:42px}
+.cuts-library-badges{display:flex;gap:6px;flex-wrap:wrap}
+.cuts-library-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;color:#61725f;font-size:11px;font-variant-numeric:tabular-nums}
+.cuts-library-meta svg{width:13px;height:13px}
+.cuts-library-meta span{display:inline-flex;align-items:center;gap:5px}
+.cuts-library-card .cuts-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0}
+.cuts-library-card .cuts-actions .button{padding:7px 8px;min-width:0;min-height:35px;font-size:11px}
+.cuts-library-card .cuts-actions .button.primary{grid-column:auto}
+.cuts-library-details{margin-top:1px;border-top:1px solid #e7ece3;padding-top:12px;font-size:11px;color:var(--muted)}
+.cuts-library-details>summary{cursor:pointer;color:#526a4b;line-height:1.7;list-style-position:inside}
+.cuts-library-details[open]>summary{margin-bottom:12px}
+.cuts-library-details .cuts-timing{margin:0 0 10px;line-height:1.75}
+.cuts-library-details .cuts-reason{margin:0 0 10px}
+.cuts-library-details .tip{margin-top:10px!important}
+.cuts-library-details .button.danger{margin-top:12px}
+.cuts-library-card>.cuts-clip-content>.error-banner{margin:0;font-size:11px}
+.cuts-library-alert{color:#986d20;font-size:10px;display:inline-flex;align-items:center;gap:5px}
+.cuts-library-alert svg{width:12px;height:12px}
+.my-folders #watch-routines{scroll-margin-top:20px}
+.folders-section-heading{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:18px}
+.folders-section-heading h2{font-size:19px}
+.folders-section-heading p{font-size:12px;color:var(--muted);margin-top:5px}
+.my-folders .watch-list{display:grid;align-items:start;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.my-folders .watch-card{margin:0;min-width:0;padding:20px;background:#fff}
+.my-folders .watch-top{align-items:flex-start;gap:12px}
+.my-folders .watch-info{min-width:0;flex:1}
+.my-folders .watch-info h3{font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.5}
+.my-folders .watch-info .local-path,.my-folders .watch-info a{max-width:100%;font-size:10px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;display:block}
+.my-folders .watch-actions{gap:2px;flex-shrink:0}
+.my-folders .watch-actions .icon-button{width:29px;height:29px}
+.folder-metrics{display:grid;grid-template-columns:1.2fr .7fr 1.1fr;gap:14px;padding-top:18px;margin:18px 0 0;border-top:1px solid #edf0e9}
+.folder-metrics div{min-width:0}
+.folder-metrics dt{font-size:10px;color:var(--muted);margin-bottom:4px}
+.folder-metrics dd{font-size:12px;color:#3d573f;font-weight:550;margin:0;overflow-wrap:anywhere}
+.folder-details{font-size:11px;border-top:1px solid #edf0e9;margin-top:18px;padding-top:12px}
+.folder-details summary{cursor:pointer;color:#617459;list-style-position:inside}
+.folder-details dl{display:grid;gap:8px;margin:14px 0 0}
+.folder-details dl>div{display:flex;justify-content:space-between;align-items:flex-start;gap:15px}
+.folder-details dt{color:var(--muted)}
+.folder-details dd{margin:0;text-align:right;overflow-wrap:anywhere}
+.folders-help{margin-top:18px;font-size:12px;color:var(--muted)}
+.folders-help summary{cursor:pointer;list-style-position:inside}
+.folders-help p{max-width:670px;margin:12px 0;line-height:1.8}
+.folders-help a{display:inline-flex;align-items:center;gap:7px;color:#4c7041;text-decoration:underline;text-underline-offset:3px}
+.folders-help svg{width:14px;height:14px}
+@media(min-width:1150px){.my-folders .watch-list:has(>.watch-card:only-child){grid-template-columns:minmax(0,1fr)}}
+@media(max-width:1199px){.my-folders #cut-library-jobs{grid-template-columns:repeat(2,minmax(0,1fr))}.my-folders .watch-list{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:680px){.my-folders>.page-head{align-items:flex-start;flex-direction:column;gap:18px}.my-folders .subtitle{max-width:none}.folders-page-actions{width:100%;justify-content:flex-start}.folders-page-actions .button{flex:1;font-size:11px;padding:9px}.folders-shortcuts{gap:8px;margin-bottom:22px;padding-bottom:16px}.folders-shortcuts button{flex:1;justify-content:center;padding:9px 8px;font-size:11px}.my-folders #cut-library-jobs{gap:14px;grid-template-columns:minmax(0,1fr)}.cuts-library-card .cuts-player-wrap{aspect-ratio:16/9}.cuts-library-card .cuts-clip-heading h3{min-height:0}.my-folders .watch-card{padding:16px}.my-folders .watch-top{gap:9px}.my-folders .watch-top>.folder-icon{width:30px;height:30px}.my-folders .watch-info h3{font-size:13px}.my-folders .watch-actions .icon-button{width:26px;height:28px}.folder-metrics{gap:10px}.folder-metrics dd{font-size:11px}}
+
+.my-folders .error-banner,.my-folders .watch-info h3{overflow-wrap:anywhere}
+
+.my-folders #cut-library-jobs>.cuts-empty{grid-column:1/-1}
+.folder-details code{font-size:10px;overflow-wrap:anywhere;white-space:normal}

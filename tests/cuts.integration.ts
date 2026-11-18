@@ -154,8 +154,98 @@ test('publicação é idempotente, usa arquivo do delivery e sobrevive ao ciclo 
   assert.equal((await stat(join(process.env.DATA_DIR!,delivery.local_file))).isFile(),true);
   const worker=new Worker();await worker.tick();await worker.stop();
   assert.ok((await new LocalPublisher().ready()).includes(delivery.id));
-  assert.equal((await call('/'+clip.id,{title:'Não permitido',start:5,end:13,framing:'fit'},'PUT')).status,409);
+  const edit=await call('/'+clip.id,{title:'Versão ajustada',start:5,end:13,framing:'fit'},'PUT');
+  assert.equal(edit.status,202,await edit.clone().text());assert.notEqual((await edit.json()).id,clip.id);
+  assert.equal((await currentClip()).status,'publishing','o ajuste não interrompe o envio original');
   assert.equal((await call('/'+clip.id+'/discard',{confirm:true})).status,409);
+});
+
+for(const status of ['pending','sent','unknown','failed','cancelled'])test('ajustes preservam o corte e o histórico com envio '+status,async()=>{
+  await create();await service.tick();let original=await currentClip();
+  const captions=[{start:5,end:8,text:'Correção salva.'},{start:9,end:13,text:'Fala revisada.'}];
+  assert.equal((await call('/'+original.id,{title:original.title,start:5,end:13,captions,captionStyle:{enabled:false,fontSize:60},excludedRanges:[{start:8,end:9}],revision:original.revision},'PUT')).status,202);
+  await service.tick();original=await currentClip();
+  const {deliveryId}=await (await call('/'+original.id+'/publish',publishBody(original))).json();
+  await pool.query('UPDATE deliveries SET status=$2,post_id=$3,release_url=$4 WHERE id=$1',[deliveryId,status,status==='sent'?'publicacao-original':null,status==='sent'?'https://www.youtube.com/watch?v=publicacao-original':null]);
+  await service.retirePublished();original=await currentClip();
+  const dbOriginal=(await pool.query('SELECT * FROM cuts WHERE id=$1',[original.id])).rows[0];
+  const delivery=(await pool.query('SELECT * FROM deliveries WHERE id=$1',[deliveryId])).rows[0];
+  const video=(await pool.query('SELECT * FROM videos WHERE id=$1',[original.id])).rows[0];
+  const preview=join(cutDirectory(original.job_id),original.id+'.mp4'),source=join(cutDirectory(original.job_id),'source.mp4');
+  const oldBytes=await readFile(preview),uploadBytes=await readFile(join(process.env.DATA_DIR!,delivery.local_file)),sourceHash=await sha256File(source);
+  const versionId=randomUUID(),input={title:'Nova montagem horizontal',start:5,end:13,revision:original.revision,versionId,
+    framingOptions:{format:'video',mode:'split',split:{topRatio:.4,webcam:{region:{x:0,y:0,width:.3,height:.3}},content:{region:{x:.35,y:.3,width:.65,height:.7},fit:'fit',zoom:.8}}}};
+  assert.equal((await call('/'+original.id,{...input,revision:original.revision+1},'PUT')).status,409);
+  assert.equal((await call('/'+original.id,{...input,versionId:original.id},'PUT')).status,409);
+  const response=await call('/'+original.id,input,'PUT');assert.equal(response.status,202,await response.clone().text());assert.deepEqual(await response.json(),{ok:true,id:versionId,createdVersion:true});
+  assert.deepEqual((await pool.query('SELECT * FROM cuts WHERE id=$1',[original.id])).rows[0],dbOriginal);
+  assert.deepEqual((await pool.query('SELECT * FROM deliveries WHERE id=$1',[deliveryId])).rows[0],delivery);
+  assert.deepEqual(await readFile(preview),oldBytes);assert.deepEqual(await readFile(join(process.env.DATA_DIR!,delivery.local_file)),uploadBytes);
+  const retry=await call('/'+original.id,input,'PUT');assert.equal(retry.status,202,await retry.clone().text());assert.equal((await retry.json()).reused,true);
+  const changed=await call('/'+original.id,{...input,title:'Outra intenção no mesmo pedido'},'PUT');assert.equal(changed.status,409);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM cuts WHERE edited_from_cut_id=$1',[original.id])).rows[0].n,1);
+  assert.equal((await call('/'+versionId+'/publish',{...publishBody(original),revision:1})).status,409,'prévia pendente não autoriza outro envio');
+  await service.tick();
+  const jobs=(await new CutsService(media).state()).jobs,copy=jobs[0].clips.find((clip:any)=>clip.id===versionId)!;
+  assert.equal(jobs[0].hasSource,true);assert.equal(copy.status,'review');assert.equal(copy.hasMedia,true);assert.equal(copy.edited_from_cut_id,original.id);assert.equal(copy.revision,1);assert.equal(copy.delivery_id,null);assert.deepEqual(copy.publications,[]);
+  assert.deepEqual(copy.captions,captions);assert.deepEqual(copy.caption_style,original.caption_style);assert.deepEqual(copy.excluded_ranges,original.excluded_ranges);
+  assert.equal(copy.framing_options.mode,'split');assert.equal(copy.framing_options.split!.webcam.region.width,.3);assert.equal(copy.framing_options.split!.content.fit,'fit');
+  assert.equal(downloads,1);assert.equal(await sha256File(source),sourceHash);assert.deepEqual(await readFile(preview),oldBytes);
+  assert.deepEqual((await pool.query('SELECT * FROM videos WHERE id=$1',[original.id])).rows[0],video);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM deliveries')).rows[0].n,1,'salvar a versão não publica automaticamente');
+  const repeated=await call('/'+original.id,input,'PUT');assert.equal(repeated.status,202);assert.equal((await repeated.json()).id,versionId);
+  const secondPublish=await call('/'+copy.id+'/publish',publishBody(copy));assert.equal(secondPublish.status,202,await secondPublish.clone().text());
+  const newDelivery=(await pool.query('SELECT * FROM deliveries WHERE id=$1',[(await secondPublish.json()).deliveryId])).rows[0];
+  assert.notEqual(newDelivery.video_id,delivery.video_id);assert.notEqual(newDelivery.payload.assetSha256,delivery.payload.assetSha256);assert.equal(newDelivery.integration_id,delivery.integration_id);
+  const oldDelivery=(await pool.query('SELECT * FROM deliveries WHERE id=$1',[deliveryId])).rows[0];assert.equal(oldDelivery.status,delivery.status);assert.equal(oldDelivery.post_id,delivery.post_id);assert.equal(oldDelivery.release_url,delivery.release_url);assert.deepEqual(oldDelivery.payload,delivery.payload);
+});
+
+test('ajuste de enviado permite continuar sem a prévia local, mas exige a fonte e respeita o limite de versões',async()=>{
+  await create();await service.tick();let original=await currentClip();
+  await call('/'+original.id+'/publish',publishBody(original));
+  await pool.query("UPDATE deliveries SET status='sent',post_id='qa-enviado' WHERE video_id=$1",[original.id]);await service.retirePublished();original=await currentClip();
+  await rm(join(cutDirectory(original.job_id),original.id+'.mp4'));await pool.query('UPDATE cuts SET local_file=NULL WHERE id=$1',[original.id]);
+  assert.equal((await currentClip()).hasMedia,false);assert.equal((await state()).jobs[0].hasSource,true);
+  const input={title:original.title,start:5,end:13,revision:original.revision};
+  const saved=await call('/'+original.id,input,'PUT');assert.equal(saved.status,202,await saved.clone().text());const {id}=await saved.json();await service.tick();
+  const copy=(await state()).jobs[0].clips.find((c:any)=>c.id===id)!;
+  assert.equal((await call('/'+id,{...input,title:'Continuar o ajuste',revision:copy.revision},'PUT')).status,202);await service.tick();assert.equal((await state()).jobs[0].clips.find((c:any)=>c.id===id)!.revision,2);
+  for(let i=0;i<9;i++)await pool.query(`INSERT INTO cuts(id,job_id,title,start_seconds,end_seconds,reason,status) VALUES($1,$2,'Pendente',5,13,'Teste','review')`,[randomUUID(),original.job_id]);
+  const limited=await call('/'+original.id,input,'PUT');assert.equal(limited.status,409);assert.match((await limited.json()).error,/limite de versões/);
+  await rm(join(cutDirectory(original.job_id),'source.mp4'));assert.equal((await state()).jobs[0].hasSource,false);
+  const missing=await call('/'+original.id,input,'PUT');assert.equal(missing.status,409);assert.match((await missing.json()).error,/fonte foi removida/);
+});
+
+test('recuperar a fonte de um projeto enviado mantém cortes, histórico e arquivos sem publicar outra vez',async()=>{
+  await create();await service.tick();const clip=await currentClip();
+  const {deliveryId}=await (await call('/'+clip.id+'/publish',publishBody(clip))).json();
+  await pool.query("UPDATE deliveries SET status='sent',post_id='publicacao-preservada' WHERE id=$1",[deliveryId]);await service.retirePublished();
+  const source=join(cutDirectory(clip.job_id),'source.mp4'),hash=await sha256File(source),before=(await pool.query('SELECT * FROM cuts WHERE id=$1',[clip.id])).rows[0];
+  const preview=await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4'));await rm(source);await pool.query('UPDATE cut_jobs SET source_removed_at=now() WHERE id=$1',[clip.job_id]);
+  const route='/jobs/'+clip.job_id;
+  assert.equal((await (await call(route+'/source-status')).json()).ready,false);
+  const prepared=await call(route+'/prepare-source',{});assert.equal(prepared.status,202,await prepared.clone().text());assert.equal((await prepared.json()).status,'queued');
+  assert.equal((await call(route+'/prepare-source',{})).status,202,'repetir usa o mesmo trabalho');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM cuts')).rows[0].n,1);
+  await service.tick();
+  const ready=await call(route+'/source-status');assert.equal(ready.status,200);assert.equal((await ready.json()).ready,true);assert.equal(downloads,2);assert.equal(renders,1,'nenhum corte é renderizado ao recuperar apenas a fonte');
+  assert.equal(await sha256File(source),hash);assert.deepEqual((await pool.query('SELECT * FROM cuts WHERE id=$1',[clip.id])).rows[0],before);assert.deepEqual(await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4')),preview);
+  assert.equal((await call(route+'/prepare-source',{})).status,200,'a fonte pronta não volta para a fila');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM deliveries')).rows[0].n,1);
+  const saved=await call('/'+clip.id,{title:'Ajuste depois da recuperação',start:5,end:13,revision:clip.revision},'PUT');assert.equal(saved.status,202,await saved.clone().text());
+});
+
+test('falha na recuperação pode ser tentada novamente e projetos descartados não são restaurados',async()=>{
+  await create();await service.tick();const clip=await currentClip(),source=join(cutDirectory(clip.job_id),'source.mp4'),route='/jobs/'+clip.job_id;
+  await rm(source);const download=media.download;
+  try{
+    media.download=async()=>{throw new AppError('Fonte indisponível no teste.');};
+    assert.equal((await call(route+'/prepare-source',{})).status,202);await service.tick();
+    const status=await (await call(route+'/source-status')).json();assert.equal(status.ready,false);assert.equal(status.status,'failed');assert.match(status.error,/Fonte indisponível/);
+  }finally{media.download=download;}
+  assert.equal((await call(route+'/prepare-source',{})).status,202);await service.tick();assert.equal((await (await call(route+'/source-status')).json()).ready,true);
+  assert.equal((await call(route+'/discard',{confirm:true})).status,200);
+  assert.equal((await call(route+'/prepare-source',{})).status,409);assert.equal((await call(route+'/source-status')).status,404);
 });
 test('mudar de Shorts para vídeo exige nova prévia e valida o formato real antes do envio',async()=>{
   await create();await service.tick();let clip=await currentClip();
@@ -438,7 +528,7 @@ test('corte publica agora no TikTok com consentimento, conta e bytes preservados
   const {BrowserBridge}=await import('../src/browser-bridge.js');
   await create();await service.tick();let clip=await currentClip();
   const original=await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4'));
-  const body={...publishBody(clip),channelId:'browser:tiktok:default',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false}};
+  const body={...publishBody(clip),channelId:'browser:tiktok:default',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:false,commercialContent:true,ownBrand:true}};
   assert.equal((await call('/'+clip.id+'/publish',{...body,confirm:false})).status,400);
   assert.equal((await call('/'+clip.id+'/publish',{...body,revision:clip.revision+1})).status,409);
   const first=await call('/'+clip.id+'/publish',body);assert.equal(first.status,202,await first.clone().text());const {deliveryId}=await first.json();
@@ -448,7 +538,7 @@ test('corte publica agora no TikTok com consentimento, conta e bytes preservados
   assert.deepEqual(await readFile(join(process.env.DATA_DIR!,delivery.local_file)),original);
   const bridge=new BrowserBridge(),instanceId=randomUUID(),report={instanceId,profileSaved:true,externalBusy:false,desktop:true,activeJobId:null};
   await bridge.poll(report);await bridge.tick();const {job}=await bridge.poll(report);
-  assert.equal(job.publishNow,true);assert.equal(job.publishAt,undefined);assert.equal(job.profileId,'default');
+  assert.equal(job.publishNow,true);assert.equal(job.publishAt,undefined);assert.equal(job.profileId,'default');assert.equal(job.media.metadata.tiktok.commercialContent,true);assert.equal(job.media.metadata.tiktok.ownBrand,true);
   await assert.rejects(()=>bridge.finish(job.id,{instanceId,result:'published'}),/não confirmou/);
   await bridge.progress(job.id,{instanceId,stage:'browser_upload_started'});
   await bridge.progress(job.id,{instanceId,stage:'browser_published'});await bridge.finish(job.id,{instanceId,result:'published'});
@@ -457,6 +547,13 @@ test('corte publica agora no TikTok com consentimento, conta e bytes preservados
   assert.equal((await call('/'+clip.id+'/publish',publishBody(clip))).status,202);
   clip=await currentClip();assert.equal(clip.publications.length,2);assert.equal(clip.delivery_id,deliveryId);
   assert.equal((await call('/'+clip.id+'/discard',{confirm:true})).status,409,'um segundo destino pendente protege o arquivo mesmo com o primeiro confirmado');
+  const edit=await call('/'+clip.id,{title:'Ajuste depois do TikTok',start:clip.start_seconds,end:clip.end_seconds,revision:clip.revision,framingOptions:{format:'video',mode:'split'}},'PUT');
+  assert.equal(edit.status,202,await edit.clone().text());const {id}=await edit.json();await service.tick();
+  const copy=(await state()).jobs[0].clips.find((item:any)=>item.id===id)!;
+  assert.equal(copy.edited_from_cut_id,clip.id);assert.deepEqual(copy.publications,[]);assert.equal((await currentClip()).publications.length,2);
+  assert.deepEqual(await readFile(join(cutDirectory(clip.job_id),clip.id+'.mp4')),original);
+  assert.equal((await call('/'+copy.id+'/publish',{...body,revision:copy.revision})).status,202,'a versão revisada pode ser enviada à mesma conta do TikTok');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM deliveries')).rows[0].n,3);
 });
 
 test('biblioteca filtra projetos sem arquivos antes de paginar e inclui cortes ainda não publicados',async()=>{

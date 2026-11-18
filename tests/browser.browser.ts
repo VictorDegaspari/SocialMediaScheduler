@@ -246,10 +246,12 @@ test('agente executa tarefa do painel e rejeita origem fora da pasta local autor
   }
 });
 
-test('agente recebe cópia privada do backend, confere hash e usa diretório do perfil correto',async()=>{
+for(const commercial of [false,true])test(commercial?'publicação comercial imediata chega ao Chrome do Playwright após conferir a cópia':'agente recebe cópia privada do backend, confere hash e usa diretório do perfil correto',async()=>{
   const {randomUUID,createHash}=await import('node:crypto');const {browserProfileDirectory}=await import('../src/browser-profiles.js');
-  const root=join(directory,'prepared-agent'),media=join(root,'media'),profileId=randomUUID(),jobId=randomUUID(),key='5'.repeat(64),bytes=await readFile(first),hash=createHash('sha256').update(bytes).digest('hex');
+  const root=join(directory,commercial?'commercial-agent':'prepared-agent'),media=join(root,'media'),profileId=randomUUID(),jobId=randomUUID(),key='5'.repeat(64),bytes=await readFile(first),hash=createHash('sha256').update(bytes).digest('hex');
   await mkdir(media,{recursive:true});await symlink(resolve('scripts'),join(root,'scripts'));
+  const marker=join(root,'chrome-opened'),chrome=join(root,'fake-chrome');
+  if(commercial)await writeFile(chrome,'#!/bin/sh\nprintf opened > "$CHROME_TEST_MARKER"\nexit 1\n',{mode:0o700});
   let sent=false,downloaded=false,finished:()=>void;const stages:string[]=[],completed=new Promise<void>(done=>{finished=done;});
   const server=createServer(async(req,res)=>{
     try {
@@ -258,18 +260,20 @@ test('agente recebe cópia privada do backend, confere hash e usa diretório do 
       let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);let response:unknown={ok:true};
       if(req.url==='/api/browser-agent/profiles')response=[{id:profileId}];
       else if(req.url==='/api/browser-agent/poll'){
-        response={job:!sent&&!body.activeJobId?{id:jobId,kind:'upload',folder:media,stripMetadata:true,profileId,publishAt:new Date(Date.now()+86400000).toISOString(),media:{metadata:metadataSchema.parse({title:'Teste privado',tiktok:{privacyLevel:null}}),hash,assetSha256:hash,name:'video.mp4',sourceId:'source-video-01'}}:null,cancel:false};sent=true;
+        response={job:!sent&&!body.activeJobId?{id:jobId,kind:'upload',folder:media,stripMetadata:true,profileId,...(commercial?{publishNow:true}:{publishAt:new Date(Date.now()+86400000).toISOString()}),media:{metadata:metadataSchema.parse({title:'Teste privado',tiktok:{privacyLevel:commercial?'PUBLIC_TO_EVERYONE':null,commercialContent:commercial,ownBrand:commercial}}),hash,assetSha256:hash,name:'video.mp4',sourceId:'source-video-01'}}:null,cancel:false};sent=true;
       }else if(req.url?.endsWith('/progress'))stages.push(body.stage);
       else if(req.url?.endsWith('/finish')){assert.equal(body.result,'failed');finished();}
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify(response));
     }catch{res.writeHead(400).end();}
   });
   await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));
-  const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/browser-agent.mjs')],{cwd:root,env:{...process.env,APP_URL:'http://127.0.0.1:'+(server.address() as {port:number}).port,BROWSER_AGENT_TOKEN:key,ENCRYPTION_KEY:'00'.repeat(32),LOCAL_MEDIA_DIR:media,LOCAL_MEDIA_HOST_DIR:media,LOG_LEVEL:'silent'},stdio:'ignore'});
+  const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/browser-agent.mjs')],{cwd:root,env:{...process.env,...(commercial?{CHROME_PATH:chrome,CHROME_TEST_MARKER:marker}:{}),APP_URL:'http://127.0.0.1:'+(server.address() as {port:number}).port,BROWSER_AGENT_TOKEN:key,ENCRYPTION_KEY:'00'.repeat(32),LOCAL_MEDIA_DIR:media,LOCAL_MEDIA_HOST_DIR:media,LOG_LEVEL:'silent'},stdio:'ignore'});
   const closed=new Promise<number|null>((done,reject)=>{child.once('close',done);child.once('error',reject);});const timer=setTimeout(()=>child.kill('SIGTERM'),12000);
   try {
     await Promise.race([completed,closed.then(()=>{throw new Error('O agente não concluiu a conferência.');})]);
-    assert(downloaded);assert(stages.includes('page_changed'),'a cópia deve passar pelo hash antes de recusar os metadados de privacidade, sem abrir TikTok');
+    assert(downloaded);
+    if(commercial){assert.equal(await readFile(marker,'utf8'),'opened');assert(!stages.includes('page_changed'),'declarações comerciais não impedem abrir o Chrome');}
+    else assert(stages.includes('page_changed'),'a cópia deve passar pelo hash antes de recusar os metadados de privacidade, sem abrir TikTok');
     assert(stages.includes('browser_preparing_source'));
     const files=await import('node:fs/promises');assert((await files.stat(browserProfileDirectory(profileId,join(root,'.browser-data/tiktok')))).isDirectory());
   }finally{clearTimeout(timer);child.kill('SIGINT');await closed;await new Promise<void>(done=>server.close(()=>done()));}
@@ -292,6 +296,36 @@ test('publicação imediata desmarca IA, confirma uma vez e não aceita confirma
     await assert.rejects(()=>publishTikTokUpload(page,meta,400),error=>error instanceof BrowserActionRequired&&error.code==='upload_unconfirmed');
     await page.getByRole('checkbox',{name:'AI-generated content'}).evaluate(el=>el.remove());
     await assert.rejects(()=>publishTikTokUpload(page,meta,400),/declaração de IA/);
+  }finally{await page.close();}
+});
+
+for(const [ownBrand,commercialContent] of [[true,false],[false,true],[true,true],[false,false]])test(`publicação imediata confere marca=${ownBrand} e parceria=${commercialContent} no Studio`,async()=>{
+  const page=await browser.newPage(),metadata=metadataSchema.parse({title:'Vídeo comercial revisado',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',ownBrand,commercialContent,madeWithAI:true,allowComment:true}});
+  try{
+    await page.setContent(`<select aria-label="Who can watch this video"><option>Only me</option><option>Everyone</option></select>
+      <label><input type="checkbox">Allow comments</label><label><input type="checkbox" checked>Allow duet</label><label><input type="checkbox" checked>Allow stitch</label><label><input type="checkbox">AI-generated content</label>
+      <label><input id="disclosure" type="checkbox" role="switch" checked onchange="document.querySelector('#brands').hidden=!this.checked">Disclose commercial content</label>
+      <div id="brands"><label><input id="own" type="checkbox" ${ownBrand?'':'checked'}>Your brand</label><label><input id="paid" type="checkbox" ${commercialContent?'':'checked'}>Branded content</label></div>
+      <button onclick="window.posts=(window.posts||0)+1;window.selection={disclosure:document.querySelector('#disclosure').checked,own:document.querySelector('#own').checked,paid:document.querySelector('#paid').checked};document.querySelector('#result').textContent='Video published successfully'">Post</button><p id="result"></p>`);
+    assert.equal((await publishTikTokUpload(page,metadata,1500)).status,'published');
+    const state=await page.evaluate(()=>({posts:(window as any).posts,selection:(window as any).selection}));
+    assert.equal(state.posts,1);assert.equal(state.selection.disclosure,ownBrand||commercialContent);
+    if(ownBrand||commercialContent)assert.deepEqual(state.selection,{disclosure:true,own:ownBrand,paid:commercialContent});
+    assert.equal(await page.getByRole('checkbox',{name:'AI-generated content'}).isChecked(),true);assert.equal(await page.getByRole('checkbox',{name:'Allow comments'}).isChecked(),true);
+    assert.equal(await page.getByRole('checkbox',{name:'Allow duet'}).isChecked(),false);assert.equal(await page.getByRole('checkbox',{name:'Allow stitch'}).isChecked(),false);
+  }finally{await page.close();}
+});
+
+test('declaração comercial ausente ou ambígua não autoriza clicar em Publicar',async()=>{
+  const page=await browser.newPage(),metadata=metadataSchema.parse({title:'Parceria revisada',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',commercialContent:true}});
+  const permissions='<select aria-label="Who can watch this video"><option>Everyone</option></select><label><input type="checkbox">Allow comments</label><label><input type="checkbox">Allow duet</label><label><input type="checkbox">Allow stitch</label><label><input type="checkbox">AI-generated content</label><button onclick="window.posts=(window.posts||0)+1">Post</button>';
+  try{
+    for(const controls of ['', '<label><input type="checkbox" role="switch">Disclose commercial content</label><label><input type="checkbox">Your brand</label>', '<label><input type="checkbox" role="switch">Disclose commercial content</label><label><input type="checkbox">Your brand</label><label><input type="checkbox">Your brand</label><label><input type="checkbox">Branded content</label>']){
+      await page.setContent(permissions+controls);
+      await assert.rejects(()=>publishTikTokUpload(page,metadata,500),error=>error instanceof BrowserActionRequired&&error.code==='page_changed');
+      assert.equal(await page.evaluate(()=>(window as any).posts||0),0);
+    }
+    await assert.rejects(()=>scheduleTikTokUpload(page,new Date(Math.ceil((Date.now()+86400_000)/60_000)*60_000),metadata,500),/declarações comerciais/);
   }finally{await page.close();}
 });
 

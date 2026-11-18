@@ -23,7 +23,7 @@ clip.captions.push({start:17.5,end:23,text:'Antes depois agora.',words:[{start:1
 const job={id:jobId,url:'https://www.youtube.com/watch?v=dQw4w9WgXcQ',title:'Vídeo de exemplo',duration:180,replay_data:{status:'available',source:'youtube_most_replayed',message:'Mapa público de replay.',points:[{start:0,end:60,value:.2},{start:60,end:120,value:1},{start:120,end:180,value:.4}]},status:'review',created_at:'2026-11-17T12:00:00Z',clips:[clip]};
 const discardedJob={id:'00000000-0000-4000-8000-000000000000',title:'Projeto já descartado',status:'discarded',created_at:'2026-11-17T15:00:00Z',clips:[]};
 const fixture={cuts:{dependencies:{ready:true,details:[]},channels:[{id:channelId,name:'Canal de teste',identifier:'youtube',disabled:false}],jobs:[job,discardedJob]},scheduler:{paused:false,queue:{}},stats:{watches:0,pending:0,sent:0,attention:0},watches:[],publishing:{actions:[]}};
-const actions=[],errors=[],stateRequests=[];let polls=0,leakDiscarded=true,discardGate=null;
+const actions=[],errors=[],stateRequests=[];let polls=0,leakDiscarded=true,discardGate=null,adjusted=null,recoveryMode='ready';
 function statePage(url){
   const jobs=fixture.cuts.jobs.filter(item=>item.status!=='discarded').sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id.localeCompare(a.id));
   const limit=Math.max(1,Math.min(100,Number(url.searchParams.get('cutsLimit'))||10));
@@ -59,10 +59,22 @@ await page.route('**/api/**',async route=>{
     if(range){const start=Number(range[1]),end=range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;return route.fulfill({status:206,body:media.subarray(start,end+1),headers:{'Content-Type':'video/mp4','Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':String(end-start+1)}});}
     return route.fulfill({body:media,contentType:'video/mp4',headers:{'Accept-Ranges':'bytes'}});
   }
+  if(path==='/api/cuts/jobs/'+jobId+'/source-status'){
+    if(recoveryMode==='fail')return route.fulfill({json:{ready:false,status:'failed',error:'Falha de recuperação simulada.'}});
+    const ready=recoveryMode==='ready';if(ready)job.hasSource=true;
+    return route.fulfill({json:{ready,status:ready?'review':'downloading',duration:job.duration}});
+  }
   if(path.endsWith('/transcript'))return route.fulfill({json:{captions:clip.captions,duration:job.duration,replay:job.replay_data}});
   assert.equal(request.headers()['x-watcher-request'],'1');const body=request.postDataJSON();actions.push({path,body,method:request.method()});
+  if(path==='/api/cuts/jobs/'+jobId+'/prepare-source')return route.fulfill({json:{ready:false,status:'queued'}});
   if(path==='/api/cuts')fixture.cuts.jobs.unshift({id:'33333333-3333-4333-8333-333333333333',url:body.url,title:'Novo projeto',status:'queued',created_at:'2026-11-17T14:00:00Z',clips:[]});
-  else if(path==='/api/cuts/'+clipId&&request.method()==='PUT'){Object.assign(clip,{title:body.title,start_seconds:body.start,end_seconds:body.end,framing:body.framing,framing_options:body.framingOptions,caption_style:body.captionStyle,excluded_ranges:body.excludedRanges,captions:body.captions||clip.captions,revision:clip.revision+1,status:'rendering',hasMedia:false});}
+  else if(path==='/api/cuts/'+clipId&&request.method()==='PUT'){
+    if(['posted','publishing'].includes(clip.status)){
+      adjusted={...structuredClone(clip),id:body.versionId,edited_from_cut_id:clip.id,title:body.title,start_seconds:body.start,end_seconds:body.end,framing_options:body.framingOptions,caption_style:body.captionStyle,excluded_ranges:body.excludedRanges,captions:body.captions||clip.captions,revision:1,status:'review',hasMedia:true,delivery_id:null,delivery_status:null,release_url:null,publications:[]};job.clips.push(adjusted);
+      return route.fulfill({json:{ok:true,id:adjusted.id,createdVersion:true}});
+    }
+    Object.assign(clip,{title:body.title,start_seconds:body.start,end_seconds:body.end,framing:body.framing,framing_options:body.framingOptions,caption_style:body.captionStyle,excluded_ranges:body.excludedRanges,captions:body.captions||clip.captions,revision:clip.revision+1,status:'rendering',hasMedia:false});
+  }
   else if(path==='/api/cuts/jobs/'+jobId+'/analyze'){job.replay_data.status='available';}
   else if(path==='/api/cuts/'+clipId+'/publish'){Object.assign(clip,{status:'publishing',delivery_id:'qa-delivery',delivery_status:'pending'});}
   else if(path.endsWith('/discard')){
@@ -356,6 +368,33 @@ try{
   Object.assign(clip,{status:'posted',hasMedia:true,delivery_status:'published',release_url:'https://www.youtube.com/watch?v=qa123'});job.status='completed';await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByText('Publicado no YouTube',{exact:true}).waitFor();assert.equal(await page.locator('[data-cut-clip] video').count(),1);
   assert.equal(await page.getByRole('button',{name:'Postar',exact:true}).count(),1,'um corte enviado continua disponível para outro destino');
+  // Editing an uploaded cut opens the same controls and saves a separate review version.
+  assert.equal(await page.getByRole('button',{name:'Ajustar',exact:true}).count(),1);
+  const beforePostedEdit=actions.length,postedSnapshot=structuredClone(clip);
+  await page.getByRole('button',{name:'Ajustar',exact:true}).click();
+  await page.getByText(/Ao salvar, será criada uma nova versão/).waitFor();
+  await page.getByRole('button',{name:'Cancelar',exact:true}).click();assert.equal(actions.length,beforePostedEdit,'cancel does not create a copy');
+  await page.getByRole('button',{name:'Ajustar',exact:true}).click();
+  await page.getByLabel('Título do corte',{exact:true}).fill('Versão para outra montagem');
+  await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
+  await page.getByRole('heading',{name:'Versão para outra montagem',exact:true}).waitFor();
+  assert.deepEqual(clip,postedSnapshot,'the uploaded cut and publication link remain unchanged');
+  assert.match(actions.at(-1).body.versionId,/^[a-f0-9-]{36}$/);assert.equal(adjusted.edited_from_cut_id,clipId);
+  assert.equal(await page.getByText('Versão ajustada',{exact:true}).count(),1);
+  const copyCard=page.locator(`[data-cut-clip="${adjusted.id}"]`);assert.equal(await copyCard.getByRole('button',{name:'Ajustar',exact:true}).count(),1);
+  await copyCard.getByRole('button',{name:'Ajustar',exact:true}).click();assert.equal(await page.locator('.cuts-version-notice').count(),0,'an unsent copy stays editable in place');await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+  job.clips=[clip];adjusted=null;job.hasSource=false;recoveryMode='hold';await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  await page.getByRole('button',{name:'Ajustar',exact:true}).waitFor();
+  const beforeRecovery=actions.filter(action=>action.method==='PUT').length;
+  await page.getByRole('button',{name:'Ajustar',exact:true}).click();await page.getByRole('heading',{name:'Recuperar vídeo para ajustar',exact:true}).waitFor();
+  await page.getByText(/download usa a melhor qualidade/).waitFor();assert.equal(await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).count(),0);
+  await page.getByRole('button',{name:'Cancelar',exact:true}).click();await page.waitForTimeout(1200);assert.equal(await page.locator('#cuts-dialog').isVisible(),false,'a cancelled source wait cannot reopen the editor');
+  recoveryMode='fail';await page.getByRole('button',{name:'Ajustar',exact:true}).click();await page.getByText('Falha de recuperação simulada.',{exact:true}).waitFor();
+  assert.equal(actions.filter(action=>action.method==='PUT').length,beforeRecovery);assert.equal(adjusted,null);
+  recoveryMode='ready';await page.getByRole('button',{name:'Tentar recuperar novamente',exact:true}).click();await page.getByRole('heading',{name:'Editar corte',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('Título do corte',{exact:true}).inputValue(),clip.title);await phoneAt(clip.start_seconds,clip.start_seconds>=120?'blue':clip.start_seconds>=60?'green':'red');
+  await page.getByRole('button',{name:'Cancelar',exact:true}).click();assert.equal(actions.filter(action=>action.method==='PUT').length,beforeRecovery);
+  assert.deepEqual(clip,postedSnapshot,'recovering the original does not change the uploaded cut');
   const downloadLink=page.getByRole('link',{name:'Baixar MP4',exact:true});
   assert((await downloadLink.getAttribute('href')).includes('/api/cuts/'+clipId+'/media'));
   const [download]=await Promise.all([page.waitForEvent('download'),downloadLink.click()]);
@@ -435,5 +474,5 @@ try{
   assert.equal(await page.locator('[data-cut-job="qa-old-10"]').count(),0);
   fixture.cuts.dependencies={ready:false,details:['Python de transcrição não está disponível.']};await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByText('Preparação necessária',{exact:true}).waitFor();assert(await page.getByRole('button',{name:'Gerar cortes',exact:true}).isDisabled());
-  assert.deepEqual(errors,[]);console.log('Cortes UI: frame exato no celular, controles de reprodução/pausa/seek, montagem sem lacunas, replay, estilos, publicação simulada, confirmação de descarte, paginação e mobile OK.');
+  assert.deepEqual(errors,[]);console.log('Cortes UI: frame exato no celular, controles de reprodução/pausa/seek, montagem sem lacunas, replay, estilos, publicação simulada, ajustes após envio, recuperação da fonte, confirmação de descarte, paginação e mobile OK.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));await rm(temp,{recursive:true,force:true});}

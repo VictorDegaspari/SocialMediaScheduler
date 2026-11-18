@@ -35,7 +35,7 @@ export async function publishCut(db:PoolClient,job:{id:string;title:string|null;
   if(!['review','failed','posted','publishing'].includes(clip.status)||!clip.local_file)throw new AppError('Aguarde uma prévia pronta para autorizar o envio.',409);
   const format=framingOptionsSchema.parse(clip.framing_options||{}).format;
   if(input.format&&input.format!==format)throw new AppError('O formato escolhido precisa de uma nova prévia. Ajuste o corte e confira antes de postar.',409);
-  if(tiktok&&(!input.tiktok||input.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'||input.tiktok.commercialContent||input.tiktok.ownBrand))throw new AppError('Confira a publicação pública e as declarações do TikTok antes de postar.');
+  if(tiktok&&(!input.tiktok||input.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'))throw new AppError('Confira a publicação pública e as declarações do TikTok antes de postar.');
   const source=join(dir,clip.id+'.mp4');await validateVideo(source,format);
   const hash=await sha256(source),deliveryId=randomUUID(),filename=deliveryId+'.native.mp4';
   const metadata=metadataSchema.parse({title:input.title,description:input.description,hashtags:!tiktok&&format==='shorts'?['Shorts']:[],

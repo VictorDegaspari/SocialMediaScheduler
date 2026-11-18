@@ -95,6 +95,7 @@ export async function initDb() {
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS excluded_ranges jsonb NOT NULL DEFAULT '[]';
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS output_duration double precision;
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS render_warnings jsonb NOT NULL DEFAULT '[]';
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS edited_from_cut_id uuid REFERENCES cuts(id);
     ALTER TABLE cuts DROP CONSTRAINT IF EXISTS cuts_check;
     UPDATE cuts SET output_duration=end_seconds-start_seconds WHERE output_duration IS NULL;
     DO $$ BEGIN

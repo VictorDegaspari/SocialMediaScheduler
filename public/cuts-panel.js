@@ -23,11 +23,29 @@ function publicationList(clip){
     return `<div class="cut-publication"><strong>${platform} · ${esc(delivery.channel_name||'Conta selecionada')}</strong><span>${esc(label)}</span>${url?`<a href="${esc(safeLink(url))}" target="_blank" rel="noreferrer">Abrir no ${platform}</a>`:''}${delivery.error?`<small>${esc(delivery.error)}</small>`:''}</div>`;
   }).join('');
 }
-function clipCard(clip,job){
-  const {esc,badge,icon}=helpers,editable=clip.status==='review'&&clip.hasMedia&&!clip.delivery_id;
-  const downloadable=clip.hasMedia&&['review','publishing','posted','failed'].includes(clip.status),deletable=clip.hasMedia&&['review','posted','failed'].includes(clip.status);
+function discardCutButton(clip){
+  return clip.hasMedia&&['review','posted','failed'].includes(clip.status)?`<button class="button ghost danger small" data-cuts-action="discard" data-id="${helpers.esc(clip.id)}">${clip.status==='posted'?'Excluir arquivo':'Descartar'}</button>`:'';
+}
+function clipActions(clip,library=false){
+  const {esc,icon}=helpers,id=esc(clip.id),editable=['review','failed','publishing','posted'].includes(clip.status);
+  const downloadable=clip.hasMedia&&['review','publishing','posted','failed'].includes(clip.status);
+  if(!editable&&!downloadable&&!discardCutButton(clip))return '';
+  return `<div class="cuts-actions">${downloadable?`<button class="button primary small" data-cuts-action="publish" data-id="${id}" ${library?'aria-label="Postar no YouTube"':''}>${icon(library?'youtube':'upload')} ${library?'YouTube':'Postar'}</button><button class="button small" data-cuts-action="publish-tiktok" data-platform="tiktok" data-id="${id}" aria-label="Postar no TikTok">${icon('tiktok')} ${library?'TikTok':'Postar no TikTok'}</button>`:''}${editable?`<button class="button small" data-cuts-action="edit" data-id="${id}">${icon('edit')} ${clip.status==='failed'?'Ajustar e gerar novamente':'Ajustar'}</button>`:''}${downloadable?`<a class="button small" href="/api/cuts/${encodeURIComponent(clip.id)}/media?download=1&amp;v=${Number(clip.revision)||0}" download="${esc((clip.title||'corte')+'.mp4')}">Baixar MP4</a>`:''}${library?'':discardCutButton(clip)}</div>`;
+}
+function clipCard(clip,job,library=false){
+  const {esc,badge,icon}=helpers;
   const status=clip.publications?.length?clipLabels[clip.status]:(clip.delivery_status?deliveryLabels[clip.delivery_status]||clipLabels[clip.status]:clipLabels[clip.status]);
-  return `<article class="cuts-clip" data-cut-clip="${esc(clip.id)}" data-format="${clip.framing_options?.format==='video'?'video':'shorts'}"><div class="cuts-player-wrap">${clip.hasMedia?`<video class="cuts-player" controls playsinline preload="metadata" aria-label="Prévia de ${esc(clip.title)}" src="/api/cuts/${encodeURIComponent(clip.id)}/media?v=${Number(clip.revision)||0}"></video>`:`<div class="cuts-player-empty">${icon(clip.status==='posted'?'check':'play')}<span>${clip.status==='posted'?'Arquivo local indisponível':clip.status==='discarded'?'Arquivo excluído':'A prévia aparecerá aqui'}</span></div>`}</div><div class="cuts-clip-content"><div class="cuts-clip-heading"><h3>${esc(clip.title||'Corte sugerido')}</h3>${badge(status||clip.status,['failed','unknown'].includes(clip.delivery_status)||clip.status==='failed'?'amber':['posted','discarded'].includes(clip.status)?'gray':'')}</div><p class="cuts-timing">${stamp(clip.start_seconds)} → ${stamp(clip.end_seconds)} <span>· ${stamp(clip.output_duration??Math.max(0,Number(clip.end_seconds)-Number(clip.start_seconds)-(clip.excluded_ranges||[]).reduce((n,r)=>n+r.end-r.start,0)))} de vídeo · ${clip.framing_options?.format==='video'?'Vídeo 16:9':'Shorts 9:16'} · ${{fit:'Imagem completa',blur:'Fundo desfocado',crop:'Recorte com foco',split:'Webcam em cima + vídeo embaixo'}[clip.framing_options?.mode||clip.framing]||'Imagem completa'}</span></p>${clip.reason?`<p class="cuts-reason">${esc(clip.reason)}</p>`:''}${(clip.render_warnings||[]).map(w=>`<p class="tip cuts-render-warning">${esc(w)}</p>`).join('')}${clip.error?`<p class="error-banner">${esc(clip.error)}</p>`:''}${editable||downloadable||deletable?`<div class="cuts-actions">${downloadable?`<button class="button primary small" data-cuts-action="publish" data-id="${esc(clip.id)}">${icon('upload')} Postar</button><button class="button small" data-cuts-action="publish-tiktok" data-platform="tiktok" data-id="${esc(clip.id)}">${icon('tiktok')} Postar no TikTok</button>`:''}${editable?`<button class="button small" data-cuts-action="edit" data-id="${esc(clip.id)}">${icon('edit')} Ajustar</button>`:''}${downloadable?`<a class="button small" href="/api/cuts/${encodeURIComponent(clip.id)}/media?download=1&amp;v=${Number(clip.revision)||0}" download="${esc((clip.title||'corte')+'.mp4')}">Baixar MP4</a>`:''}${deletable?`<button class="button ghost danger small" data-cuts-action="discard" data-id="${esc(clip.id)}">${clip.status==='posted'?'Excluir arquivo':'Descartar'}</button>`:''}</div>`:''}${clip.status==='failed'&&!clip.delivery_id?`<button class="button small" data-cuts-action="edit" data-id="${esc(clip.id)}">Ajustar e gerar novamente</button>`:''}${publicationList(clip)}${clip.release_url&&!clip.publications?.length?`<a class="section-link" href="${esc(safeLink(clip.release_url))}" target="_blank" rel="noreferrer">Abrir no YouTube ${icon('external')}</a>`:''}${clip.delivery_id?'<p class="tip">Acompanhe o envio em <a href="#history">Histórico</a>. O arquivo fica disponível para baixar e usar em outras plataformas. Exclua manualmente quando terminar.</p>':''}</div></article>`;
+  const statusBadge=badge(status||clip.status,['failed','unknown'].includes(clip.delivery_status)||clip.status==='failed'?'amber':['posted','discarded'].includes(clip.status)?'gray':'');
+  const versionBadge=clip.edited_from_cut_id?'<span class="badge gray">Versão ajustada</span>':'';
+  const format=clip.framing_options?.format==='video'?'video':'shorts',duration=clip.output_duration??Math.max(0,Number(clip.end_seconds)-Number(clip.start_seconds)-(clip.excluded_ranges||[]).reduce((n,r)=>n+r.end-r.start,0));
+  const timing=`<p class="cuts-timing">${stamp(clip.start_seconds)} → ${stamp(clip.end_seconds)} <span>· ${stamp(duration)} de vídeo · ${format==='video'?'Vídeo 16:9':'Shorts 9:16'} · ${{fit:'Imagem completa',blur:'Fundo desfocado',crop:'Recorte com foco',split:'Webcam em cima + vídeo embaixo'}[clip.framing_options?.mode||clip.framing]||'Imagem completa'}</span></p>`;
+  const information=`${clip.reason?`<p class="cuts-reason">${esc(clip.reason)}</p>`:''}${(clip.render_warnings||[]).map(w=>`<p class="tip cuts-render-warning">${esc(w)}</p>`).join('')}`;
+  const publication=`${publicationList(clip)}${clip.release_url&&!clip.publications?.length?`<a class="section-link" href="${esc(safeLink(clip.release_url))}" target="_blank" rel="noreferrer">Abrir no YouTube ${icon('external')}</a>`:''}${clip.delivery_id?'<p class="tip">Acompanhe o envio em <a href="#history">Histórico</a>. O arquivo fica disponível para baixar e usar em outras plataformas. Exclua manualmente quando terminar.</p>':''}`;
+  const error=clip.error?`<p class="error-banner">${esc(clip.error)}</p>`:'';
+  const player=clip.hasMedia?`<video class="cuts-player" controls playsinline preload="metadata" aria-label="Prévia de ${esc(clip.title)}" src="/api/cuts/${encodeURIComponent(clip.id)}/media?v=${Number(clip.revision)||0}"></video>`:`<div class="cuts-player-empty">${icon(clip.status==='posted'?'check':'play')}<span>${clip.status==='posted'?'Arquivo local indisponível':clip.status==='discarded'?'Arquivo excluído':'A prévia aparecerá aqui'}</span></div>`;
+  const heading=`<div class="cuts-clip-heading"><h3 title="${esc(clip.title||'Corte sugerido')}">${esc(clip.title||'Corte sugerido')}</h3>${library?`<div class="cuts-library-badges">${statusBadge}${versionBadge}</div>`:versionBadge+statusBadge}</div>`;
+  const details=library?`<p class="cuts-library-source" title="${esc(job.title||'Cortes gerados')}">${esc(job.title||'Cortes gerados')}</p>${heading}<div class="cuts-library-meta"><span>${icon('clock')} ${formatTimecode(Math.round(duration))}</span><span>${format==='video'?'Vídeo · 16:9':'Shorts · 9:16'}</span></div>${error}${clipActions(clip,true)}<details class="cuts-library-details" data-cut-details="${esc(clip.id)}"><summary>Detalhes e publicações${clip.render_warnings?.length?` <span class="cuts-library-alert">${icon('alert')} ${clip.render_warnings.length} ${clip.render_warnings.length===1?'aviso':'avisos'}</span>`:''}</summary>${timing}${information}${publication}${discardCutButton(clip)}</details>`:`${heading}${timing}${information}${error}${clipActions(clip)}${publication}`;
+  return `<article class="cuts-clip${library?' cuts-library-card':''}" data-cut-clip="${esc(clip.id)}" data-format="${format}"><div class="cuts-player-wrap">${player}</div><div class="cuts-clip-content">${details}</div></article>`;
 }
 function jobCard(job){
   const {esc,badge,date}=helpers,clips=job.clips||[];
@@ -59,21 +77,48 @@ function syncCutJobs(container,jobs,renderJob,empty){
     // Keep the playing element and the review that the user is reading stable.
     if(old&&([...old.querySelectorAll('video')].some(v=>!v.paused)||editing?.jobId===job.id))continue;
     const holder=document.createElement('div');holder.innerHTML=renderJob(job);const node=holder.firstElementChild;
-    if(old)old.replaceWith(node);else container.prepend(node);
+    if(old){
+      const open=new Set([...old.querySelectorAll('details[open][data-cut-details]')].map(details=>details.dataset.cutDetails));
+      for(const details of node.querySelectorAll('[data-cut-details]'))details.open=open.has(details.dataset.cutDetails);
+      old.replaceWith(node);
+    }else container.prepend(node);
     jobSignatures.set(job.id,signature);
   }
   if(!jobs.length&&!container.querySelector('.cuts-empty'))container.innerHTML=empty;
 }
 
 function findClip(id){for(const job of current.jobs||[]){const clip=(job.clips||[]).find(c=>c.id===id);if(clip)return {job,clip};}throw new Error('Este corte não está mais disponível. Atualize o painel.');}
-function openEditor(id,seek,format){
+async function openEditor(id,seek,format){
   const {clip,job}=findClip(id);editing?.editor?.destroy();
   document.querySelectorAll('#cuts-dialog-form video').forEach(video=>video.pause());
-  editing={mode:'edit',id,jobId:job.id,revision:clip.revision};
+  if(job.hasSource===false){
+    const session=editing={mode:'preparing',id,jobId:job.id,seek,format};
+    const dialog=document.querySelector('#cuts-dialog'),form=document.querySelector('#cuts-dialog-form');
+    document.querySelector('#cuts-dialog-title').textContent='Recuperar vídeo para ajustar';dialog.dataset.mode='edit';
+    form.innerHTML=`<p class="notice">O vídeo original deste projeto precisa ser recuperado. O download usa a melhor qualidade disponível de imagem e áudio e preserva os cortes e envios anteriores. Você pode fechar esta janela; a recuperação continua em segundo plano.</p><p id="cut-source-preparation" role="status">Preparando recuperação…</p><p id="cut-source-preparation-error" class="error-banner" role="alert" hidden></p><div class="dialog-footer"><button class="button" type="button" data-cuts-action="close-dialog">Cancelar</button><button id="cut-source-prepare-retry" class="button primary" type="button" data-cuts-action="edit" data-id="${helpers.esc(id)}" hidden>Tentar recuperar novamente</button></div>`;
+    if(!dialog.open)dialog.showModal();
+    try{
+      let source=await apiClient('/cuts/jobs/'+encodeURIComponent(job.id)+'/prepare-source',{});
+      while(editing===session&&dialog.open&&!source.ready){
+        if(source.status==='failed')throw new Error(source.error||'Não foi possível recuperar o vídeo original. Tente novamente.');
+        form.querySelector('#cut-source-preparation').textContent=(jobLabels[source.status]||'Recuperando vídeo original')+'… Você poderá ajustar assim que a fonte estiver pronta.';
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        if(editing!==session||!dialog.open)return;
+        source=await apiClient('/cuts/jobs/'+encodeURIComponent(job.id)+'/source-status');
+      }
+      if(editing!==session||!dialog.open)return;
+      job.hasSource=true;job.duration=source.duration;
+    }catch(error){
+      if(editing!==session||!dialog.open)return;
+      const alert=form.querySelector('#cut-source-preparation-error');alert.textContent=error.message;alert.hidden=false;
+      form.querySelector('#cut-source-preparation').textContent='A recuperação não terminou. O corte anterior foi preservado.';form.querySelector('#cut-source-prepare-retry').hidden=false;return;
+    }
+  }
+  editing={mode:'edit',id,jobId:job.id,revision:clip.revision,versionId:crypto.randomUUID()};
   document.querySelector('#cuts-dialog-title').textContent='Editar corte';
   document.querySelector('#cuts-dialog').dataset.mode='edit';
   editing.editor=createCutEditor({clip:format?{...clip,framing_options:{...clip.framing_options,format}}:clip,job,esc:helpers.esc,api:apiClient});
-  document.querySelector('#cuts-dialog').showModal();
+  if(!document.querySelector('#cuts-dialog').open)document.querySelector('#cuts-dialog').showModal();
   if(seek!==undefined){editing.editor.selectReplayStart(seek);const details=document.querySelector('.cuts-replay-details');details.open=true;details.scrollIntoView({block:'nearest'});}
 }
 function openPublish(id,platform='youtube'){
@@ -93,12 +138,12 @@ export function openCutPublication({clip,job},channels,h,channelId){
 }
 
 function libraryJobs(){return visibleJobs().map(job=>({...job,clips:(job.clips||[]).filter(clip=>clip.hasMedia&&clip.status!=='discarded')})).filter(job=>job.clips.length);}
-function libraryJob(job){return `<section class="panel cuts-job" data-cut-job="${helpers.esc(job.id)}"><div class="cuts-job-heading"><h3>${helpers.esc(job.title||'Cortes gerados')}</h3></div><div class="cuts-clips">${job.clips.map(clip=>clipCard(clip,job)).join('')}</div></section>`;}
+function libraryJob(job){return `<div class="cuts-library-project" data-cut-job="${helpers.esc(job.id)}">${job.clips.map(clip=>clipCard(clip,job,true)).join('')}</div>`;}
 const emptyLibrary='<div class="panel empty-state cuts-empty"><h3>Nenhum corte com arquivo disponível</h3><p>Os cortes prontos aparecem nesta pasta automaticamente.</p></div>';
 export function renderCutLibrary(state,h){
   remember({...state,cuts:state.cutFolders||state.cuts},h);const groups=libraryJobs();
   for(const job of groups)jobSignatures.set(job.id,JSON.stringify(job));
-  return `<section id="cuts-library" class="cuts-library"><div class="page-head"><div><h2>Cortes do aplicativo</h2><p>Seus cortes ficam guardados aqui para assistir, baixar e postar no YouTube ou TikTok.</p></div><a class="button" href="#cuts">Gerar novos cortes</a></div><div id="cut-library-jobs">${groups.length?groups.map(libraryJob).join(''):emptyLibrary}</div><div id="cut-library-pagination">${renderPagination(current.pagination,state.cutFolders?'cutFolders':'cuts',h.esc)}</div></section>`;
+  return `<section id="cuts-library" class="cuts-library"><div class="page-head"><div><h2>Cortes do aplicativo</h2><p>Assista, ajuste ou escolha onde publicar.</p></div></div><div id="cut-library-jobs">${groups.length?groups.map(libraryJob).join(''):emptyLibrary}</div><div id="cut-library-pagination">${renderPagination(current.pagination,state.cutFolders?'cutFolders':'cuts',h.esc)}</div></section>`;
 }
 export function updateCutLibrary(state,h){
   remember({...state,cuts:state.cutFolders||state.cuts},h);const root=document.querySelector('#cuts-library');if(!root)return;
@@ -134,10 +179,10 @@ export function bindCuts({api,refresh,toast}){
         await api('/cuts',{url:f.get('url'),count:Number(f.get('count')),targetSeconds:Number(f.get('targetSeconds')),language:f.get('language')});form.reset();resetPagination('cuts');await refresh(true);toast('Projeto na fila. Acompanhe a geração dos cortes abaixo.');
       }else if(session?.mode==='edit'){
         const body=session.editor.read();
-        await api(path(session.id),body,'PUT');if(editing===session&&dialog.open)dialog.close();await refresh(true);toast('Ajustes salvos. Aguarde a nova prévia antes de postar.');
+        const result=await api(path(session.id),{...body,versionId:session.versionId},'PUT');if(editing===session&&dialog.open)dialog.close();await refresh(true);toast(result.createdVersion?'Nova versão criada. Aguarde a prévia para revisar e postar.':'Ajustes salvos. Aguarde a nova prévia antes de postar.');
       }else if(session?.mode==='publish'){
         if(f.get('format')!==session.format)throw new Error('Gere e confira a prévia no formato escolhido antes de postar.');
-        await api(path(session.id)+'/publish',{format:session.format,channelId:f.get('channelId'),title:f.get('title'),description:f.get('description'),visibility:f.get('visibility'),madeForKids:f.has('madeForKids'),containsSyntheticMedia:f.has('containsSyntheticMedia'),confirm:f.has('confirm'),revision:session.revision,...(f.get('platform')==='tiktok'?{tiktok:readTiktokFields(form)}:{})});if(editing===session&&dialog.open)dialog.close();await refresh(true);toast('Envio autorizado e colocado na fila. Acompanhe a confirmação no histórico.');
+        await api(path(session.id)+'/publish',{format:session.format,channelId:f.get('channelId'),title:f.get('title'),description:f.get('description'),visibility:f.get('visibility'),madeForKids:f.has('madeForKids'),containsSyntheticMedia:f.has('containsSyntheticMedia'),confirm:f.has('confirm'),revision:session.revision,...(f.get('platform')==='tiktok'?{tiktok:readTiktokFields(form)}:{})});const follow=editing===session&&dialog.open&&f.get('platform')==='tiktok';if(editing===session&&dialog.open)dialog.close();if(follow)location.hash='#browser';await refresh(true);toast(f.get('platform')==='tiktok'?'Envio autorizado. Acompanhe o Playwright e a janela do Chrome.':'Envio autorizado e colocado na fila. Acompanhe a confirmação no histórico.');
       }
     }catch(error){if(session&&editing===session&&dialog.open)feedback(form,error.message);toast(error.message,true);}finally{if(session)session.pending=false;button.disabled=false;delete button.dataset.busy;if(form.id==='cuts-create-form')button.disabled=!current.dependencies?.ready;if(editing===session&&dialog.open)publishFormat();}
   });
@@ -146,20 +191,20 @@ export function bindCuts({api,refresh,toast}){
     button.disabled=true;
     try{
       if(action==='refresh')await refresh(true);
-      else if(action==='edit')openEditor(id);
+      else if(action==='edit'){const pending=editing?.mode==='preparing'&&editing.id===id?editing:{};await openEditor(id,pending.seek,pending.format);}
       else if(action==='publish'||action==='publish-tiktok')openPublish(id,action==='publish-tiktok'?'tiktok':button.dataset.platform||'youtube');
       else if(action==='edit-format'){
         if(editing?.mode!=='publish'||editing.pending)return;
         const format=document.querySelector('#cuts-dialog-form').elements.namedItem('format').value;
         if(!cutFormats.some(([value])=>value===format))throw new Error('Escolha um formato válido.');
-        openEditor(id,undefined,format);
+        await openEditor(id,undefined,format);
       }
       else if(action==='analyze-job'){await api('/cuts/jobs/'+encodeURIComponent(id)+'/analyze',{});await refresh(true);toast('Buscando picos de replay e gerando uma nova sugestão. Os cortes anteriores são preservados.');}
       else if(action==='inspect-replay'){
         const job=current.jobs.find(j=>j.id===id),clip=job?.clips?.find(c=>c.status==='review');
         if(!clip)throw new Error('Aguarde um corte disponível para abrir o editor.');
         const svg=event.target.closest('svg'),selected=event.detail&&svg?replayTimeAt(event.clientX,svg.getBoundingClientRect(),Number(job.duration)):undefined;
-        openEditor(clip.id,Number.isFinite(selected)?selected:undefined);
+        await openEditor(clip.id,Number.isFinite(selected)?selected:undefined);
       }
       else if(action==='close-dialog')dialog.close();
       else if(action==='discard'){
