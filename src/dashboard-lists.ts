@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import {z} from 'zod';
 import { pool } from './db.js';
 import { cursorFields, keysetClause, pageLimit, paginateRows, parsePagination, type PageOptions } from './pagination.js';
+import {cancelFolderSchedule,listFolderSchedule} from './folder-schedule.js';
 
 export async function listWatches(page:PageOptions){
   const values:unknown[]=[];
@@ -49,5 +51,14 @@ export async function dashboardStats(){
 
 export const dashboardRoutes=Router();
 dashboardRoutes.get('/api/watches',async(req,res)=>res.json(await listWatches(parsePagination(req.query,{scope:'watches'}))));
+dashboardRoutes.get('/api/watches/:id/schedule',async(req,res)=>{
+  const id=z.string().uuid().parse(req.params.id);
+  res.json(await listFolderSchedule(id,parsePagination(req.query,{scope:'agendamentos-'+id,defaultLimit:12})));
+});
+dashboardRoutes.post('/api/watches/:id/schedule/cancel',async(req,res)=>{
+  const id=z.string().uuid().parse(req.params.id);
+  z.object({confirm:z.literal(true)}).strict().parse(req.body);
+  res.json(await cancelFolderSchedule(id));
+});
 dashboardRoutes.get('/api/events',async(req,res)=>res.json(await listEvents(parsePagination(req.query,{scope:'events',idType:'bigint'}))));
 dashboardRoutes.get('/api/videos',async(req,res)=>res.json(await listVideos(parsePagination(req.query,{scope:'videos'}))));

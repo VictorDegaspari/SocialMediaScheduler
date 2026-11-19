@@ -111,6 +111,7 @@
     "code": [
       "src/pagination.ts",
       "src/dashboard-lists.ts",
+      "src/folder-schedule.ts",
       "public/pagination.js",
       "public/components/CollectionPagination.vue"
     ],
@@ -375,6 +376,7 @@
       "public/components/WorkspaceHeading.vue",
       "public/components/WatchCards.vue",
       "public/components/FoldersPage.vue",
+      "public/components/FolderSchedule.vue",
       "public/components/StatusBadge.vue",
       "public/components/RetryDetails.vue",
       "public/components/WorkspaceSelectOptions.vue",

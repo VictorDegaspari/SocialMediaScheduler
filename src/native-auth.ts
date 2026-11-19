@@ -22,13 +22,14 @@ export async function youtubeClient() {
   if(!config) throw new AppError('Configure o aplicativo OAuth do YouTube em Conexões.');
   return new OAuth2Client(config.clientId,config.clientSecret,`${appUrl}/auth/youtube/callback`);
 }
-export async function youtubeToken(expectedChannelId?:string) {
+export async function youtubeToken(expectedChannelId?:string,{edit=false}={}) {
   const saved=expectedChannelId?await connectedAccount('youtube',expectedChannelId):null;
   if(saved?.disabled)throw new AppError('Esta conta YouTube foi desconectada. Reconecte a mesma conta.',401);
   const stored:YoutubeTokens|null=saved?.tokens||await getSetting<YoutubeTokens>('youtubeTokens');
   const account:NativeAccount|null=saved?{id:saved.external_id,name:saved.name}:await getSetting<NativeAccount>('youtubeAccount');
   if(!stored?.refresh_token || !youtubeScopes.every(s=>stored.scope?.split(' ').includes(s))) throw new AppError('Autorize o YouTube com permissão de envio e leitura do canal.',401);
   if(!account || stored.channelId!==account.id || (expectedChannelId && stored.channelId!==expectedChannelId))throw new AppError('O token YouTube não pertence ao canal desta entrega. Reconecte a mesma conta.',401);
+  if(edit&&!youtubeEditAuthorized(stored.scope))throw new AppError('Autorize a edição de vídeos neste canal para cancelar o agendamento.',403);
   const client=saved?new OAuth2Client(saved.config.clientId,saved.config.clientSecret,`${appUrl}/auth/youtube/callback`):await youtubeClient();client.setCredentials(stored);
   try {
     const {token}=await client.getAccessToken();

@@ -37,11 +37,11 @@ export function cursorFields(timeColumn:string,idColumn:string):string{
   return `to_char(${timeColumn} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS __cursor_time,${idColumn}::text AS __cursor_id`;
 }
 
-export function keysetClause(page:PageOptions,timeColumn:string,idColumn:string,values:unknown[],idType:'uuid'|'bigint'='uuid'):string{
+export function keysetClause(page:PageOptions,timeColumn:string,idColumn:string,values:unknown[],idType:'uuid'|'bigint'='uuid',order:'asc'|'desc'='desc'):string{
   cursorFields(timeColumn,idColumn);
   if(!page.cursor)return '';
   values.push(page.cursor.time,page.cursor.id);
-  return ` AND (${timeColumn},${idColumn})<($${values.length-1}::timestamptz,$${values.length}::${idType})`;
+  return ` AND (${timeColumn},${idColumn})${order==='asc'?'>':'<'}($${values.length-1}::timestamptz,$${values.length}::${idType})`;
 }
 
 export function pageLimit(page:PageOptions,values:unknown[]):string{

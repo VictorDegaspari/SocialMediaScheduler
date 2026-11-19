@@ -72,15 +72,51 @@ export async function uploadYoutube(path:string,meta:Metadata,session:UploadSess
   }
   throw new AppError('O upload terminou sem confirmação do vídeo. Confira o canal antes de repetir.',409,true);
 }
-export async function youtubeStatus(id:string,channelId?:string) {
+export async function youtubePublicationState(id:string,channelId?:string) {
   const token=await youtubeToken(channelId);
   const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=snippet,status,processingDetails&id='+encodeURIComponent(id),{headers:{Authorization:`Bearer ${token}`}},'YouTube');
   const result=await response.json();const item=result.items?.find((v:any)=>v.id===id && (!channelId || v.snippet?.channelId===channelId));
   if(!item)return null;
-  if(['failed','rejected','deleted'].includes(item.status?.uploadStatus) || item.processingDetails?.processingStatus==='failed')return 'failed';
-  if(item.status?.privacyStatus==='private'&&item.status?.publishAt&&Date.parse(item.status.publishAt)>Date.now())return 'scheduled';
-  if(item.status?.uploadStatus!=='processed')return 'processing';
-  return item.status?.privacyStatus==='public'?'published':item.status?.privacyStatus==='unlisted'?'unlisted':'private';
+  if(['failed','rejected','deleted'].includes(item.status?.uploadStatus) || item.processingDetails?.processingStatus==='failed')return {status:'failed'};
+  const publishAt=Date.parse(item.status?.publishAt);
+  if(item.status?.privacyStatus==='private'&&Number.isFinite(publishAt))
+    return publishAt>Date.now()?{status:'scheduled',plannedAt:new Date(publishAt)}:{status:'processing'};
+  if(item.status?.uploadStatus!=='processed')return {status:'processing'};
+  return {status:item.status?.privacyStatus==='public'?'published':item.status?.privacyStatus==='unlisted'?'unlisted':'private'};
+}
+export async function youtubeStatus(id:string,channelId?:string) {
+  return (await youtubePublicationState(id,channelId))?.status??null;
+}
+async function ownedYoutubeVideo(id:string,channelId:string,headers:{Authorization:string}) {
+  const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id='+encodeURIComponent(id),{headers},'YouTube');
+  const data=await response.json(),video=data.items?.find((item:any)=>item.id===id&&item.snippet?.channelId===channelId);
+  if(!video)throw new AppError('O vídeo não pertence ao canal conectado ou não está disponível.',404);
+  return video;
+}
+const writableYoutubeStatus=['license','embeddable','publicStatsViewable','selfDeclaredMadeForKids','containsSyntheticMedia'];
+export async function cancelYoutubeSchedule(id:string,channelId:string,plannedAt:Date) {
+  const headers={Authorization:`Bearer ${await youtubeToken(channelId,{edit:true})}`};
+  const before=await ownedYoutubeVideo(id,channelId,headers);
+  if(before.status?.privacyStatus!=='private'||['failed','rejected','deleted'].includes(before.status?.uploadStatus))
+    throw new AppError('A publicação mudou no YouTube. Confira o vídeo no Studio antes de continuar.',409);
+  if(!before.status.publishAt)return;
+  const confirmedAt=Date.parse(before.status.publishAt);
+  if(confirmedAt!==plannedAt.getTime()||confirmedAt<=Date.now())throw new AppError('O horário mudou ou já chegou. Confira o agendamento no YouTube Studio.',409);
+  const tag=typeof before.etag==='string'?before.etag:'';
+  const etag=/^"[^"\r\n]+"$/.test(tag)?tag:/^[\w-]+$/.test(tag)?`"${tag}"`:null;
+  if(!etag)throw new AppError('O YouTube não informou a versão atual do agendamento. Confira no Studio ou tente novamente.',503);
+  const status:Record<string,unknown>={privacyStatus:'private'};
+  for(const field of writableYoutubeStatus)if(before.status[field]!==undefined)status[field]=before.status[field];
+  // The status update clears the omitted publishAt while preserving the uploaded video.
+  try{
+    const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=status',{method:'PUT',headers:{...headers,'Content-Type':'application/json','If-Match':etag},body:JSON.stringify({id,status})},'YouTube');
+    await response.body?.cancel();
+  }catch(error){
+    if(error instanceof AppError&&error.status===412)throw new AppError('O vídeo foi alterado no YouTube. Atualize os agendamentos antes de tentar novamente.',409);
+    throw error;
+  }
+  const after=await ownedYoutubeVideo(id,channelId,headers);
+  if(after.status?.privacyStatus!=='private'||after.status.publishAt)throw new AppError('O YouTube ainda não confirmou o cancelamento. Confira no Studio ou tente novamente.',503);
 }
 export function youtubeTitleBody(video:any,title:string) {
   if(!title.trim()||title.trim().length>100||!video.id||!video.snippet?.categoryId)throw new AppError('Título ou metadados do vídeo inválidos.');
@@ -90,12 +126,7 @@ export function youtubeTitleBody(video:any,title:string) {
 }
 export async function updateYoutubeTitle(id:string,title:string,channelId:string) {
   const token=await youtubeToken(channelId),headers={Authorization:`Bearer ${token}`};
-  const read=async()=>{
-    const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id='+encodeURIComponent(id),{headers},'YouTube');
-    const data=await response.json(),video=data.items?.find((v:any)=>v.id===id&&v.snippet?.channelId===channelId);
-    if(!video)throw new AppError('O vídeo não pertence ao canal conectado ou não está disponível.',404);
-    return video;
-  };
+  const read=()=>ownedYoutubeVideo(id,channelId,headers);
   const before=await read();
   if(before.snippet.title!==title) {
     const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=snippet',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(youtubeTitleBody(before,title))},'YouTube');
@@ -115,12 +146,7 @@ export function youtubeDisclosureBody(video:any,containsSyntheticMedia:boolean,n
 }
 export async function updateYoutubeDisclosure(id:string,containsSyntheticMedia:boolean,channelId:string) {
   const token=await youtubeToken(channelId),headers={Authorization:`Bearer ${token}`};
-  const read=async()=>{
-    const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id='+encodeURIComponent(id),{headers},'YouTube');
-    const data=await response.json(),video=data.items?.find((v:any)=>v.id===id&&v.snippet?.channelId===channelId);
-    if(!video)throw new AppError('O vídeo não pertence ao canal conectado ou não está disponível.',404);
-    return video;
-  };
+  const read=()=>ownedYoutubeVideo(id,channelId,headers);
   const before=await read(),body=youtubeDisclosureBody(before,containsSyntheticMedia);
   const response=await providerFetch('https://www.googleapis.com/youtube/v3/videos?part=status',{method:'PUT',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)},'YouTube');
   await response.body?.cancel();

@@ -28,7 +28,8 @@ const {updateYoutubeDisclosure}=await import('../src/native-api.js');
 const {browserBridge,browserRoutes}=await import('../src/browser-bridge.js');
 const {saveConnectedAccount,disconnectAccount}=await import('../src/connected-accounts.js');
 const {nativeRoutes}=await import('../src/native-routes.js');
-const {youtubeScopes,tiktokScopes,youtubeToken,tiktokToken,nativeChannels,nativeConnectionState}=await import('../src/native-auth.js');
+const {dashboardRoutes}=await import('../src/dashboard-lists.js');
+const {youtubeScopes,youtubeEditScope,tiktokScopes,youtubeToken,tiktokToken,nativeChannels,nativeConnectionState}=await import('../src/native-auth.js');
 const {decrypt,encrypt,AppError}=await import('../src/config.js');
 const {cleanupPublishedMedia}=await import('../src/media-cleanup.js');
 await initDb();
@@ -42,6 +43,7 @@ let authExchanges=0,authParams:URLSearchParams|undefined;
 let uploadGate:Promise<void>|undefined;
 let titleUpdates=0,remoteTitle='Título anterior';
 let disclosureUpdates=0,remoteSynthetic=true;
+let remoteCancelled=false;
 globalThis.fetch=async(input,options)=>{
   const url=new URL(String(input));
   if(['localhost','127.0.0.1'].includes(url.hostname))return originalFetch(input,options);
@@ -65,6 +67,19 @@ globalThis.fetch=async(input,options)=>{
       return Response.json({id:'youtube-native-123'},{status:201});
     }
     if(url.pathname==='/youtube/v3/videos'){
+      if(scenario==='batch-cancel'){
+        if(options?.method==='PUT'){
+          const body=JSON.parse(String(options.body));
+          assert.equal(new Headers(options.headers).get('if-match'),'"versao-1"');
+          assert.deepEqual(body,{id:'youtube-native-123',status:{privacyStatus:'private',license:'youtube',embeddable:false,selfDeclaredMadeForKids:false,containsSyntheticMedia:true}});
+          remoteCancelled=true;
+          return Response.json(body);
+        }
+        const id=url.searchParams.get('id');
+        return Response.json({items:[{id,etag:'versao-1',snippet:{channelId:'youtube-channel'},status:{uploadStatus:'processed',
+          privacyStatus:id==='already-published'?'public':'private',publishAt:remoteCancelled?undefined:sentBody.status.publishAt,
+          license:'youtube',embeddable:false,selfDeclaredMadeForKids:false,containsSyntheticMedia:true}}]});
+      }
       if(options?.method==='PUT'){
         if(url.searchParams.get('part')==='status'){
           const body=JSON.parse(String(options.body));assert.equal('snippet' in body,false);assert.equal(body.status.privacyStatus,'private');assert.equal(body.status.publishAt,sentBody.status.publishAt);assert.equal(body.status.selfDeclaredMadeForKids,false);
@@ -86,7 +101,7 @@ globalThis.fetch=async(input,options)=>{
   if(url.hostname==='upload.us.tiktokapis.com') {ttBinary++;const range=new Headers(options?.headers).get('content-range')!;ttRanges.push(range);const limits=range.match(/^bytes (\d+)-(\d+)\/(\d+)$/)!;assert.equal((options!.body as Buffer).length,Number(limits[2])-Number(limits[1])+1);ttFinished=Number(limits[2])+1===Number(limits[3]);if(scenario==='lost-tt')throw new TypeError('Lost response');return new Response(null,{status:ttFinished?201:206});}
   throw new Error('Unexpected request to '+url.hostname);
 };
-app.use(nativeRoutes);app.use(requestRoutes);app.use(browserRoutes);app.use((error:any,_req:any,res:any,_next:any)=>res.status(error instanceof AppError?error.status:400).json({error:error.message}));
+app.use(nativeRoutes);app.use(requestRoutes);app.use(browserRoutes);app.use(dashboardRoutes);app.use((error:any,_req:any,res:any,_next:any)=>res.status(error instanceof AppError?error.status:400).json({error:error.message}));
 async function post(path:string,body:unknown){return originalFetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
 beforeEach(async()=>{
   await pool.query('TRUNCATE browser_commands,browser_agent,browser_settings,connected_accounts,content_claims,deliveries,videos,events,watches,settings,oauth_states CASCADE');
@@ -95,6 +110,7 @@ beforeEach(async()=>{
   authExchanges=0;authParams=undefined;
   titleUpdates=0;remoteTitle='Título anterior';
   disclosureUpdates=0;remoteSynthetic=true;
+  remoteCancelled=false;
   await setSetting('publisherEngine','local');
   await setSetting('playwrightMcpExtension',{extensionToken:'test-extension-token'});
   await setSetting('youtubeConfig',{clientId:'fake-client.apps.googleusercontent.com',clientSecret:'fake-secret',autoPublishApproved:true});
@@ -116,6 +132,48 @@ async function prepare(mode='schedule',channels=['native:youtube:youtube-channel
   const {rows:deliveries}=await pool.query('SELECT * FROM deliveries WHERE video_id IN(SELECT id FROM videos WHERE watch_id=$1) ORDER BY provider',[id]);
   return {worker,watch,deliveries};
 }
+test('folder schedule lists dated reservations and safely cancels local and confirmed future sends',async()=>{
+  await setSetting('youtubeTokens',{channelId:'youtube-channel',access_token:'fake-access',refresh_token:'fake-refresh',expiry_date:Date.now()+3600_000,scope:[...youtubeScopes,youtubeEditScope].join(' ')});
+  const {worker,watch,deliveries:[remote]}=await prepare('native_schedule');
+  await worker.native.process(remote.id);
+  await worker.native.reconcile();
+  assert(sentBody.status.publishAt);
+  const future=new Date(Date.parse(sentBody.status.publishAt)+60_000);
+  async function entry(folder:string,name:string,status:string,postId:string|null,plannedAt:Date){
+    const video=randomUUID(),delivery=randomUUID();
+    await pool.query("INSERT INTO videos(id,watch_id,file_id,name,parent_id,status) VALUES($1,$2,$1::uuid::text,$3,$2::uuid::text,'sent')",[video,folder,name]);
+    await pool.query(`INSERT INTO deliveries(id,video_id,integration_id,provider,engine,status,planned_at,post_id,payload)
+      VALUES($1,$2,'native:youtube:youtube-channel','youtube','local',$3,$4,$5,'{"nativeSchedule":true,"channelName":"Canal de teste"}')`,[delivery,video,status,plannedAt,postId]);
+    return delivery;
+  }
+  const pending=await entry(watch.id,'Vídeo reservado','pending',null,future);
+  const published=await entry(watch.id,'Vídeo já publicado','scheduled','already-published',future);
+  const other=await prepare('native_schedule');
+  const separate=await entry(other.watch.id,'Outra pasta','pending',null,future);
+  const path='/api/watches/'+watch.id+'/schedule';
+  const first=await (await originalFetch(base+path+'?limit=1')).json();
+  assert.equal(first.cancellable,3);assert.equal(first.items[0].id,remote.id);
+  assert.equal(first.items[0].plannedAt,sentBody.status.publishAt);
+  const following=await (await originalFetch(base+path+'?cursor='+first.pagination.nextCursor)).json();
+  assert.deepEqual(new Set(following.items.map((item:any)=>item.id)),new Set([pending,published]));
+  assert.equal((await post(path+'/cancel',{confirm:false})).status,400);
+  scenario='batch-cancel';
+  const response=await post(path+'/cancel',{confirm:true});
+  assert.equal(response.status,200,await response.clone().text());
+  const result=await response.json();
+  assert.equal(result.cancelled,2);
+  assert.match(result.issues[0].title,/já publicado/);
+  assert(remoteCancelled);
+  const {rows}=await pool.query('SELECT id,status,post_id FROM deliveries WHERE id=ANY($1::uuid[])',[ [remote.id,pending,published,separate] ]);
+  const statuses=Object.fromEntries(rows.map(row=>[row.id,row.status]));
+  assert.deepEqual(statuses,{[remote.id]:'cancelled',[pending]:'cancelled',[published]:'scheduled',[separate]:'pending'});
+  assert.equal(rows.find(row=>row.id===remote.id).post_id,'youtube-native-123');
+  await setSetting('youtubeTokens',{channelId:'youtube-channel',access_token:'fake-access',refresh_token:'fake-refresh',expiry_date:Date.now()+3600_000,scope:youtubeScopes.join(' ')});
+  const blocked=await (await post(path+'/cancel',{confirm:true})).json();
+  assert.equal(blocked.cancelled,0);
+  assert.equal(blocked.issues[0].authorizeChannel,'youtube-channel');
+  assert.equal((await pool.query('SELECT status FROM deliveries WHERE id=$1',[published])).rows[0].status,'scheduled');
+});
 async function requestFixture(quantity=2,platforms=['youtube'],policy:Record<string,unknown>={maxScheduled:1,uploadsPer24h:100,postsPerDay:10}) {
   const path=join(process.env.LOCAL_MEDIA_DIR!,randomUUID());await mkdir(path);
   for(let n=0;n<3;n++)await writeFile(join(path,'video-'+n+'.mp4'),Buffer.concat([bytes,Buffer.from('request-'+path+'-'+n)]));

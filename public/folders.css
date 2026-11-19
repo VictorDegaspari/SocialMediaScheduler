@@ -69,3 +69,11 @@
 
 .my-folders #cut-library-jobs>.cuts-empty{grid-column:1/-1}
 .folder-details code{font-size:var(--text-xs);overflow-wrap:anywhere;white-space:normal}
+.folder-schedule-tools{display:flex;gap:var(--space-8);flex-wrap:wrap;align-items:center;margin:var(--space-12) 0}
+.folder-schedule-tools p{margin-inline-end:auto;color:var(--muted);font-size:var(--text-sm)}
+.folder-schedule-list{display:grid;gap:var(--space-8);padding:0;margin:var(--space-12) 0;list-style:none}
+.folder-schedule-list li{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:var(--space-8) var(--space-16);padding:var(--space-12);background:#f7faf4;border:1px solid var(--border);border-radius:var(--radius-md)}
+.folder-schedule-info{display:grid;gap:var(--space-4);min-width:0;overflow-wrap:anywhere}
+.folder-schedule-info span{color:var(--muted);font-size:var(--text-sm)}
+.folder-schedule-list time{font-weight:650;font-size:var(--text-sm);font-variant-numeric:tabular-nums}
+.folder-schedule-result{margin-block:var(--space-12)}

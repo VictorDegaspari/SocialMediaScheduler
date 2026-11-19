@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { availableParallelism } from 'node:os';
 import { AppError, dataDir } from './config.js';
 import {MAX_CUT_SOURCE_SECONDS as MAX_SOURCE_SECONDS, type CutSourceRange} from './cuts-source-limits.js';
 import {cutSourceRangeSchema} from './cuts-source-range.js';
@@ -16,6 +17,10 @@ export type SourceInfo = { title:string; duration:number; replay?:ReplayData };
 const MAX_SOURCE_BYTES=2*1024*1024*1024;
 const python=()=>process.env.CUTS_PYTHON || 'python3';
 const transcriptionScript=resolve('scripts/transcribe-cuts.py');
+export const cutParallelism=Number(process.env.CUTS_PARALLELISM)===1?1:
+  Number(process.env.CUTS_PARALLELISM)===2||availableParallelism()>=4?2:1;
+const automaticThreads=Math.min(4,Math.floor(availableParallelism()/cutParallelism));
+const renderThreads=Math.min(8,Math.max(1,Math.floor(Number(process.env.CUTS_RENDER_THREADS)||automaticThreads)));
 
 // Run without a shell; terminate the process group, including FFmpeg children,
 // when downloads, transcription or renders exceed their resource budget.
@@ -349,7 +354,7 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
     const layers=await cutOverlayFilters(dir,clipId,cutOverlaysSchema.parse(input.overlays||[]),output,duration,parts.length);
     overlayFiles=layers.temporary;args.push(...layers.args);graph.push(...layers.graph);
     graph.push(`[${layers.label}]${style.enabled?`ass=${assName}`:'null'}[outv]`);
-    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset','slow','-crf','16','-pix_fmt','yuv420p','-r',rate,'-threads','2','-c:a','aac','-b:a','320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
+    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset','slow','-crf','16','-pix_fmt','yuv420p','-r',rate,'-threads',String(renderThreads),'-c:a','aac','-b:a','320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
     await command('ffmpeg',args,{cwd:dir,timeout:60*60_000});
     const actual=await validateVideo(join(dir,partialName),framing.format);
     if(Math.abs(actual.duration-duration)>0.5)throw new AppError('A duração renderizada não corresponde aos trechos mantidos. Confira os tempos do corte.');

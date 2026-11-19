@@ -10,7 +10,7 @@ import { AppError, dataDir, errorMessage, logger } from './config.js';
 import { pool } from './db.js';
 import { publisherEngine } from './native-auth.js';
 import { cutDestinations,cutPublishSchema,publishCut } from './cut-publications.js';
-import { cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue } from './cuts-media.js';
+import { cutParallelism, cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue } from './cuts-media.js';
 import type {CutSourceRange} from './cuts-source-limits.js';
 import {cutSourceRangeSchema, suggestSourceRanges} from './cuts-source-range.js';
 import { sweepCutUploadFiles } from './cuts-upload-files.js';
@@ -26,6 +26,9 @@ const terminal=['posted','discarded'];
 const root=()=>join(dataDir,'cuts');
 export const cutDirectory=(id:string)=>join(root(),uuid.parse(id));
 const lockKey=(id:string)=>'drive-watcher:cuts:'+id;
+const workerSlots=Array.from({length:cutParallelism},(_,index)=>index);
+const claimSlot=async(db:PoolClient,slot:number)=>(await db.query('SELECT pg_try_advisory_lock(74839129,$1::int) AS ok',[slot])).rows[0].ok;
+const releaseSlot=(db:PoolClient,slot:number)=>db.query('SELECT pg_advisory_unlock(74839129,$1::int)',[slot]);
 
 /** Reduce all accepted URLs to a single video; never pass arbitrary hosts to yt-dlp. */
 export function youtubeVideoUrl(value:string):string {
@@ -133,7 +136,9 @@ async function removeCutFiles(jobId:string,clipId:string) {
 }
 
 export class CutsService {
-  private busy:Promise<void>|undefined;
+  private workers=new Map<number,Promise<void>>();
+  private maintenance:Promise<void>|undefined;
+  private stopping=false;
   private timer:ReturnType<typeof setInterval>|undefined;
   private dependencyCache:{at:number;value:Awaited<ReturnType<typeof cutsDependencies>>}|undefined;
   constructor(private media:CutsMedia={download:downloadCutSource,transcribe:transcribeCutSource,select:selectHighlights,render:renderCut,dependencies:cutsDependencies,replay:fetchCutHeatmap}) {}
@@ -172,16 +177,30 @@ export class CutsService {
     };
   }
   start() {
+    this.stopping=false;
     const wake=()=>{void this.tick().catch(()=>logger.error({event:'cuts_tick_failed'},'O gerador de cortes será reavaliado no próximo ciclo.'));};
     this.timer=setInterval(wake,3000);this.timer.unref();wake();
   }
-  async stop() {if(this.timer)clearInterval(this.timer);await this.busy;}
-  async tick() {
-    if(this.busy)return;
-    this.busy=this.run();
-    try {await this.busy;} finally {this.busy=undefined;}
+  async stop() {
+    this.stopping=true;
+    if(this.timer)clearInterval(this.timer);
+    await Promise.allSettled([...this.workers.values(),this.maintenance]);
   }
-  private async run() {
+  async tick() {
+    if(this.stopping)return;
+    const work:Promise<void>[]=[];
+    if(!this.maintenance&&!this.workers.size){
+      this.maintenance=this.maintain().finally(()=>{this.maintenance=undefined;});
+      work.push(this.maintenance);
+    }
+    for(const slot of workerSlots){
+      if(this.workers.has(slot))continue;
+      const task=(this.maintenance??Promise.resolve()).then(()=>this.run(slot)).finally(()=>{this.workers.delete(slot);});
+      this.workers.set(slot,task);work.push(task);
+    }
+    for(const result of await Promise.allSettled(work))if(result.status==='rejected')throw result.reason;
+  }
+  private async maintain() {
     const lock=await pool.connect();
     let acquired=false;
     try {
@@ -189,24 +208,34 @@ export class CutsService {
       if(!acquired)return;
       await sweepCutUploadFiles();
       await this.retirePublished();
-      const {rows:[job]}=await pool.query<Job>('SELECT * FROM cut_jobs WHERE status=ANY($1::text[]) ORDER BY created_at LIMIT 1',[stages]);
-      if(!job)return;
-      const key=lockKey(job.id);
-      const {rows:[claimed]}=await lock.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok',[key]);
-      if(!claimed.ok)return;
-      try {
-        // An API request may have discarded the queued job between selection
-        // and lock acquisition. Re-read under the lock before touching files.
-        const {rows:[current]}=await pool.query<Job>('SELECT * FROM cut_jobs WHERE id=$1',[job.id]);
-        if(current&&stages.includes(current.status))await this.generate(current);
-      } finally {await lock.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);}
     } finally {
-      if(acquired)await lock.query('SELECT pg_advisory_unlock(74839129)');
-      lock.release();
+      try{if(acquired)await lock.query('SELECT pg_advisory_unlock(74839129)');}finally{lock.release();}
+    }
+  }
+  private async run(slot:number) {
+    const lock=await pool.connect();
+    let acquired=false;
+    try {
+      const {rows}=await lock.query<{id:string}>('SELECT id FROM cut_jobs WHERE status=ANY($1::text[]) ORDER BY created_at,id',[stages]);
+      for(const job of rows){
+        const key=lockKey(job.id);
+        const {rows:[claimed]}=await lock.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok',[key]);
+        if(!claimed.ok)continue;
+        try {
+          const {rows:[current]}=await lock.query<Job>('SELECT * FROM cut_jobs WHERE id=$1',[job.id]);
+          if(!current||!stages.includes(current.status))continue;
+          acquired=await claimSlot(lock,slot);
+          if(!acquired)return;
+          await this.generate(current,lock,slot);
+          return;
+        } finally {await lock.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);}
+      }
+    } finally {
+      try{if(acquired)await releaseSlot(lock,slot);}finally{lock.release();}
     }
   }
   private async stage(id:string,status:string) {await pool.query('UPDATE cut_jobs SET status=$2,error=NULL,updated_at=now() WHERE id=$1',[id,status]);}
-  private async generate(job:Job) {
+  private async generate(job:Job,lock:PoolClient,slot:number) {
     const dir=cutDirectory(job.id);
     try {
       await mkdir(dir,{recursive:true});
@@ -252,11 +281,21 @@ export class CutsService {
         clips=(await pool.query<Clip>('SELECT * FROM cuts WHERE job_id=$1 ORDER BY created_at,id',[job.id])).rows;
       }
       await this.stage(job.id,'rendering');
-      for(const clip of clips.filter(c=>['queued','rendering'].includes(c.status))) {
+      const render=async(clip:Clip)=>{
         await pool.query("UPDATE cuts SET status='rendering',error=NULL,updated_at=now() WHERE id=$1",[clip.id]);
         const result=await this.media.render(dir,clip.id,{start:clip.start_seconds,end:clip.end_seconds,captions:clip.captions,framing:clip.framing,
           captionStyle:captionStyleSchema.parse(clip.caption_style||{}),framingOptions:framingOptionsSchema.parse({...clip.framing_options,mode:clip.framing_options?.mode||clip.framing}),excludedRanges:clip.excluded_ranges||[],overlays:cutOverlaysSchema.parse(clip.overlays||[])});
         await pool.query("UPDATE cuts SET status='review',local_file=$2,render_warnings=$3,error=NULL,updated_at=now() WHERE id=$1",[clip.id,clip.id+'.mp4',JSON.stringify(result.warnings||[])]);
+      };
+      const queued=clips.filter(c=>['queued','rendering'].includes(c.status)),otherSlot=workerSlots.find(value=>value!==slot);
+      for(let index=0;index<queued.length;index++){
+        const spare=otherSlot!==undefined&&queued.length>index+1&&await claimSlot(lock,otherSlot);
+        try{
+          const renders=[render(queued[index])];
+          if(spare)renders.push(render(queued[++index]));
+          // Keep the project lock until both writes finish, including on partial failure.
+          for(const result of await Promise.allSettled(renders))if(result.status==='rejected')throw result.reason;
+        }finally{if(spare)await releaseSlot(lock,otherSlot!);}
       }
       await this.stage(job.id,'review');
     } catch(error) {

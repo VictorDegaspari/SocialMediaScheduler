@@ -49,7 +49,7 @@ defineProps(['state', 'icon', 'date', 'safeUrl', 'statusLabels', 'pagination']);
                       </template>
                       <DeliveryActions :d="d" :date="date" />
                       <template v-if="d.plannedAt">
-                        <small>Publicação: {{ date(d.plannedAt,true) }}</small>
+                        <small>{{ d.status==='cancelled'?'Horário cancelado':d.status==='scheduled'?'Publicação agendada':'Horário registrado' }} · {{ date(d.plannedAt,true) }}</small>
                       </template>
                       <template v-if="d.url">
                         <a :href="safeUrl(d.url)" target="_blank" rel="noreferrer" aria-label="Abrir publicação">

@@ -77,6 +77,8 @@ Recrie o serviço após atualizar o código:
 
 Na primeira transcrição, o modelo de fala é baixado para `DATA_DIR/speech-models`, no volume persistente. A conexão com a internet é necessária nesse primeiro uso; nas execuções seguintes o modelo é reutilizado. O padrão é o modelo multilíngue `small`, em CPU int8. O processamento de vídeos longos pode levar bastante tempo em computadores com poucos recursos. A aplicação mantém a tarefa no banco e processa fora da requisição HTTP.
 
+Em máquinas com pelo menos quatro CPUs disponíveis, a fila pode trabalhar em dois projetos ao mesmo tempo. Um projeto com vários cortes também usa uma vaga livre para renderizar dois cortes. `CUTS_PARALLELISM=1` limita a execução a uma vaga. `CUTS_RENDER_THREADS` ajusta as threads do encoder por corte. A resolução, a taxa de quadros, o preset e o CRF da exportação são preservados.
+
 Para desenvolvimento fora do Docker:
 
 ```bash

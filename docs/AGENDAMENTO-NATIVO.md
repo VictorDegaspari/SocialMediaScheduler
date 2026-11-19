@@ -39,4 +39,6 @@ Se o TikTok informar limite de uploads/agendamentos, o lote é pausado e novos u
 
 Reservas e limites persistem em PostgreSQL. Locks impedem que dois ciclos reservem a mesma capacidade simultaneamente. Antes de iniciar um upload, o sistema verifica novamente o período permitido e o orçamento. Alterar uma configuração cancela comandos TikTok ainda não iniciados; reduzir limites do YouTube pode exigir cancelar reservas excedentes no histórico.
 
-**Pausar ou editar uma rotina afeta novos envios. Agendamentos já confirmados continuam na plataforma** e precisam ser alterados/cancelados no Studio correspondente. Publicação efetiva depende do processamento e das regras da plataforma; uma data passada não comprova publicação do TikTok.
+Em **Minhas pastas → Agendamentos por vídeo**, a lista mostra a data, a hora de Brasília, o destino e o estado de cada envio. **Cancelar agendamentos da pasta** libera as reservas locais que ainda podem ser retiradas e remove os próximos agendamentos nativos do YouTube. Vídeos já enviados ficam privados no canal. A conta precisa da permissão de editar vídeos para cancelar no YouTube. Resultados que exigem conferência aparecem por vídeo.
+
+Pausar ou editar uma rotina afeta novos envios. Agendamentos em outros motores podem ser gerenciados pelo serviço correspondente. Uma data passada não comprova publicação do TikTok.

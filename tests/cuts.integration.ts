@@ -11,6 +11,7 @@ import type {CutSourceRange} from '../src/cuts-source-limits.js';
 const dbUrl=new URL(process.env.DATABASE_URL!);dbUrl.pathname='/watcher_cuts_test';process.env.DATABASE_URL=dbUrl.toString();
 const redisUrl=new URL(process.env.REDIS_URL!);redisUrl.pathname='/12';process.env.REDIS_URL=redisUrl.toString();
 const temp=await mkdtemp(join(tmpdir(),'watcher-cuts-'));
+process.env.CUTS_PARALLELISM='2';
 process.env.DATA_DIR=join(temp,'spool');await mkdir(process.env.DATA_DIR);
 const fixture=join(temp,'short.mp4');
 execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=green:s=64x96:d=1','-f','lavfi','-i','sine=frequency=400:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',fixture]);
@@ -61,6 +62,47 @@ beforeEach(async()=>{
   },{clientId:'test-client',clientSecret:'test-secret',autoPublishApproved:false});
 });
 after(async()=>{globalThis.fetch=originalFetch;await service.stop();await new Promise<void>(r=>server.close(()=>r()));await redis.quit();await pool.end();await rm(temp,{recursive:true,force:true});});
+
+test('supports parallel projects with independent claims and two renders from a single project',async()=>{
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const started:string[]=[];
+  const parallel=new CutsService({...media,download:async(url,dir,range)=>{
+    started.push(dir);
+    await gate;
+    return media.download(url,dir,range);
+  }});
+  const waitFor=async(check:()=>boolean)=>{
+    const until=Date.now()+5000;
+    while(!check()&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,20));
+    assert(check(),'expected concurrent work to start');
+  };
+  await create();
+  const first=parallel.tick();
+  let second:Promise<void>|undefined;
+  try{
+    await waitFor(()=>started.length===1);
+    await create();
+    second=parallel.tick();
+    await waitFor(()=>started.length===2);
+    await new CutsService(media).tick();
+    assert.equal(new Set(started).size,2);
+    assert.equal(downloads,0,'another instance cannot take either active project');
+  }finally{release();await Promise.all([first,second]);await parallel.stop();}
+  assert.equal((await state()).jobs.filter(job=>job.status==='review').length,2);
+
+  await create(2);
+  let releaseRenders!:()=>void;
+  const renderGate=new Promise<void>(resolve=>{releaseRenders=resolve;});
+  const running:string[]=[];
+  const renderer=new CutsService({...media,render:async(dir,id,input)=>{
+    running.push(id);await renderGate;return media.render(dir,id,input);
+  }});
+  const work=renderer.tick();
+  try{await waitFor(()=>running.length===2);assert.equal(new Set(running).size,2);}
+  finally{releaseRenders();await work;await renderer.stop();}
+  assert.equal((await state()).jobs.find(job=>job.clips.length===2)?.status,'review');
+});
 
 test('URLs são normalizadas e hosts externos, credenciais e playlists são recusados',()=>{
   assert.equal(youtubeVideoUrl('https://youtu.be/abcdefghijk?t=20'),'https://www.youtube.com/watch?v=abcdefghijk');

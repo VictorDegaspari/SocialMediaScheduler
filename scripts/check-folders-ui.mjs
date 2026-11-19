@@ -17,14 +17,24 @@ await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
 const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(10_000);await page.emulateMedia({reducedMotion:'reduce'});
 const errors=[],mutations=[];page.on('pageerror',error=>errors.push(error.message));
+const scheduledPath='/api/watches/'+watches[0].id+'/schedule';
+const confirmed={id:'agendado',title:'Vídeo confirmado',provider:'youtube',engine:'local',status:'scheduled',channel:'Canal principal',plannedAt:'2027-01-02T15:30:00.000Z',cancellable:true};
+const reserved={...confirmed,id:'reserva',title:'Vídeo reservado',status:'pending',plannedAt:'2027-01-03T18:00:00.000Z'};
+let schedulesCancelled=false;
 await page.addInitScript(()=>{const interval=window.setInterval.bind(window);window.setInterval=(callback,ms,...args)=>{if(ms===5000){window.__foldersPoll=callback;return 0;}return interval(callback,ms,...args);};});
 await page.route('**/api/**',async route=>{
   const request=route.request(),path=new URL(request.url()).pathname;
   if(path==='/api/state')return route.fulfill({json:fixture});
   if(path==='/api/integrations')return route.fulfill({json:channels});
+  if(path===scheduledPath){
+    const next=new URL(request.url()).searchParams.has('cursor');
+    return route.fulfill({json:{items:schedulesCancelled?[]:next?[reserved]:[confirmed],cancellable:schedulesCancelled?0:2,
+      pagination:{nextCursor:schedulesCancelled||next?null:'next-schedule'}}});
+  }
   if(path.endsWith('/media')||path.endsWith('/source'))return route.fulfill({body:media,contentType:'video/mp4'});
   assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');mutations.push({path,body:request.postDataJSON()});
   if(path==='/api/watches/'+watches[0].id+'/toggle'){watches[0].enabled=!watches[0].enabled;return route.fulfill({json:{ok:true}});}
+  if(path===scheduledPath+'/cancel'){schedulesCancelled=true;return route.fulfill({json:{cancelled:2,issues:[]}});}
   if(path==='/api/watches'){
     const {body}=mutations.at(-1);
     watches.push({...watches[0],id:packId,name:body.name,source_type:body.sourceType,pack_defaults:body.packDefaults});
@@ -55,9 +65,25 @@ try{
   await page.getByRole('heading',{name:'Minhas pastas',exact:true}).click();await page.evaluate(async()=>{await window.__foldersPoll();window.dispatchEvent(new Event('hashchange'));});
   assert.equal(await details.getAttribute('open'),'','details remain open when cards update');
   await page.getByRole('button',{name:'Pastas de vídeos',exact:true}).click();assert.equal(await page.evaluate(()=>location.hash),'#watches');
-  const folderDetails=page.locator('.watch-card').first().locator('details');await folderDetails.locator('summary').click();
+  const folderDetails=page.locator('.watch-card').first().locator('details:not(.folder-schedule)');await folderDetails.locator('summary').click();
   await page.getByRole('button',{name:'Pausar Vídeos do canal principal',exact:true}).click();await page.getByRole('button',{name:'Retomar Vídeos do canal principal',exact:true}).waitFor();
   assert.equal(await folderDetails.getAttribute('open'),'');assert.equal(mutations.length,1);
+  const schedule=page.locator('.watch-card').first().locator('.folder-schedule');
+  await schedule.getByText('Agendamentos por vídeo',{exact:true}).click();
+  await schedule.getByText('Vídeo confirmado',{exact:true}).waitFor();
+  assert.match(await schedule.locator('time').textContent(),/02\/01\/2027.*12:30/);
+  await schedule.getByRole('button',{name:'Mais agendamentos'}).click();
+  await schedule.getByText('Canal principal · Reservado na fila',{exact:true}).waitFor();
+  const batch=schedule.getByRole('button',{name:'Cancelar agendamentos da pasta',exact:true});
+  await batch.click();
+  const confirmation=schedule.getByRole('dialog');
+  await confirmation.getByRole('button',{name:'Voltar',exact:true}).click();
+  assert.equal(mutations.length,1,'dismissal never submits cancellation');
+  await batch.click();
+  await confirmation.getByRole('button',{name:'Confirmar cancelamento',exact:true}).click();
+  await schedule.getByText('2 agendamentos cancelados.',{exact:true}).waitFor();
+  await schedule.getByText('Nenhum próximo agendamento nesta pasta.',{exact:true}).waitFor();
+  assert.deepEqual(mutations.at(-1),{path:scheduledPath+'/cancel',body:{confirm:true}});
   await page.getByRole('button',{name:'Editar Vídeos do canal principal',exact:true}).click();await page.getByRole('heading',{name:'Editar rotina',exact:true}).waitFor();await page.getByRole('button',{name:'Cancelar',exact:true}).click();
   await page.getByRole('button',{name:'Adicionar pasta',exact:true}).click();
   const watch=page.locator('#watch-dialog'),source=watch.getByLabel('Origem dos vídeos');

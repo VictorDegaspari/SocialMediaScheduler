@@ -12,7 +12,7 @@ import { sourceFor } from './sources.js';
 import { sha256,validateVideo,stripVideoMetadata } from './media.js';
 import { nativeChannels,publisherEngine } from './native-auth.js';
 import { nativeScheduleSchema,planNativeDate,validScheduleDate,uploadBudgetAvailable,reservedCapacityAllowed,type Reservation } from './native-schedule.js';
-import { uploadYoutube,uploadTiktok,youtubeStatus,tiktokStatus,type UploadSession } from './native-api.js';
+import { uploadYoutube,uploadTiktok,youtubePublicationState,tiktokStatus,type UploadSession } from './native-api.js';
 import {genericVideoTitle,titleReview} from './video-titles.js';
 import {publicationMetadata} from './editorial-ai.js';
 import {editorialFromDefaults} from './editorial-config.js';
@@ -263,11 +263,19 @@ export class LocalPublisher {
     for(const delivery of rows) {
       try {
         if(!(await nativeChannels()).some(c=>c.id===delivery.integration_id&&!c.disabled))continue;
-        let status:string|null;
-        if(delivery.provider==='youtube')status=await youtubeStatus(delivery.post_id,delivery.integration_id.slice('native:youtube:'.length));
+        let status:string|null,plannedAt=delivery.planned_at;
+        if(delivery.provider==='youtube'){
+          const current=await youtubePublicationState(delivery.post_id,delivery.integration_id.slice('native:youtube:'.length));
+          status=current?.status??null;
+          if(current?.plannedAt)plannedAt=current.plannedAt;
+          else if(status==='private'&&delivery.payload?.nativeSchedule){
+            if(delivery.status==='scheduled')status='cancelled';
+            else plannedAt=null;
+          }
+        }
         else {const remote=await tiktokStatus(delivery.post_id,delivery.integration_id.slice('native:tiktok:'.length));status=remote.status==='FAILED'?'failed':remote.status==='PUBLISH_COMPLETE'?'completed':remote.status==='SEND_TO_USER_INBOX'?'inbox':'processing';}
         if(!status)continue;
-        await pool.query('UPDATE deliveries SET status=$2,release_url=$3,error=$4,updated_at=now() WHERE id=$1',[delivery.id,status,delivery.provider==='youtube'?'https://www.youtube.com/watch?v='+encodeURIComponent(delivery.post_id):null,status==='failed'?'A plataforma recusou o processamento. Confira o vídeo na conta conectada.':null]);
+        await pool.query('UPDATE deliveries SET status=$2,release_url=$3,error=$4,planned_at=$6,updated_at=now() WHERE id=$1 AND status=$5',[delivery.id,status,delivery.provider==='youtube'?'https://www.youtube.com/watch?v='+encodeURIComponent(delivery.post_id):null,status==='failed'?'A plataforma recusou o processamento. Confira o vídeo na conta conectada.':null,delivery.status,plannedAt]);
       } catch(error) {await event('warning',errorMessage(error),undefined,delivery.video_id);}
     }
   }

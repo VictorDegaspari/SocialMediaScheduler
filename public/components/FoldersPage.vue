@@ -2,7 +2,7 @@
 import ConnectionIcon from './ConnectionIcon.js';
 import CollectionPagination from './CollectionPagination.vue';
 import WatchCards from './WatchCards.vue';
-defineProps(['state', 'icon', 'date', 'pagination']);
+defineProps(['state', 'icon', 'date', 'pagination', 'scheduleApi', 'onScheduleChanged']);
 </script>
 
 <template>
@@ -42,7 +42,7 @@ defineProps(['state', 'icon', 'date', 'pagination']);
           <p>Pastas conectadas e seus horários de envio.</p>
         </div>
       </div>
-      <WatchCards :items="state.watches" :icon="icon" :date="date" />
+      <WatchCards :items="state.watches" :icon="icon" :date="date" :schedule-api="scheduleApi" :on-schedule-changed="onScheduleChanged" />
       <CollectionPagination :page="pagination" scope="watches" />
       <details class="folders-help" data-folder-details="help">
         <summary>Como funcionam os envios?</summary>

@@ -64,7 +64,7 @@ function render(){
   document.querySelectorAll('[data-page]').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
   document.querySelector('#breadcrumb').textContent={overview:'Visão geral',watches:'Minhas pastas',connections:'Conexões',history:'Histórico',browser:'TikTok navegador',requests:'Pedidos e contas',cuts:'Gerador de cortes','youtube-channels':'Canais do YouTube'}[page];
   const viewProps={state,icon,date};
-  const drawFolders=()=>drawWorkspace(main,'folders',{...viewProps,pagination:paginationView(state.pagination?.watches,'watches')});
+  const drawFolders=()=>drawWorkspace(main,'folders',{...viewProps,pagination:paginationView(state.pagination?.watches,'watches'),scheduleApi:api,onScheduleChanged:()=>void refresh(true)});
   const drawHistory=()=>drawWorkspace(main,'history',{...viewProps,safeUrl,statusLabels,pagination:{
     videos:paginationView(state.pagination?.videos,'videos'),events:paginationView(state.pagination?.events,'events'),
   }});

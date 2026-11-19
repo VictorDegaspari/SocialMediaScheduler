@@ -1,7 +1,8 @@
 <script setup>
 import ConnectionIcon from './ConnectionIcon.js';
 import StatusBadge from './StatusBadge.vue';
-defineProps(['items', 'icon', 'date']);
+import FolderSchedule from './FolderSchedule.vue';
+defineProps(['items', 'icon', 'date', 'scheduleApi', 'onScheduleChanged']);
 function cadence(w){
   if(w.cadence==='daily')return (w.times||[]).join(' · ');
   const minutes=Number(w.interval_minutes)||0;
@@ -61,6 +62,7 @@ function cadence(w){
       <template v-if="w.last_error">
         <p class="watch-error">{{ w.last_error }}</p>
       </template>
+      <FolderSchedule v-if="scheduleApi" :folder-id="w.id" :name="w.name" :api="scheduleApi" :on-changed="onScheduleChanged" />
       <details class="folder-details" :data-folder-details="w.id">
         <summary>Configurações da pasta</summary>
         <dl>
