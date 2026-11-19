@@ -3,18 +3,24 @@
  * present. Round first so a value near a minute never displays as 00:60.
  *
  * @param {number} seconds
- * @param {{precision?: number, decimal?: '.'|','}} [options]
+ * @param {{precision?: number, decimal?: '.'|',', hours?: boolean}} [options]
  */
-export function formatTimecode(seconds,{precision=3,decimal=','}={}) {
+export function formatTimecode(seconds,{precision=3,decimal=',',hours=false}={}) {
   if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0)return '';
   const digits=Number.isInteger(precision)&&precision>=0&&precision<=3?precision:3;
   const scale=10**digits;
   const ticks=Math.round((seconds+Number.EPSILON)*scale);
   if(!Number.isSafeInteger(ticks))return '';
   const whole=Math.floor(ticks/scale),fraction=ticks%scale;
-  const minutes=String(Math.floor(whole/60)).padStart(2,'0');
+  const totalMinutes=Math.floor(whole/60);
+  const minutes=String(hours?totalMinutes%60:totalMinutes).padStart(2,'0');
   const remainder=String(whole%60).padStart(2,'0');
-  return minutes+':'+remainder+(fraction?(decimal==='.'?'.':',')+String(fraction).padStart(digits,'0'):'');
+  const prefix=hours?String(Math.floor(whole/3600)).padStart(2,'0')+':':'';
+  return prefix+minutes+':'+remainder+(fraction?(decimal==='.'?'.':',')+String(fraction).padStart(digits,'0'):'');
+}
+
+export function formatSourceTimecode(seconds,range,precision=3) {
+  return formatTimecode(seconds+(range?.start??0),{precision,hours:Boolean(range)});
 }
 
 /**

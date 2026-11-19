@@ -2,6 +2,7 @@ import { open,stat } from 'node:fs/promises';
 import { AppError,retryAfter } from './config.js';
 import { providerFetch,tiktokRequest,youtubeToken,tiktokToken } from './native-auth.js';
 import type { Metadata } from './domain.js';
+import {youtubeTagLength} from './editorial.js';
 
 const CHUNK=8*1024*1024;
 export interface UploadSession {provider:'youtube'|'tiktok';url:string;size:number;publishId?:string;chunkSize?:number;chunks?:number;finalizing?:boolean;publishAt?:string;}
@@ -17,7 +18,7 @@ export function youtubeBody(meta:Metadata,publishAt?:Date) {
   if(publishAt&&(!Number.isFinite(publishAt.getTime())||publishAt.getTime()<=Date.now()))throw new AppError('A data de publicação do YouTube precisa estar no futuro.');
   if(publishAt&&meta.youtube.visibility!=='public')throw new AppError('Agendamento nativo do YouTube exige visibilidade public no JSON; o vídeo fica privado até a data escolhida.');
   const description=[meta.description,meta.hashtags.map(t=>'#'+t.replace(/^#+/,'').replace(/\s+/g,'')).join(' ')].filter(Boolean).join('\n\n');
-  if(description.length>5000 || meta.youtube.tags.reduce((n,t)=>n+t.length+(/\s/.test(t)?2:0),0)>500) throw new AppError('Título, descrição ou tags excedem os limites do YouTube.');
+  if(Buffer.byteLength(description,'utf8')>5000 || /[<>]/.test(meta.title+description) || youtubeTagLength(meta.youtube.tags)>500) throw new AppError('Título, descrição ou tags excedem os limites do YouTube.');
   return {snippet:{title:meta.title,description,tags:meta.youtube.tags,categoryId:'22'},status:{privacyStatus:publishAt?'private':meta.youtube.visibility,...(publishAt?{publishAt:publishAt.toISOString()}:{}),selfDeclaredMadeForKids:meta.youtube.madeForKids,containsSyntheticMedia:meta.youtube.containsSyntheticMedia}};
 }
 export function tiktokChunks(size:number) {if(!Number.isSafeInteger(size)||size<=0)throw new AppError('Tamanho de vídeo inválido.');const chunkSize=Math.min(CHUNK,size);return {chunkSize,chunks:Math.max(1,Math.floor(size/chunkSize))};}

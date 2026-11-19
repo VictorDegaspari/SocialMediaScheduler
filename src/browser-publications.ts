@@ -7,6 +7,8 @@ import {requireTikTokBrowserToken} from './playwright-mcp.js';
 import {pool} from './db.js';
 import {AppError,dataDir,errorMessage,logger} from './config.js';
 import {metadataSchema} from './domain.js';
+import {publicationMetadata} from './editorial-ai.js';
+import {editorialFromDefaults} from './editorial-config.js';
 import {sourceFor} from './sources.js';
 import {sha256,validateVideo} from './media.js';
 import {cursorFields,keysetClause,pageLimit,paginateRows,parsePagination} from './pagination.js';
@@ -44,7 +46,8 @@ async function prepareVideo(videoId:string,profileId:string,version:string){
       WHERE v.id=$1 AND w.managed_by_cuts=false`,[videoId]);
     if(!video)throw new AppError('Vídeo não encontrado nesta pasta.',404);
     if(video.version!==version)throw new AppError('O vídeo mudou. Atualize a lista antes de revisar.',409);
-    const metadata=metadataSchema.parse(video.metadata??{title:video.name.replace(/\.mp4$/i,'').slice(0,100)||'Meu vídeo'});
+    const baseMetadata=metadataSchema.parse(video.metadata??{title:video.name.replace(/\.mp4$/i,'').slice(0,100)||'Meu vídeo'});
+    const metadata=await publicationMetadata(baseMetadata,{options:editorialFromDefaults(video.watch.pack_defaults)},'tiktok');
     if(!metadata.ready||metadata.targets&&!metadata.targets.includes('tiktok'))throw new AppError('Os metadados deste vídeo não autorizam preparação para o TikTok.');
     const {rows:[existing]}=await db.query('SELECT * FROM deliveries WHERE video_id=$1 AND integration_id=$2',[video.id,account]);
     if(existing){

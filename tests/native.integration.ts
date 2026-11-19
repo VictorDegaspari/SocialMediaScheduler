@@ -646,3 +646,18 @@ test('uploads maiores usam blocos sequenciais com Content-Range e tamanhos corre
   assert.deepEqual(ttRanges,[`bytes 0-8388607/${size}`,`bytes 8388608-${size-1}/${size}`]);
 });
 after(async()=>{globalThis.fetch=originalFetch;await new Promise<void>(resolve=>server.close(()=>resolve()));await redis.quit();await pool.end();await rm(temp,{recursive:true,force:true});});
+
+
+test('perfil editorial persiste opções e gera metadados sem IA respeitando JSON próprio',async()=>{
+  const folder=join(process.env.LOCAL_MEDIA_DIR!,randomUUID());await mkdir(folder);
+  const filename='Esperança_em_tempos_difíceis.mp4';await writeFile(join(folder,filename),bytes);
+  const {id}=await publicationRequests.saveProfile({name:'Reflexões',sourceType:'local',localPath:folder,packDefaults:{titlePrefix:'Fé',description:'Reflexões do canal.',hashtags:['fé'],editorial:{enabled:true,topic:'Esperança',keywords:['fé','esperança'],context:'Público brasileiro',ai:false}}});
+  const {rows:[watch]}=await pool.query('SELECT w.* FROM watches w JOIN publishing_profiles p ON p.watch_id=w.id WHERE p.id=$1',[id]);
+  assert.equal(watch.pack_defaults.editorial.topic,'Esperança');assert.equal(watch.pack_defaults.editorial.ai,false);
+  const worker=new Worker();await worker.scan(watch);
+  const {rows:[video]}=await pool.query('SELECT metadata FROM videos WHERE watch_id=$1',[watch.id]);
+  assert.equal(video.metadata.title,'Fé — Esperança em tempos difíceis');assert(video.metadata.description.includes('Reflexões do canal.'));assert(video.metadata.youtube.tags.includes('esperança'));
+  await writeFile(join(folder,filename.replace(/\.mp4$/,'.json')),JSON.stringify({title:'Título escolhido por mim',description:'Minha descrição',youtube:{visibility:'unlisted',tags:['manual']}}));
+  await worker.scan(watch);const {rows:[manual]}=await pool.query('SELECT metadata FROM videos WHERE watch_id=$1',[watch.id]);
+  assert.equal(manual.metadata.title,'Título escolhido por mim');assert.equal(manual.metadata.description,'Minha descrição');assert.deepEqual(manual.metadata.youtube.tags,['manual']);assert.equal(manual.metadata.youtube.visibility,'unlisted');
+});

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import {computed} from 'vue';
 import PublishingProfileForm from './PublishingProfileForm.vue';
+import type {EditorialPreviewApi} from './editorial-form.js';
 import type {RequestsState} from './request-model.js';
-const props = defineProps<{state: RequestsState; editing: string | null; revision: number}>();
+const props = defineProps<{state: RequestsState; editing: string | null; revision: number; api: EditorialPreviewApi}>();
 const publishing = computed(() => props.state.publishing);
 const profile = computed(() => publishing.value.profiles.find(profile => profile.id === props.editing));
 const origin = (source?: string) => source === 'gta6_pack' ? 'Pack GTA 6' : source === 'google_drive' ? 'Google Drive' : source === 'local' ? 'Pasta local' : 'Origem não definida';
@@ -19,6 +20,6 @@ const origin = (source?: string) => source === 'gta6_pack' ? 'Pack GTA 6' : sour
         <span v-if="!row.source_type" class="badge amber">Defina uma origem</span>
       </article>
     </div>
-    <PublishingProfileForm :key="(editing || '') + ':' + revision" :state="state" :profile="profile" :editing="editing" />
+    <PublishingProfileForm :key="(editing || '') + ':' + revision" :state="state" :profile="profile" :editing="editing" :api="api" />
   </section>
 </template>

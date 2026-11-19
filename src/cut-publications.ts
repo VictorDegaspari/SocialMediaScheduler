@@ -7,6 +7,7 @@ import {z} from 'zod';
 import {AppError} from './config.js';
 import {pool} from './db.js';
 import {metadataSchema} from './domain.js';
+import {cutEditorial,youtubeTagLength} from './editorial.js';
 import {nativeChannels} from './native-auth.js';
 import {sha256,validateVideo} from './media.js';
 import {framingOptionsSchema} from './cuts-edit.js';
@@ -15,6 +16,7 @@ import {tiktokCaption} from './tiktok-caption.js';
 
 export const cutPublishSchema=z.object({
   channelId:z.string().min(1).max(200),title:z.string().trim().min(1).max(100),description:z.string().max(4900).default(''),
+  hashtags:z.array(z.string().trim().min(1).max(80)).max(15).optional(),youtubeTags:z.array(z.string().trim().min(1).max(100)).max(25).optional(),
   visibility:z.enum(['private','unlisted','public']).default('private'),madeForKids:z.boolean().default(false),containsSyntheticMedia:z.boolean().default(false),
   tiktok:metadataSchema.shape.tiktok.optional(),confirm:z.literal(true),revision:z.number().int().positive(),format:z.enum(['shorts','video']).optional()
 });
@@ -40,8 +42,10 @@ export async function publishCut(db:PoolClient,job:{id:string;title:string|null;
   if(tiktok&&(!input.tiktok||input.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'))throw new AppError('Confira a publicação pública e as declarações do TikTok antes de postar.');
   const source=join(dir,clip.id+'.mp4');await validateVideo(source,format);
   const hash=await sha256(source),deliveryId=randomUUID(),filename=deliveryId+'.native.mp4';
-  const metadata=metadataSchema.parse({title:input.title,description:input.description,hashtags:!tiktok&&format==='shorts'?['Shorts']:[],
-    youtube:{visibility:input.visibility,madeForKids:input.madeForKids,containsSyntheticMedia:input.containsSyntheticMedia},...(tiktok?{tiktok:input.tiktok}:{})});
+  const suggestion=cutEditorial(clip)[tiktok?'tiktok':'youtube'];
+  const metadata=metadataSchema.parse({title:input.title,description:input.description,hashtags:input.hashtags??(!tiktok&&format==='shorts'?['Shorts']:[]),
+    youtube:{visibility:input.visibility,madeForKids:input.madeForKids,containsSyntheticMedia:input.containsSyntheticMedia,tags:input.youtubeTags??suggestion.tags},...(tiktok?{tiktok:input.tiktok}:{})});
+  if(youtubeTagLength(metadata.youtube.tags)>500)throw new AppError('Reduza as tags do YouTube para até 500 caracteres.');
   if(tiktok){try{tiktokCaption(metadata);}catch{throw new AppError('A legenda do TikTok excede 2.200 caracteres.');}}
   await db.query(`INSERT INTO watches(id,name,folder_id,folder_url,source_type,enabled,initialized,managed_by_cuts,next_scan_at,next_upload_at)
     VALUES($1,$2,$3,$4,'local',true,true,true,'9999-12-31','9999-12-31') ON CONFLICT(id) DO NOTHING`,[job.id,'Cortes · '+(job.title||'YouTube').slice(0,80),'cuts:'+job.id,job.url]);

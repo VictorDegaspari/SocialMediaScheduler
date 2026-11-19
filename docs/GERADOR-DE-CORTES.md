@@ -49,7 +49,9 @@ O celular tem seus próprios controles: toque na imagem ou no botão de reprodu�
 
 ### Textos e imagens sobre o vídeo
 
-Em **Ajustar → Textos e imagens**, use **Adicionar texto**, **Adicionar imagem** ou cole uma imagem copiada com **Ctrl+V**. Texto e imagem podem aparecer juntos, em até 20 elementos. São aceitos PNG, JPEG e WebP de até 20 MB; transparência e o arquivo original da imagem são preservados. Arraste o elemento na prévia ou use os controles de posição e tamanho. Textos também permitem escolher cor, tamanho e fundo.
+Em **Ajustar → Elementos**, use **Adicionar texto**, **Adicionar imagem** ou cole uma imagem copiada com **Ctrl+V**. Texto e imagem podem aparecer juntos, em até 20 elementos. São aceitos PNG, JPEG e WebP de até 20 MB. Arraste o elemento na prévia ou use os controles de posição e tamanho. Textos permitem escolher cor, tamanho, fundo e alinhamento à esquerda, ao centro, à direita ou justificado.
+
+Em **Adicionar marca-d’água**, selecione o arquivo da logo do canal. A logo começa no canto superior direito e aparece durante todo o corte. Em **Posição e tamanho**, ajuste a opacidade de 0% a 100%. A transparência do arquivo é preservada, inclusive quando o controle está em 100%.
 
 Mantenha **Durante todo o vídeo** marcado para um elemento fixo. Desmarque para definir **Aparece em** e **Some em**, em segundos do vídeo final, já descontando os trechos removidos. **Ver na prévia** busca o começo do elemento; **Trazer para frente** muda a sobreposição. Salve e confira o MP4 gerado antes de postar. Os elementos permanecem editáveis ao reabrir e acompanham novas versões, preservando a versão anterior.
 
@@ -86,10 +88,11 @@ Instale também FFmpeg com libass, FFprobe e a fonte DejaVu Sans. `CUTS_WHISPER_
 ## Limites e arquivos
 
 - Um vídeo público gravado por tarefa; playlists, transmissões em andamento e vídeos futuros são recusados.
-- Origem com até 2 horas e 2 GiB. O download escolhe o melhor vídeo e o melhor áudio disponíveis, sem teto de resolução ou preferência por H.264; a montagem do MP4 preserva os fluxos originais, sem recodificação. O tamanho é monitorado e o excesso interrompe a tarefa, sem trocar silenciosamente para uma qualidade inferior.
+- Vídeo integral com até 2 horas. Para lives encerradas em **Canais do YouTube**, use **Escolher trecho** e marque até 30 minutos pelos horários da transmissão. Quando o YouTube oferece um mapa de replay, **Buscar momentos mais revistos** sugere intervalos. A transcrição, a análise e a recuperação da fonte usam o trecho escolhido.
+- Cada arquivo de origem tem limite de 2 GiB. O download escolhe o melhor vídeo e o melhor áudio disponíveis, sem teto de resolução ou preferência por H.264; a montagem do MP4 preserva os fluxos originais, sem recodificação. O tamanho é monitorado e o excesso interrompe a tarefa, sem trocar silenciosamente para uma qualidade inferior.
 - A exportação prioriza qualidade: H.264 com CRF 16 e preset `slow`, redimensionamento Lanczos e áudio AAC de 320 kb/s. A taxa de quadros segue a origem, inclusive 60 fps e taxas fracionárias como 59,94; 30 fps só é usado quando a origem não informa uma taxa válida. Renderizar pode demorar mais e gerar arquivos maiores. O envio usa os mesmos bytes do MP4 revisado.
 - Trecho final com no máximo 3 minutos. **Manter imagem inteira** adiciona barras para preservar o conteúdo; **Preencher vertical** recorta as laterais no centro.
-- Os campos das legendas usam o tempo da montagem; os limites do corte e das remoções usam o vídeo original. A API mantém as legendas em tempos absolutos da fonte, e o editor converte os dois relógios sem perder o alinhamento das palavras. Na junção, o fim de uma legenda pertence ao trecho anterior e o início ao seguinte.
+- Os campos das legendas usam o tempo da montagem. Os limites do corte e das remoções mostram os tempos do vídeo ou da live original. A API mantém as legendas no relógio do arquivo baixado, e o editor converte os tempos sem perder o alinhamento das palavras. Na junção, o fim de uma legenda pertence ao trecho anterior e o início ao seguinte.
 - Subprocessos têm tempo máximo e são executados com argumentos separados, sem shell. Controles ASS recebidos no texto são tratados como caracteres visíveis, impedindo comandos de estilo injetados.
 - A origem e os cortes ficam disponíveis até a exclusão manual, inclusive após postar. Use **Baixar MP4** para reutilizar o corte em outras plataformas e **Excluir arquivo** para removê-lo depois. Arquivos de render temporários são removidos após sucesso ou falha; um ajuste que falhe preserva o último preview completo.
 - Apenas as cópias temporárias de upload são removidas após a confirmação do envio. A fonte e os arquivos finais do gerador são mantidos até a exclusão manual. Os originais das pastas monitoradas não são apagados.

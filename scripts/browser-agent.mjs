@@ -112,9 +112,21 @@ try{
       if(!connected){logger.info({event:'browser_bridge_connected'},'Agente do Chrome conectado ao painel local.');connected=true;}
       if(response.cancel)interrupt();
       if(response.job&&!active){
-        const job=jobSchema.parse(response.job);
-        if(stopped)await request('/jobs/'+job.id+'/finish',{result:'cancelled'});
-        else{const running=execute(job);active.done=running;}
+        const parsed=jobSchema.safeParse(response.job);
+        if(!parsed.success){
+          // The command has already been leased. Report rejection before any
+          // upload instead of leaving it to expire as a misleading disconnect.
+          const id=z.string().uuid().safeParse(response.job.id);
+          if(id.success){
+            await request('/jobs/'+id.data+'/progress',{stage:'browser_job_invalid'}).catch(()=>{});
+            await request('/jobs/'+id.data+'/finish',{result:'failed'}).catch(()=>{});
+          }
+          logger.warn({event:'browser_job_invalid'},'Tarefa incompatível com o agente local. Atualize e reinicie o agente antes de tentar novamente.');
+        }else{
+          const job=parsed.data;
+          if(stopped)await request('/jobs/'+job.id+'/finish',{result:'cancelled'});
+          else{const running=execute(job);active.done=running;}
+        }
       }
     }catch{
       connected=false;

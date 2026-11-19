@@ -77,6 +77,13 @@ export async function initDb() {
       transcript jsonb,error text,source_removed_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS followed_youtube_channels (
+      channel_id text PRIMARY KEY,name text NOT NULL,latest_video jsonb,recent_videos jsonb,
+      includes_live_replays boolean NOT NULL DEFAULT false,
+      checked_at timestamptz NOT NULL DEFAULT now(),created_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE followed_youtube_channels ADD COLUMN IF NOT EXISTS recent_videos jsonb;
+    ALTER TABLE followed_youtube_channels ADD COLUMN IF NOT EXISTS includes_live_replays boolean NOT NULL DEFAULT false;
     CREATE TABLE IF NOT EXISTS cuts (
       id uuid PRIMARY KEY,job_id uuid NOT NULL REFERENCES cut_jobs(id),
       title text NOT NULL,start_seconds double precision NOT NULL,end_seconds double precision NOT NULL,
@@ -88,6 +95,7 @@ export async function initDb() {
       CONSTRAINT cuts_source_bounds CHECK(start_seconds>=0 AND end_seconds>start_seconds AND end_seconds<=7200.001)
     );
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS replay_data jsonb;
+    ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS source_range jsonb;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS pending_analysis jsonb;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS analysis_message text;
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS caption_style jsonb NOT NULL DEFAULT '{}';

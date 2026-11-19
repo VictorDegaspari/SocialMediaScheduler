@@ -125,4 +125,51 @@ else:
   }
 });
 
+test('a live pode fornecer um trecho com a imagem e o áudio originais e sem o quadro anterior ao início',async()=>{
+  const downloadDir=await mkdtemp(join(dir,'window-'));
+  const video=join(downloadDir,'video.mp4'),audio=join(downloadDir,'audio.m4a'),fixture=join(downloadDir,'downloader.py');
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:s=160x90:r=60:d=4',
+    '-f','lavfi','-i','color=c=blue:s=160x90:r=60:d=7',
+    '-filter_complex','[0:v][1:v]concat=n=2:v=1:a=0[v]','-map','[v]','-c:v','libx264',
+    '-g','720','-sc_threshold','0','-pix_fmt','yuv420p',video]);
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','sine=d=11:r=48000','-c:a','aac',audio]);
+  await writeFile(join(downloadDir,'downloader.json'),JSON.stringify({
+    id:'dQw4w9WgXcQ',title:'Live de teste',duration:18000,live_status:'was_live',
+    formats:[
+      {format_id:'video',url:'file://'+video,ext:'mp4',protocol:'https',width:160,height:90,fps:60,vcodec:'avc1',acodec:'none'},
+      {format_id:'audio',url:'file://'+audio,ext:'m4a',protocol:'https',vcodec:'none',acodec:'aac'},
+    ],
+  }));
+  const previousPython=process.env.CUTS_PYTHON;
+  const interpreter=execFileSync(previousPython||'python3',['-c','import sys; print(sys.executable)'],{encoding:'utf8'}).trim();
+  await writeFile(fixture,`#!${interpreter}
+import json, sys
+from pathlib import Path
+import yt_dlp
+info = json.loads(Path(__file__).with_suffix('.json').read_text())
+if '--dump-single-json' in sys.argv:
+    print(json.dumps(info))
+else:
+    options = yt_dlp.parse_options(sys.argv[3:]).ydl_opts
+    options['enable_file_urls'] = True
+    with yt_dlp.YoutubeDL(options) as downloader:
+        downloader.process_ie_result(info, download=True)
+`,{mode:0o700});
+  try {
+    process.env.CUTS_PYTHON=fixture;
+    const result=await downloadCutSource('https://youtu.be/dQw4w9WgXcQ',downloadDir,{start:4.5,end:7.5});
+    assert.ok(Math.abs(result.duration-3)<.1);
+    const file=join(downloadDir,'source.mp4');
+    const {streams}=JSON.parse(execFileSync('ffprobe',['-v','error','-show_entries',
+      'stream=codec_name,width,height,r_frame_rate,start_time','-of','json',file],{encoding:'utf8'}));
+    assert.equal(streams[0].codec_name,'h264');assert.equal(streams[1].codec_name,'aac');
+    assert.equal(streams[0].width,160);assert.equal(streams[0].height,90);assert.equal(streams[0].r_frame_rate,'60/1');
+    assert.ok(streams.every((stream:{start_time:string})=>Math.abs(Number(stream.start_time))<.05));
+    const first=execFileSync('ffmpeg',['-v','error','-i',file,'-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-']);
+    assert.ok(first[0]<10&&first[1]<10&&first[2]>240,'the first presented frame comes from the selected window');
+  }finally {
+    if(previousPython===undefined)delete process.env.CUTS_PYTHON;else process.env.CUTS_PYTHON=previousPython;
+  }
+});
+
 after(async()=>{await rm(dir,{recursive:true,force:true});});

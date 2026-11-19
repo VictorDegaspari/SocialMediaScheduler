@@ -1,11 +1,3 @@
-export function editorTabList(group,label,items,{active=items[0][0],primary=false}={}){
-  return `<div class="${primary?'cuts-editor-primary-tabs':'cuts-editor-subtabs'}" role="tablist" aria-label="${label}" data-editor-tabs="${group}">${items.map(([id,title],index)=>`<button type="button" role="tab" id="${id}-tab" aria-controls="${id}" aria-selected="${id===active}" tabindex="${id===active?0:-1}" data-editor-tab="${id}"${primary?` data-cut-editor-section="${id}"`:''}>${primary?`<span>${index+1}</span>`:''}${title}</button>`).join('')}</div>`;
-}
-
-export function editorPanelAttributes(group,id,active=false){
-  return `id="${id}" role="tabpanel" aria-labelledby="${id}-tab" tabindex="0" data-editor-panel="${group}"${active?'':' hidden'}`;
-}
-
 export function bindEditorTabs(form,signal){
   const nav=form.querySelector('.cuts-editor-nav');
   const targetFor=tab=>form.querySelector('#'+CSS.escape(tab.getAttribute('aria-controls')));

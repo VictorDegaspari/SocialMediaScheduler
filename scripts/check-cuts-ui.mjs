@@ -1,4 +1,5 @@
 import {revealEditorControl} from './cuts-ui-tabs.mjs';
+import {generateEditorial} from '../src/editorial.ts';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {readFile,mkdir,mkdtemp,rm} from 'node:fs/promises';
@@ -25,6 +26,8 @@ const job={id:jobId,url:'https://www.youtube.com/watch?v=dQw4w9WgXcQ',title:'Ví
 const discardedJob={id:'00000000-0000-4000-8000-000000000000',title:'Projeto já descartado',status:'discarded',created_at:'2026-11-17T15:00:00Z',clips:[]};
 const fixture={cuts:{dependencies:{ready:true,details:[]},channels:[{id:channelId,name:'Canal de teste',identifier:'youtube',disabled:false}],jobs:[job,discardedJob]},scheduler:{paused:false,queue:{}},stats:{watches:0,pending:0,sent:0,attention:0},watches:[],publishing:{actions:[]}};
 const actions=[],errors=[],stateRequests=[];let polls=0,leakDiscarded=true,discardGate=null,adjusted=null,recoveryMode='ready';
+let releaseTextPreview;
+const textPreviewGate=new Promise(resolve=>{releaseTextPreview=resolve;});
 function statePage(url){
   const jobs=fixture.cuts.jobs.filter(item=>item.status!=='discarded').sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id.localeCompare(a.id));
   const limit=Math.max(1,Math.min(100,Number(url.searchParams.get('cutsLimit'))||10));
@@ -54,6 +57,13 @@ async function seekPhone(outputTime){
 await page.route('**/api/**',async route=>{
   const request=route.request(),url=new URL(request.url()),path=url.pathname;
   if(path==='/api/state'){polls++;stateRequests.push(url);return route.fulfill({json:statePage(url)});}
+  if(path==='/api/assistant/metadata/preview'){
+    assert.equal(request.headers()['x-watcher-request'],'1');
+    const {useAI,...input}=request.postDataJSON();
+    assert.equal(useAI,false);
+    await textPreviewGate;
+    return route.fulfill({json:generateEditorial(input)});
+  }
   if(path==='/api/cuts/'+clipId+'/media'&&url.searchParams.get('download')==='1')return route.continue();
   if(path.endsWith('/source')||path.endsWith('/media')){
     const range=request.headers().range?.match(/^bytes=(\d+)-(\d*)$/);
@@ -334,8 +344,26 @@ try{
   assert.equal(parseTimecode(await page.getByLabel('Começo do corte',{exact:true}).inputValue()),clickedCardTime,'the card graph also starts precisely at the clicked time');
   assert.equal(actions.length,beforeGraphSelect,'opening a selection from the card must not save it');
   await page.locator('#cuts-dialog .dialog-head [data-cuts-action="close-dialog"]').click();
+  clip.publicationText={
+    youtube:{title:'Sugestão para YouTube',description:'Descrição para YouTube',hashtags:['Shorts'],tags:['corte']},
+    tiktok:{title:'Sugestão para TikTok',description:'Descrição para TikTok',hashtags:['corte'],tags:[]},
+  };
+  await Promise.all([
+    page.waitForResponse(response=>response.url().includes('/api/state')),
+    page.getByRole('button',{name:'Atualizar',exact:true}).click(),
+  ]);
   const beforePublish=actions.length;
   await page.getByRole('button',{name:'Postar',exact:true}).click();assert.equal(actions.length,beforePublish);
+  const platform=page.getByLabel('Onde postar?'),description=page.getByLabel('Descrição',{exact:true});
+  assert.equal(await description.inputValue(),'Descrição para YouTube');
+  await page.locator('#cut-post-title').fill('Título revisado');
+  await platform.selectOption('tiktok');
+  assert.equal(await description.inputValue(),'Descrição para TikTok');
+  assert.equal(await page.locator('#cut-post-tags').isDisabled(),true);
+  await platform.selectOption('youtube');
+  assert.equal(await description.inputValue(),'Descrição para YouTube');
+  assert.equal(await page.locator('#cut-post-title').inputValue(),'Título revisado');
+  delete clip.publicationText;
   const publishFormat=page.getByLabel('Publicar como',{exact:true}),authorize=page.getByRole('button',{name:'Autorizar e enviar',exact:true});
   assert.equal(await publishFormat.inputValue(),'shorts');
   await publishFormat.selectOption('video');
@@ -366,6 +394,19 @@ try{
   await page.locator('#cuts-dialog .dialog-head [data-cuts-action="close-dialog"]').click();
   await page.getByRole('button',{name:'Postar',exact:true}).click();
   assert.equal(await publishFormat.inputValue(),'video');assert.equal(await page.getByLabel('Descrição',{exact:true}).inputValue(),'','regular videos do not get the Shorts description');
+  const beforeTextGeneration=actions.length;
+  await page.getByRole('checkbox',{name:/Revisei o vídeo e a legenda/}).check();
+  const generateText=page.getByRole('button',{name:'Gerar título, descrição e tags',exact:true});
+  await Promise.all([page.waitForRequest(request=>request.url().endsWith('/assistant/metadata/preview')),generateText.click()]);
+  assert.equal(await generateText.isDisabled(),true);
+  assert.equal(await authorize.isDisabled(),true);
+  await page.locator('#cut-post-title').fill('Título editado durante a geração');
+  releaseTextPreview();
+  await page.waitForFunction(()=>Boolean(document.querySelector('#cut-post-tags').value));
+  assert.equal(actions.length,beforeTextGeneration,'text generation does not create a publication');
+  assert.equal(await page.getByRole('checkbox',{name:/Revisei o vídeo e a legenda/}).isChecked(),false,'generated text requires a new explicit review');
+  assert.equal(await page.locator('#cut-post-title').inputValue(),'Título editado durante a geração');
+  assert((await page.getByLabel('Descrição',{exact:true}).inputValue()).length>0);
   assert.equal(await page.getByLabel('Canal do YouTube').inputValue(),'');
   await page.getByLabel('Canal do YouTube').selectOption(channelId);
   await page.getByLabel('Visibilidade',{exact:true}).selectOption('public');
@@ -373,6 +414,8 @@ try{
   await page.getByRole('button',{name:'Autorizar e enviar',exact:true}).click();
   await page.getByText('Na fila de envio',{exact:true}).waitFor();
   assert.equal(actions.at(-1).path,'/api/cuts/'+clipId+'/publish');assert.equal(actions.at(-1).body.revision,5);assert.equal(actions.at(-1).body.format,'video');assert.equal(actions.at(-1).body.channelId,channelId);assert.equal(actions.at(-1).body.visibility,'public');assert.equal(actions.at(-1).body.confirm,true);
+  assert.equal(actions.at(-1).body.title,'Título editado durante a geração');
+  assert(actions.at(-1).body.youtubeTags.length>0);
   Object.assign(clip,{status:'posted',hasMedia:true,delivery_status:'published',release_url:'https://www.youtube.com/watch?v=qa123'});job.status='completed';await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByText('Publicado no YouTube',{exact:true}).waitFor();assert.equal(await page.locator('[data-cut-clip] video').count(),1);
   assert.equal(await page.getByRole('button',{name:'Postar',exact:true}).count(),1,'um corte enviado continua disponível para outro destino');
@@ -483,4 +526,4 @@ try{
   fixture.cuts.dependencies={ready:false,details:['Python de transcrição não está disponível.']};await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   await page.getByText('Preparação necessária',{exact:true}).waitFor();assert(await page.getByRole('button',{name:'Gerar cortes',exact:true}).isDisabled());
   assert.deepEqual(errors,[]);console.log('Cortes UI: frame exato no celular, controles de reprodução/pausa/seek, montagem sem lacunas, replay, estilos, publicação simulada, ajustes após envio, recuperação da fonte, confirmação de descarte, paginação e mobile OK.');
-}finally{await browser.close();await new Promise(resolve=>server.close(resolve));await rm(temp,{recursive:true,force:true});}
+}finally{releaseTextPreview();await browser.close();await new Promise(resolve=>server.close(resolve));await rm(temp,{recursive:true,force:true});}

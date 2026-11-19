@@ -19,8 +19,6 @@ SQL
 trap cleanup EXIT
 cleanup
 ./scripts/node-local.sh scripts/check-ui.mjs
-mkdir -p artifacts
-docker compose exec -T app ffmpeg -loglevel error -f lavfi -i color=c=green:s=64x96:d=1 -c:v libx264 -pix_fmt yuv420p -f mp4 -movflags frag_keyframe+empty_moov pipe:1 > artifacts/ui-native.mp4
 ./scripts/node-local.sh scripts/check-native-ui.mjs
 ./scripts/node-local.sh scripts/check-browser-panel.mjs
 ./scripts/node-local.sh scripts/check-requests-ui.mjs

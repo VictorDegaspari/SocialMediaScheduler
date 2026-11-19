@@ -1,15 +1,10 @@
 import {mountOverlayView} from './build/cuts-overlays-view.js';
-import {editorPanelAttributes} from './cuts-editor-tabs.js';
-import {overlayVisible,overlayImageBox,overlayTextLayout} from './cuts-overlays-layout.js';
+import {drawOverlayText,overlayVisible,overlayImageBox,overlayTextBox,overlayTextLayout} from './cuts-overlays-layout.js';
 
-export function cutOverlayFields(){
-  return `<section ${editorPanelAttributes('primary','cut-overlays')} class="cuts-tool-section cuts-overlays"></section>`;
-}
-
-export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDuration,seek,onChange,uploadImage}){
+export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDuration,seek,onChange,onAdd,uploadImage}){
   const root=form.querySelector('#cut-overlays');
   const layers=structuredClone(overlays),images=new Map();let selected=layers[0]?.id||null,pending=0,drag=null,preventClick=false;
-  const view=mountOverlayView(root,layers,selected,getDuration()),controls=root.querySelector('#cut-overlay-controls');
+  const view=mountOverlayView(root,layers,selected,getDuration());
   signal.addEventListener('abort',()=>view.destroy(),{once:true});
   const render=()=>view.update(layers,selected,getDuration());
   const imageUrl=id=>`/api/cuts/jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(id)}`;
@@ -26,17 +21,25 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
   function refresh(){render();onChange();}
   function add(layer){
     if(layers.length>=20)throw new Error('Use até 20 textos e imagens por vídeo.');
-    layers.push({id:crypto.randomUUID(),start:0,end:null,x:.5,y:.1,...layer});selected=layers.at(-1).id;feedback('');refresh();controls.dispatchEvent(new CustomEvent('cut-editor-reveal',{bubbles:true}));
+    layers.push({id:crypto.randomUUID(),start:0,end:null,x:.5,y:.1,...layer});
+    selected=layers.at(-1).id;
+    feedback('');
+    render();
+    onAdd();
   }
-  async function upload(file){
+  async function upload(file,watermark=false){
     if(layers.length+pending>=20){feedback('Use até 20 textos e imagens por vídeo.');return;}
     if(file.size>20*1024*1024){feedback('Escolha uma imagem de até 20 MB.');return;}
-    pending++;feedback('Enviando imagem…');root.dispatchEvent(new CustomEvent('cut-editor-reveal',{bubbles:true}));
+    pending++;feedback('Enviando imagem…');
+    if(root.hidden)root.dispatchEvent(new CustomEvent('cut-editor-reveal',{bubbles:true}));
     try{
       const response=await (uploadImage?uploadImage(file):fetch(`/api/cuts/jobs/${encodeURIComponent(jobId)}/images`,{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Watcher-Request':'1'},body:file,signal}));
       const data=await response.json();if(!response.ok)throw new Error(data.error||'Não foi possível adicionar a imagem.');
       if(signal.aborted)return;
-      imageFor(data.id);add({type:'image',imageId:data.id,width:.3});feedback('Imagem adicionada. Ajuste a posição e a duração.');
+      imageFor(data.id);
+      const placement=watermark?{watermark:true,width:.16,x:.94,y:.035,opacity:.65}:{width:.3};
+      add({type:'image',imageId:data.id,...placement});
+      feedback(watermark?'Marca-d’água adicionada. Ajuste a posição e a opacidade.':'Imagem adicionada. Ajuste a posição e a duração.');
     }catch(error){if(error.name!=='AbortError'&&!signal.aborted)feedback(error.message);}
     finally{pending--;}
   }
@@ -44,8 +47,9 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     const button=event.target.closest('[data-cut-overlay-action]');if(!button)return;
     try{
       const action=button.dataset.cutOverlayAction,o=current();
-      if(action==='add-text')add({type:'text',text:'Seu texto',fontSize:64,color:'#FFFFFF',background:'none',width:.8});
+      if(action==='add-text')add({type:'text',text:'Seu texto',fontSize:64,color:'#FFFFFF',background:'none',alignment:'left',width:.8});
       if(action==='add-image')root.querySelector('#cut-overlay-file').click();
+      if(action==='add-watermark')root.querySelector('#cut-watermark-file').click();
       if(action==='select'){selected=button.dataset.id;refresh();}
       if(action==='remove'&&o){layers.splice(layers.indexOf(o),1);selected=layers.at(-1)?.id||null;refresh();}
       if(action==='front'&&o){layers.splice(layers.indexOf(o),1);layers.push(o);refresh();}
@@ -54,6 +58,10 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
   },{signal});
   root.querySelector('#cut-overlay-file').addEventListener('change',async event=>{
     for(const file of event.target.files)await upload(file);event.target.value='';
+  },{signal});
+  root.querySelector('#cut-watermark-file').addEventListener('change',event=>{
+    const file=event.target.files[0];event.target.value='';
+    if(file)void upload(file,true);
   },{signal});
   document.addEventListener('paste',async event=>{
     if(!form.closest('dialog')?.open)return;
@@ -65,11 +73,12 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     const field=event.target.dataset.overlayField,o=current();if(!field||!o)return;
     if(field==='always'){
       o.start=0;o.end=event.target.checked?null:Math.min(3,getDuration());
-    }else if(['text','color','background'].includes(field))o[field]=event.target.value;
-    else o[field]=Number(event.target.value)/(['x','y','width'].includes(field)?100:1);
+    }else if(['text','color','background','alignment'].includes(field))o[field]=event.target.value;
+    else o[field]=Number(event.target.value)/(['x','y','width','opacity'].includes(field)?100:1);
     render();onChange();
   },{signal});
   const boxes=new Map();
+  const textLayouts=new WeakMap();
   function paint(ctx,time,duration){
     boxes.clear();const output={width:canvas.width,height:canvas.height};ctx.save();
     for(const o of layers){
@@ -77,15 +86,16 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
       if(o.type==='image'){
         const item=imageFor(o.imageId);if(!item.ready)continue;
         const box=overlayImageBox(o,output,{width:item.image.naturalWidth,height:item.image.naturalHeight});
-        ctx.drawImage(item.image,box.x,box.y,box.width,box.height);boxes.set(o.id,box);
+        ctx.save();ctx.globalAlpha=o.opacity??1;
+        ctx.drawImage(item.image,box.x,box.y,box.width,box.height);
+        ctx.restore();boxes.set(o.id,box);
       }else{
-        const layout=overlayTextLayout(o,output),scale=output.height/1280;
-        ctx.font=`bold ${layout.fontSize}px "DejaVu Sans",sans-serif`;ctx.textBaseline='top';ctx.textAlign='left';
-        const width=Math.max(1,...layout.lines.map(line=>ctx.measureText(line).width)),height=layout.lines.length*layout.lineHeight-layout.fontSize*.2;
-        const box={x:(output.width-width)*o.x,y:(output.height-height)*o.y,width,height};boxes.set(o.id,box);
-        if(o.background==='box'){ctx.fillStyle='rgba(0,0,0,.65)';ctx.fillRect(box.x-8*scale,box.y-8*scale,width+16*scale,height+16*scale);}
-        ctx.lineWidth=4*scale;ctx.lineJoin='round';ctx.strokeStyle='#000';ctx.fillStyle=o.color;
-        for(const [i,line] of layout.lines.entries()){ctx.strokeText(line,box.x,box.y+i*layout.lineHeight);ctx.fillText(line,box.x,box.y+i*layout.lineHeight);}
+        const key=JSON.stringify([o.text,o.fontSize,o.width,o.alignment,output.width,output.height]);
+        const cached=textLayouts.get(o);
+        const layout=cached?.key===key?cached.layout:overlayTextLayout(o,output,ctx);
+        if(cached?.key!==key)textLayouts.set(o,{key,layout});
+        const box=overlayTextBox(o,output,layout);boxes.set(o.id,box);
+        drawOverlayText(ctx,o,layout,box.x,box.y);
       }
     }
     const box=boxes.get(selected);

@@ -1,8 +1,11 @@
 import {mountRequestsView,requestViews as views} from './build/requests-view.js';
+import {readCommaSeparated,readEditorialOptions} from './build/editorial-view.js';
 import {nativeScheduleModel,readNativeSchedule} from './native-schedule.js';
 import {paginationView,resetPagination} from './pagination.js';
 
 let editing=null,view='orders',mounted=null;
+let apiClient;
+const editorialApi=(path,body)=>apiClient(path,body);
 const clearedForms=new Set();
 const schedule=nativeScheduleModel({},'request');
 
@@ -16,7 +19,7 @@ export function updateRequests(state,{date}) {
   const profileForm=root.querySelector('#publishing-profile-form');
   if(profileForm&&profileForm.dataset.profileId!==(editing||''))clearedForms.add('publishing-profile-form');
   const pagination={requests:paginationView(state.publishing.pagination?.requests,'requests'),actions:paginationView(state.publishing.pagination?.actions,'actions')};
-  const next={state,editing,view,pagination,schedule,date};
+  const next={state,editing,view,pagination,schedule,date,api:editorialApi};
   if(mounted?.root!==root){destroyRequests();mounted={root,...mountRequestsView(root,next)};syncProfileSource();}
   else void mounted.update(next,[...clearedForms]).then(syncProfileSource);
   clearedForms.clear();
@@ -35,6 +38,7 @@ function syncProfileSource() {
 }
 
 export function bindRequests({api,refresh,toast}) {
+  apiClient=api;
   document.addEventListener('click',event=>{
     const button=event.target.closest('[data-requests-view]');if(!button)return;
     selectView(button.dataset.requestsView);
@@ -78,7 +82,7 @@ export function bindRequests({api,refresh,toast}) {
       else if(form.id==='publishing-profile-form') {
         const name=String(f.get('name')),source=f.get('sourceType')||form.querySelector('[name=sourceType]').value;
         await api('/assistant/profiles'+(editing?'/'+editing:''),{name,sourceType:source||null,folderUrls:String(f.get('folderUrls')||'').split(/\n/).map(v=>v.trim()).filter(Boolean),localPath:f.get('localPath')||'',youtubeId:f.get('youtubeId')||null,tiktokProfileId:f.get('tiktokProfileId')||null,
-          packDefaults:{titlePrefix:f.get('titlePrefix')||name,description:f.get('description')||'',hashtags:String(f.get('hashtags')||'').split(',').map(t=>t.trim()).filter(Boolean),madeWithAI:f.has('madeWithAI'),youtubeContainsSyntheticMedia:f.has('youtubeSynthetic'),madeForKids:f.has('madeForKids'),youtubeVisibility:'public'}},editing?'PUT':'POST');editing=null;
+          packDefaults:{titlePrefix:f.get('titlePrefix')||name,description:f.get('description')||'',hashtags:readCommaSeparated(f.get('hashtags')),madeWithAI:f.has('madeWithAI'),youtubeContainsSyntheticMedia:f.has('youtubeSynthetic'),madeForKids:f.has('madeForKids'),youtubeVisibility:'public',editorial:readEditorialOptions(f)}},editing?'PUT':'POST');editing=null;
       }else {
         if(!f.getAll('platforms').length)throw new Error('Selecione pelo menos uma plataforma.');
         const body={profileId:f.get('profileId'),quantity:Number(f.get('quantity')),platforms:f.getAll('platforms'),times:String(f.get('times')).split(',').map(t=>t.trim()).filter(Boolean),timezone:'America/Sao_Paulo',policy:readNativeSchedule(form)};

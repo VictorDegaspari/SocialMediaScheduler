@@ -1,6 +1,10 @@
 type Output={width:number;height:number};
 type Placement={x:number;y:number;width:number};
+type Text={text:string;fontSize:number;width:number;alignment?:'left'|'center'|'right'|'justify'};
+type TextLayout=Output&{lines:{text:string;x:number}[][];font:string;lineHeight:number;scale:number};
 export function overlayVisible(overlay:{start:number;end:number|null},time:number,duration:number):boolean;
-export function wrapOverlayText(text:string,fontSize:number,width:number):string[];
-export function overlayTextLayout(overlay:{text:string;fontSize:number;width:number},output:Output):{lines:string[];fontSize:number;lineHeight:number};
+export function overlayTextLayout(overlay:Text,output:Output,ctx:{font:string;measureText(text:string):{width:number}}):TextLayout;
+export function overlayTextBox(overlay:Placement,output:Output,layout:TextLayout):Output&{x:number;y:number};
+type PaintContext=Pick<CanvasRenderingContext2D,'font'|'textBaseline'|'textAlign'|'lineWidth'|'lineJoin'|'fillStyle'|'strokeStyle'|'fillRect'|'fillText'|'strokeText'>;
+export function drawOverlayText(ctx:PaintContext,overlay:{color:string;background:'none'|'box'},layout:TextLayout,x:number,y:number):void;
 export function overlayImageBox(overlay:Placement,output:Output,image:Output):Output&{x:number;y:number};

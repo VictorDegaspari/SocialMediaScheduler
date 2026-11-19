@@ -60,6 +60,11 @@ try{
   await page.waitForFunction(value=>document.querySelector('.cuts-overlay-item>span:nth-child(2)').textContent.startsWith(value),literal.slice(0,4)+'X'+literal.slice(4));
   assert.equal(await page.locator('#cut-overlay-list img').count(),0,'overlay text remains literal HTML');
   await text.fill('Texto fixo 100%');
+  const alignment=page.getByLabel('Alinhamento do texto',{exact:true});
+  assert.equal(await alignment.inputValue(),'left');
+  await alignment.selectOption('center');
+  await alignment.selectOption('right');
+  await alignment.selectOption('justify');
   await page.getByRole('tab',{name:'Posição e tamanho',exact:true}).click();
   await page.getByRole('tab',{name:'Posição e tamanho',exact:true}).press('End');
   await page.getByRole('checkbox',{name:'Durante todo o vídeo',exact:true}).uncheck();
@@ -81,7 +86,7 @@ try{
   assert(Number(await page.locator('#cut-overlay-x').inputValue())>50,'drag changes horizontal position');
   await seek(1.8);assert.equal(await green(),0,'image disappears in the live preview');
   await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();await page.waitForFunction(()=>window.saved);
-  const saved=await page.evaluate(()=>window.saved);assert.equal(saved.overlays.length,2);assert.equal(saved.overlays[0].text,'Texto fixo 100%');assert.equal(saved.overlays[0].end,null);assert.equal(saved.overlays[1].start,.5);assert.equal(saved.overlays[1].end,1.5);assert(saved.overlays[1].x>.5);assert.equal(saved.start,1);assert.deepEqual(saved.excludedRanges,[{start:3,end:4}]);
+  const saved=await page.evaluate(()=>window.saved);assert.equal(saved.overlays.length,2);assert.equal(saved.overlays[0].text,'Texto fixo 100%');assert.equal(saved.overlays[0].alignment,'justify');assert.equal(saved.overlays[0].end,null);assert.equal(saved.overlays[1].start,.5);assert.equal(saved.overlays[1].end,1.5);assert(saved.overlays[1].x>.5);assert.equal(saved.start,1);assert.deepEqual(saved.excludedRanges,[{start:3,end:4}]);
   await page.evaluate(overlays=>window.reopen(overlays),saved.overlays);await page.waitForFunction(()=>document.querySelector('#cut-phone-canvas').dataset.seeking==='false');
   await revealEditorControl(page,'#cut-overlay-text');
   assert.deepEqual(await page.evaluate(()=>window.editor.read().overlays),saved.overlays,'reopening preserves the complete overlay payload');
@@ -90,12 +95,64 @@ try{
   const error=await page.evaluate(()=>{try{window.editor.read();return null;}catch(e){return e.message;}});assert.match(error,/duração final/);
   await page.getByRole('checkbox',{name:'Durante todo o vídeo',exact:true}).check();await seek(4.5);assert(await green()>1000,'a fixed image remains visible after the removed interval');
   await page.getByRole('button',{name:'Remover elemento',exact:true}).click();assert.equal(await page.locator('.cuts-overlay-item').count(),1);
+  const [chooser]=await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button',{name:'Adicionar marca-d’água',exact:true}).click()
+  ]);
+  await chooser.setFiles({name:'logo.png',mimeType:'image/png',buffer:png});
+  await page.getByText('Marca-d’água adicionada. Ajuste a posição e a opacidade.',{exact:true}).waitFor();
+  await revealEditorControl(page,'#cut-overlay-opacity');
+  const opacity=page.getByLabel(/Opacidade/);
+  const logoGreen=()=>canvas.evaluate(element=>element.getContext('2d').getImageData(Math.floor(element.width*.87),Math.floor(element.height*.055),1,1).data[1]);
+  assert.equal(await opacity.inputValue(),'65');
+  await page.waitForFunction(()=>{const c=document.querySelector('#cut-phone-canvas');return c.getContext('2d').getImageData(Math.floor(c.width*.87),Math.floor(c.height*.055),1,1).data[1]>100;});
+  assert(await logoGreen()<200,'watermark starts semi-transparent in the top right');
+  await range('#cut-overlay-opacity',100);
+  assert(await logoGreen()>230,'an opaque upload stays opaque at 100%');
+  await range('#cut-overlay-opacity',0);
+  assert(await logoGreen()<20,'0% hides the logo in the live preview');
+  const brand=await page.evaluate(()=>window.editor.read().overlays.at(-1));
+  assert(brand.watermark&&brand.end===null&&brand.x>.9&&brand.y<.05);
+  assert.equal(brand.opacity,0);
+  await page.getByRole('button',{name:'Remover elemento',exact:true}).click();
   holdUpload=true;await page.locator('#cut-overlay-file').setInputFiles({name:'imagem.png',mimeType:'image/png',buffer:png});await page.waitForFunction(()=>document.querySelector('#cut-overlay-status').textContent==='Enviando imagem…');
   assert.match(await page.evaluate(()=>{try{window.editor.read();return '';}catch(e){return e.message;}}),/Aguarde o envio/);
   while(!releaseUpload)await new Promise(resolve=>setTimeout(resolve,20));releaseUpload();await page.getByText('Imagem adicionada. Ajuste a posição e a duração.',{exact:true}).waitFor();
+  holdUpload=false;
   for(const width of [1440,390,320]){await page.setViewportSize({width,height:1000});assert(await page.locator('#cuts-dialog-form').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'overlay controls overflow at '+width);}
   await page.setViewportSize({width:1440,height:1100});await seek(.8);await page.locator('#cut-overlays').scrollIntoViewIfNeeded();await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/cuts-overlays-desktop.png'});
+
+  await page.setViewportSize({width:390,height:844});
+  await page.evaluate(image=>window.reopen([{...image,start:0,end:null,y:.24}]),saved.overlays[1]);
+  await page.waitForFunction(()=>document.querySelector('#cut-phone-canvas').dataset.seeking==='false');
+  await page.waitForFunction(()=>{const c=document.querySelector('#cut-phone-canvas');return c.getContext('2d').getImageData(c.width/2,c.height*.28,1,1).data[1]>150;});
+  await seek(5);
+  assert(await green()>1000,'overlays that last the entire cut remain visible at the preview endpoint');
+  await revealEditorControl(page,'#cut-overlays');
+  await page.getByRole('button',{name:'Adicionar texto',exact:true}).click();
+  const previewInView=()=>canvas.evaluate(element=>{
+    const rect=element.getBoundingClientRect();
+    return document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)===element;
+  });
+  const textInk=()=>canvas.evaluate(element=>{
+    const data=element.getContext('2d').getImageData(0,0,element.width,Math.floor(element.height*.2)).data;
+    let count=0;
+    for(let i=0;i<data.length;i+=4)if(data[i]>235&&data[i+1]>235&&data[i+2]>235)count++;
+    return count;
+  });
+  assert(await previewInView(),'adding text on a narrow screen shows the phone preview');
+  assert(await textInk()>100&&await green()>1000,'new text and the existing image share the same terminal preview frame');
+
+  await page.locator('#cut-source-player').evaluate(video=>{video.currentTime=3.5;});
+  await page.waitForFunction(()=>{const c=document.querySelector('#cut-phone-canvas');return c.dataset.seeking==='false'&&c.dataset.sourceTime==='3.5';});
+  await page.locator('#cut-watermark-file').setInputFiles({name:'logo.png',mimeType:'image/png',buffer:png});
+  await page.getByText('Marca-d’água adicionada. Ajuste a posição e a opacidade.',{exact:true}).waitFor();
+  await page.waitForFunction(()=>{const c=document.querySelector('#cut-phone-canvas');return c.dataset.seeking==='false'&&c.dataset.sourceTime==='4';});
+  assert(await previewInView(),'adding a watermark on a narrow screen shows the phone preview');
+  assert(await logoGreen()>100&&await textInk()>100&&await green()>1000,'watermark, text and existing image appear together after jumping over an exclusion');
+  assert.equal(await page.locator('#cut-phone-seek').inputValue(),'2');
+
   const count=uploads;await page.evaluate(()=>{window.editor.destroy();document.querySelector('#cuts-dialog').close();});await page.keyboard.press('Control+V');assert.equal(uploads,count,'closed editors do not capture clipboard images');
-  assert.deepEqual(errors,[]);console.log('Textos e imagens: Ctrl+V real, arquivo, duração, montagem, arraste, exportação de dados, reabertura, remoção, uploads pendentes e telas móveis validados.');
+  assert.deepEqual(errors,[]);console.log('Textos e imagens: opacidade, duração, arraste, reabertura e elementos visíveis na prévia móvel nos limites do corte.');
 }catch(error){console.error({uploads,errors,status:await page.locator('#cut-overlay-status').textContent()});throw error;}
 finally{releaseUpload?.();await browser.close();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}

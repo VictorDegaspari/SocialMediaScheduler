@@ -27,6 +27,7 @@
     "tiktok:browser": "node --env-file-if-exists=.env --import tsx scripts/tiktok-browser.mjs"
   },
   "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
     "bullmq": "^6.7.6",
     "express": "^5.1.0",
     "google-auth-library": "^11.3.4",

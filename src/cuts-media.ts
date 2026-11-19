@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { AppError, dataDir } from './config.js';
+import {MAX_CUT_SOURCE_SECONDS as MAX_SOURCE_SECONDS, type CutSourceRange} from './cuts-source-limits.js';
+import {cutSourceRangeSchema} from './cuts-source-range.js';
 import { validateVideo } from './media.js';
 import { captionStyleSchema, framingOptionsSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
 import {cutFramingFilters} from './cuts-framing.js';
@@ -12,7 +14,6 @@ export type Cue = { start:number; end:number; text:string; words?:{start:number;
 export type Highlight = { start:number; end:number; title:string; reason:string; score:number };
 export type SourceInfo = { title:string; duration:number; replay?:ReplayData };
 const MAX_SOURCE_BYTES=2*1024*1024*1024;
-const MAX_SOURCE_SECONDS=7200;
 const python=()=>process.env.CUTS_PYTHON || 'python3';
 const transcriptionScript=resolve('scripts/transcribe-cuts.py');
 
@@ -71,25 +72,42 @@ function sourceUrl(value:string) {
   return 'https://www.youtube.com/watch?v='+id;
 }
 
-export async function downloadCutSource(url:string,dir:string):Promise<SourceInfo> {
+export async function downloadCutSource(url:string,dir:string,requestedRange?:CutSourceRange):Promise<SourceInfo> {
   const canonical=sourceUrl(url);
+  const range=requestedRange?cutSourceRangeSchema.parse(requestedRange):undefined;
   await mkdir(dir,{recursive:true});
   const base=['-m','yt_dlp','--ignore-config','--no-plugin-dirs','--no-playlist','--no-warnings','--no-progress','--socket-timeout','30','--retries','2','--fragment-retries','2','--no-js-runtimes','--js-runtimes',`node:${process.execPath}`];
   try {
     const metadata=JSON.parse(await command(python(),[...base,'--dump-single-json','--skip-download','--',canonical],{cwd:dir,timeout:120_000}));
     const duration=Number(metadata.duration);
     if(metadata._type==='playlist'||metadata.entries||metadata.is_live||['is_live','is_upcoming'].includes(metadata.live_status))throw new AppError('Use um vídeo gravado. Playlists e transmissões ao vivo não são aceitas.');
-    if(!Number.isFinite(duration)||duration<=0||duration>MAX_SOURCE_SECONDS)throw new AppError('O vídeo de origem precisa ter duração conhecida de até 2 horas.');
+    if(!Number.isFinite(duration)||duration<=0)throw new AppError('Não foi possível determinar a duração do vídeo de origem.');
+    if(range&&range.end>duration)throw new AppError('O fim do trecho precisa estar dentro da duração da live.');
+    if(!range&&duration>MAX_SOURCE_SECONDS)throw new AppError('O vídeo de origem precisa ter até 2 horas. Para lives longas, escolha um trecho em Canais do YouTube.');
     // Select quality before container compatibility; remuxing keeps both streams intact.
-    await command(python(),[...base,'--match-filters','duration <= 7200 & !is_live','--max-filesize',String(MAX_SOURCE_BYTES),'--concurrent-fragments','1','--format','bv+ba/b','--merge-output-format','mp4','--remux-video','mp4','--output','source.download.%(ext)s','--',canonical],{cwd:dir,timeout:45*60_000,maxDirBytes:MAX_SOURCE_BYTES});
+    const downloadArgs=['--concurrent-fragments','1','--format','bv+ba/b','--merge-output-format','mp4'];
+    // An MP4 edit list hides the keyframe preroll without re-encoding the source streams.
+    const sectionArgs=range?['--download-sections',`*${range.start}-${range.end}`,
+      '--downloader-args','ffmpeg_o:-f mp4 -avoid_negative_ts disabled -use_editlist 1',
+      '--output','source.download.mp4']:['--max-filesize',String(MAX_SOURCE_BYTES),'--match-filters',`duration <= ${MAX_SOURCE_SECONDS} & !is_live`,
+      '--remux-video','mp4','--output','source.download.%(ext)s'];
+    await command(python(),[...base,...downloadArgs,...sectionArgs,'--',canonical],{cwd:dir,timeout:45*60_000,maxDirBytes:MAX_SOURCE_BYTES});
     const downloaded=join(dir,'source.download.mp4');
     if((await stat(downloaded)).size>MAX_SOURCE_BYTES)throw new AppError('O vídeo excedeu o limite de download de 2 GiB.');
-    const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type','-of','json',downloaded],{timeout:30_000}));
+    const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration,start_time:stream=codec_type,start_time','-of','json',downloaded],{timeout:30_000}));
     const actualDuration=Number(probe.format?.duration);
     if(!Number.isFinite(actualDuration)||actualDuration<=0||actualDuration>MAX_SOURCE_SECONDS)throw new AppError('O vídeo baixado precisa ter até 2 horas.');
     if(!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='video')||!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio'))throw new AppError('O vídeo de origem precisa conter imagem e áudio.');
+    const selectedDuration=range?range.end-range.start:actualDuration;
+    if(range&&(Math.abs(actualDuration-selectedDuration)>.5||!Number.isFinite(Number(probe.format.start_time))||
+      Math.abs(Number(probe.format.start_time))>.05||
+      probe.streams.some((stream:{codec_type:string;start_time:string})=>['video','audio'].includes(stream.codec_type)&&
+        (!Number.isFinite(Number(stream.start_time))||Math.abs(Number(stream.start_time))>.15)))) {
+      throw new AppError('O YouTube não entregou o trecho com os tempos esperados. Selecione outro intervalo e tente novamente.');
+    }
     await rename(downloaded,join(dir,'source.mp4'));
-    return {title:String(metadata.title||'Vídeo do YouTube').slice(0,500),duration:actualDuration,replay:replayFromMetadata(metadata,actualDuration)};
+    const usableDuration=Math.min(selectedDuration,actualDuration);
+    return {title:String(metadata.title||'Vídeo do YouTube').slice(0,500),duration:usableDuration,replay:replayFromMetadata(metadata,usableDuration,range?.start)};
   }catch(error){
     if(error instanceof AppError)throw error;
     throw new AppError('Não foi possível baixar este vídeo. Confira o link e o acesso público. Se o YouTube pedir login ou bloquear o acesso, atualize o yt-dlp ou use outro vídeo.');

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,readFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {resolve,extname} from 'node:path';
+import {generateEditorial} from '../src/editorial.ts';
 const id='11111111-1111-4111-8111-111111111111',requestId='22222222-2222-4222-8222-222222222222';
 const fixture={publishing:{profiles:[{id,name:'Bíblicos',watch_id:null,youtube_id:null,tiktok_profile_id:null,source_roots:[],pack_defaults:{}}],accounts:[{id:'native:youtube:channel-one',identifier:'youtube',name:'GTA 6',disabled:false,autoPublishApproved:true},{id:'native:youtube:channel-two',identifier:'youtube',name:'Bíblicos',disabled:false,autoPublishApproved:false}],browserProfiles:[{id:'default',name:'GTA 6',profileSaved:true}],agentOnline:true,googleConnected:false,requests:[],actions:[]},browser:{},
   scheduler:{paused:false,queue:{}},watches:[],stats:{pending:0,sent:0,attention:0},videos:[],events:[],connections:{playwrightMcp:{configured:true,source:'input'},local:{rootPath:'/videos'},google:{},postiz:{},native:{engine:'local',youtube:{configured:true},tiktok:{}}}};
@@ -28,6 +29,7 @@ await page.addInitScript(()=>{
 });
 await page.route('**/api/**',async route=>{
   const request=route.request(),path=new URL(request.url()).pathname;if(path==='/api/state')return route.fulfill({json:fixture});
+  if(path==='/api/assistant/metadata/preview'){assert.equal(request.headers()['x-watcher-request'],'1');const {useAI,...input}=request.postDataJSON();assert.equal(useAI,false);return route.fulfill({json:generateEditorial(input)});}
   const body=request.postDataJSON();calls.push({path,body});assert.equal(request.headers()['x-watcher-request'],'1');
   if(path==='/api/assistant/requests'){if(failRequest){failRequest=false;return route.fulfill({status:503,json:{error:'Falha simulada ao criar pedido.'}});}fixture.publishing.requests.push({id:requestId,profile_name:'Bíblicos',provider:'youtube',status:'active',quantity:body.quantity,confirmed:0,reserved:0,waiting:body.quantity,config:{cadence:{times:body.times,timezone:body.timezone}},created_at:'2026-11-16T12:00:00Z'});return route.fulfill({status:202,json:{requests:[{id:requestId,provider:'youtube'}]}});}
   if(path==='/api/assistant/requests/'+requestId+'/cancel')fixture.publishing.requests[0].status='cancelled';
@@ -99,10 +101,18 @@ try {
   await page.getByLabel('Origem do perfil').selectOption('local');assert(await page.getByLabel('Pasta local',{exact:true}).isVisible());
   await page.getByLabel('Origem do perfil').selectOption('gta6_pack');
   assert.equal(await page.getByRole('checkbox',{name:'YouTube: conteúdo realista alterado ou sintético',exact:false}).isChecked(),false,'declaração do YouTube inicia desmarcada');
+  await page.getByText('Títulos, descrição e hashtags',{exact:true}).click();
+  await page.getByLabel('Tema do perfil',{exact:true}).fill('Mensagens de fé');await page.getByLabel('Palavras-chave do perfil',{exact:true}).fill('fé, esperança');
+  await page.getByText('Testar títulos, descrições e tags',{exact:true}).click();await page.getByLabel('Nome ou título de um vídeo de exemplo',{exact:true}).fill('Uma mensagem de esperança');
+  await page.getByLabel('Resumo ou transcrição do vídeo de exemplo',{exact:true}).fill('A esperança ajuda a enfrentar os momentos difíceis. Esta mensagem fala sobre fé e esperança.');
+  const beforePreview=calls.length;await page.getByRole('button',{name:'Gerar exemplo para YouTube e TikTok',exact:true}).click();
+  await page.locator('.editorial-settings').getByRole('heading',{name:/TikTok ·/}).waitFor();assert.equal(calls.length,beforePreview,'text previews do not publish, authorize or create requests');
+  await page.getByText('Prompt pronto para usar com IA',{exact:true}).click();assert((await page.getByLabel('Prompt para IA',{exact:true}).inputValue()).includes('Responda somente JSON'));
   await page.getByRole('button',{name:'Salvar perfil',exact:true}).click();await page.getByRole('heading',{name:'Outro canal',exact:true}).waitFor();
   assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.sourceType,'gta6_pack');
   assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.packDefaults.youtubeContainsSyntheticMedia,false);
   assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.packDefaults.madeWithAI,true);
+  assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.packDefaults.editorial.topic,'Mensagens de fé');assert.equal(calls.find(c=>c.path==='/api/assistant/profiles').body.packDefaults.editorial.ai,false);
   await page.getByRole('tab',{name:'Contas',exact:true}).click();
   await page.getByText('Adicionar conta TikTok',{exact:true}).click();await page.getByLabel('Nome de outra conta TikTok').fill('Bíblicos');await page.getByRole('button',{name:'Adicionar perfil TikTok',exact:true}).click();await page.locator('.requests-account').filter({hasText:'Bíblicos'}).getByText('Login necessário',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Abrir login',exact:true}).last().click();assert(calls.at(-1).path.endsWith('/login'));
@@ -110,7 +120,7 @@ try {
   await page.keyboard.press('ArrowRight');assert.equal(await page.getByRole('tab',{name:/^Perfis/}).getAttribute('aria-selected'),'true');
   await page.getByRole('button',{name:'Editar perfil Bíblicos',exact:true}).click();await page.getByLabel('Nome do perfil',{exact:true}).fill('Rascunho');
   await page.getByLabel('Origem do perfil').selectOption('google_drive');await page.getByLabel('Pastas do Drive (uma por linha)').fill('https://drive.google.com/drive/folders/rascunho');
-  await page.getByText('Títulos, descrição e hashtags',{exact:true}).click();await page.getByLabel('Descrição padrão').fill('Descrição <b>literal</b>');
+  if(!await page.getByLabel('Descrição padrão').isVisible())await page.getByText('Títulos, descrição e hashtags',{exact:true}).click();await page.getByLabel('Descrição padrão').fill('Descrição <b>literal</b>');
   await page.getByLabel('Canal YouTube',{exact:true}).selectOption('native:youtube:channel-one');
   const removedAccount=fixture.publishing.accounts.shift();
   await page.getByRole('tab',{name:'Pedidos',exact:true}).click();await pollRequests();

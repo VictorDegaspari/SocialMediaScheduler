@@ -7,7 +7,7 @@ import {updateYoutubeTitle} from './native-api.js';
 
 export function genericVideoTitle(title:string) {
   const normalized=title.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().replace(/\.mp4$/i,'');
-  return /^(?:.*[\s—–:_-])?(?:video|clip|short|arquivo|file)[\s#_-]*\d+$/i.test(normalized)||/^\d{1,6}$/.test(normalized);
+  return /^(?:video|clip|short|arquivo|file)$/i.test(normalized)||/^(?:.*[\s—–:_-])?(?:video|clip|short|arquivo|file)[\s#_-]*\d+$/i.test(normalized)||/^\d{1,6}$/.test(normalized);
 }
 const titleSchema=z.string().trim().min(5).max(100).refine(title=>!genericVideoTitle(title),'Descreva o assunto do vídeo; números de arquivo não são títulos.');
 const reviewsSchema=z.object({reviews:z.array(z.object({videoId:z.string().uuid(),title:titleSchema,sha256:z.string().regex(/^[a-f0-9]{64}$/),evidence:z.string().trim().min(10).max(2000)}).strict()).min(1).max(100)}).strict();

@@ -14,12 +14,6 @@ export function nativeScheduleModel(value={},prefix='native') {
   };
 }
 
-export function nativeScheduleFields(value={},esc,prefix='native') {
-  const model=nativeScheduleModel(value,prefix);
-  const number=field=>`<div class="form-field"><label for="${prefix}-${field.name}">${field.label}</label><input id="${prefix}-${field.name}" name="${field.name}" type="number" min="${field.min}" max="${field.max}" value="${esc(field.value)}" required>${field.hint?`<small>${field.hint}</small>`:''}</div>`;
-  return `<div class="notice">${model.notice}</div>${model.groups.map(group=>group.length>1?`<div class="field-row">${group.map(number).join('')}</div>`:group.map(number).join('')).join('')}
-    <div class="field-row">${model.dates.map(field=>`<div class="form-field"><label for="${prefix}-${field.name}">${field.label}</label><input id="${prefix}-${field.name}" name="${field.name}" type="datetime-local" value="${esc(field.value)}"></div>`).join('')}</div><p class="tip">${model.tip}</p>`;
-}
 export function readNativeSchedule(form) {
   const f=new FormData(form),result={};
   for(const name of ['maxScheduled','uploadsPer24h','postsPerDay','horizonDays','externalScheduled'])result[name]=Number(f.get(name));

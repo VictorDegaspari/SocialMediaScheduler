@@ -1,0 +1,101 @@
+.youtube-follow-form,
+.youtube-channel-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-12) var(--space-20);
+  padding: var(--space-20);
+}
+
+.youtube-follow-form {
+  align-items: flex-end;
+}
+
+.youtube-follow-form .form-field,
+.youtube-channel-info {
+  flex: 1 1 260px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.youtube-channels-list {
+  display: grid;
+  gap: var(--space-12);
+  margin: var(--space-20) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.youtube-channel-card {
+  align-items: center;
+}
+
+.youtube-channel-info a:hover {
+  text-decoration: underline;
+}
+
+.youtube-channel-info p {
+  margin-top: var(--space-4);
+}
+
+.youtube-channel-info small,
+.youtube-channel-checked {
+  color: var(--muted);
+}
+
+.youtube-channel-details {
+  flex-basis: 100%;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-12);
+}
+
+.youtube-channel-details summary {
+  color: var(--green);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.youtube-video-list {
+  margin: var(--space-8) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.youtube-video-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-12) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.youtube-channel-empty {
+  margin: var(--space-12) 0;
+}
+
+.youtube-channel-checked {
+  display: block;
+}
+
+.youtube-live-badge {
+  margin-inline-start: var(--space-8);
+}
+
+.youtube-cut-limit {
+  display: block;
+  margin-top: var(--space-4);
+}
+
+.youtube-range-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  padding: 0;
+  list-style: none;
+}
+
+.youtube-channels-error {
+  margin: var(--space-12) 0;
+}

@@ -17,6 +17,6 @@ defineProps<RequestsSnapshot>();
     <div class="requests-main"><RequestOrders :publishing="state.publishing" :pagination="pagination" :date="date" /></div>
     <RequestCompose :profiles="state.publishing.profiles" :tiktok-ready="Boolean(state.connections.playwrightMcp?.configured)" :revision="revisions.request" :schedule="schedule" />
   </div></section>
-  <section id="requests-view-profiles" role="tabpanel" aria-labelledby="requests-tab-profiles" :hidden="view !== 'profiles'"><RequestProfiles :state="state" :editing="editing" :revision="revisions.profile" /></section>
+  <section id="requests-view-profiles" role="tabpanel" aria-labelledby="requests-tab-profiles" :hidden="view !== 'profiles'"><RequestProfiles :state="state" :editing="editing" :revision="revisions.profile" :api="api" /></section>
   <section id="requests-view-accounts" role="tabpanel" aria-labelledby="requests-tab-accounts" :hidden="view !== 'accounts'"><RequestAccounts :state="state" :revision="revisions.browser" /></section>
 </template>

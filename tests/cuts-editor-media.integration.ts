@@ -45,7 +45,41 @@ test('text and transparent images are encoded together and timed on the final ed
   const timed=cutOverlaysSchema.parse([{...overlays[0],start:2,end:3}]);
   const edited=await render({start:0,end:6,captions:[{start:.2,end:1,text:'Teste'}],framing:'fit',captionStyle:style({enabled:false}),excludedRanges:[{start:2,end:4}],overlays:timed});
   assert.equal(pixels(frame(edited.path,1.5),magenta),0);assert(pixels(frame(edited.path,2.5),magenta)>100,'timing follows the output after removing the middle');assert.equal(pixels(frame(edited.path,3.5),magenta),0);
-  assert(!(await readdir(dir)).some(name=>name.includes('.overlay-')&&name.endsWith('.txt')),'rendering text files are cleaned up');
+  assert(!(await readdir(dir)).some(name=>name.includes('.overlay-')),'rendering text files are cleaned up');
+});
+
+test('export respects text alignment and multiplies watermark opacity by the original alpha',async()=>{
+  const bytes=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=lime:s=80x40,format=rgba,colorchannelmixer=aa=0.8','-frames:v','1','-threads','1','-c:v','png','-f','image2pipe','-']);
+  const image=await saveOverlayImage(dir,bytes);
+  const overlays=cutOverlaysSchema.parse([
+    ...['left','center','right','justify'].map((alignment,index)=>({
+      id:randomUUID(),type:'text',text:alignment==='justify'?'Um dois três quatro cinco seis sete.\nFim.':'TEXTO',
+      alignment,start:index*.4,end:(index+1)*.4,fontSize:48,color:'#FF00FF',x:.5,y:.18,width:.5
+    })),
+    ...[.5,1,0].map((opacity,index)=>({
+      id:randomUUID(),type:'image',imageId:image.id,watermark:true,opacity,start:index*.4,end:(index+1)*.4,width:.18,x:.92,y:.026
+    }))
+  ]);
+  const {path}=await render({...basic,captionStyle:style({enabled:false}),overlays});
+  function textBounds(at:number){
+    const image=frame(path,at,'crop=720:260:0:150');
+    let left=720,right=0;
+    for(let index=0;index<image.length;index+=3){
+      if(image[index]<140||image[index+1]>100||image[index+2]<140)continue;
+      const x=index/3%720;
+      left=Math.min(left,x);right=Math.max(right,x);
+    }
+    assert(left<right,'aligned text is present on the exported frame');
+    return {left,right};
+  }
+  const left=textBounds(.2),center=textBounds(.6),right=textBounds(1),justified=textBounds(1.4);
+  assert(center.left-left.left>50&&right.left-center.left>50,'horizontal alignment repositions the text in the same box');
+  assert(justified.left<190&&justified.right>525,'the wrapped paragraph reaches both edges of the box');
+  const sample=(at:number)=>frame(path,at,'crop=2:2:602:62,scale=1:1')[1];
+  const translucent=sample(.2),full=sample(.6);
+  assert(translucent>75&&translucent<135,'50% opacity compounds with the PNG alpha');
+  assert(full>165&&full<225,'100% opacity keeps the alpha from the file');
+  assert(sample(1)<20,'0% makes the watermark invisible');
 });
 function yellowCenter(bytes:Buffer) {
   let count=0,total=0;

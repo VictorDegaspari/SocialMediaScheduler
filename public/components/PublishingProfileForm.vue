@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import {computed, onMounted, useTemplateRef} from 'vue';
 import {vRequestValue} from './request-form.js';
+import EditorialSettings from './EditorialSettings.vue';
+import type {EditorialPreviewApi} from './editorial-form.js';
 import type {RequestsState, PublishingProfile} from './request-model.js';
 
-const props = defineProps<{state: RequestsState; profile?: PublishingProfile; editing: string | null}>();
+const props = defineProps<{state: RequestsState; profile?: PublishingProfile; editing: string | null; api: EditorialPreviewApi}>();
 const publishing = computed(() => props.state.publishing);
 const defaults = computed(() => props.profile?.pack_defaults || {});
 const origin = computed(() => props.profile?.source_type || '');
@@ -30,6 +32,7 @@ onMounted(() => {if (editor.value) editor.value.open = Boolean(props.editing || 
         <div class="form-field"><label for="profile-prefix">Prefixo do título</label><input id="profile-prefix" v-request-value="{value: defaults.titlePrefix || ''}" name="titlePrefix"></div>
         <div class="form-field"><label for="profile-tags">Hashtags padrão</label><input id="profile-tags" v-request-value="{value: defaults.hashtags?.join(', ') || ''}" name="hashtags"></div>
         <div class="form-field"><label for="profile-description">Descrição padrão</label><textarea id="profile-description" v-request-value="{value: defaults.description || ''}" name="description" maxlength="2000"></textarea></div>
+        <EditorialSettings :value="defaults.editorial" :api="api" />
       </div></details>
       <fieldset class="requests-declarations"><legend>Declarações do conteúdo</legend>
         <label class="checkbox"><input v-request-value="{value: defaults.youtubeContainsSyntheticMedia === true}" name="youtubeSynthetic" type="checkbox"><span>YouTube: conteúdo realista alterado ou sintético</span></label>

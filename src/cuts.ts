@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import {cutEditorial} from './editorial.js';
 import {isDeepStrictEqual} from 'node:util';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +11,8 @@ import { pool } from './db.js';
 import { publisherEngine } from './native-auth.js';
 import { cutDestinations,cutPublishSchema,publishCut } from './cut-publications.js';
 import { cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue } from './cuts-media.js';
+import type {CutSourceRange} from './cuts-source-limits.js';
+import {cutSourceRangeSchema, suggestSourceRanges} from './cuts-source-range.js';
 import { sweepCutUploadFiles } from './cuts-upload-files.js';
 import { canRemovePreparedMedia,retainedDeliveryQuery, type RetainedDelivery } from './media-cleanup.js';
 import { captionStyleSchema, framingOptionsSchema, timeRangeSchema, cutTimeline, timelineCaptions, type CaptionStyle, type FramingOptions, type TimeRange } from './cuts-edit.js';
@@ -87,7 +90,7 @@ function captionWords(cue:Cue,sources:Cue[]):Cue['words'] {
   }
 }
 
-type Job={id:string;url:string;status:string;title:string|null;duration:number|null;language:string;clip_count:number;target_seconds:number;transcript:Cue[]|null;error:string|null;replay_data:ReplayData|null;pending_analysis:{count:number;targetSeconds:number}|null};
+type Job={id:string;url:string;status:string;title:string|null;duration:number|null;language:string;clip_count:number;target_seconds:number;transcript:Cue[]|null;error:string|null;replay_data:ReplayData|null;source_range:CutSourceRange|null;pending_analysis:{count:number;targetSeconds:number}|null};
 type Clip={id:string;job_id:string;title:string;reason:string;score:number;edited_from_cut_id:string|null;start_seconds:number;end_seconds:number;captions:Cue[];framing:'fit'|'crop';status:string;revision:number;local_file:string|null;delivery_id:string|null;caption_style:CaptionStyle;framing_options:FramingOptions;excluded_ranges:TimeRange[];overlays:CutOverlay[];output_duration:number};
 type CutsMedia={download:typeof downloadCutSource;transcribe:typeof transcribeCutSource;select:typeof selectHighlights;render:typeof renderCut;dependencies:typeof cutsDependencies;replay?:typeof fetchCutHeatmap};
 
@@ -142,7 +145,7 @@ export class CutsService {
   async state(page:PageOptions=parsePagination({},{scope:'cuts',defaultLimit:10})) {
     const values:unknown[]=[];
     const [dependencies,channels,result]=await Promise.all([
-      this.dependencies(),cutDestinations(),pool.query(`SELECT j.id,j.url,j.status,j.title,j.duration,j.error,j.replay_data,j.analysis_message,j.created_at,${cursorFields('j.created_at','j.id')}
+      this.dependencies(),cutDestinations(),pool.query(`SELECT j.id,j.url,j.status,j.title,j.duration,j.error,j.replay_data,j.source_range,j.analysis_message,j.created_at,${cursorFields('j.created_at','j.id')}
         FROM cut_jobs j WHERE j.status<>'discarded'${page.scope==='cutFolders'?" AND EXISTS(SELECT 1 FROM cuts c WHERE c.job_id=j.id AND c.local_file IS NOT NULL AND c.status IN ('review','publishing','posted','failed'))":''}${keysetClause(page,'j.created_at','j.id',values)}
         ORDER BY j.created_at DESC,j.id DESC${pageLimit(page,values)}`,values)
     ]);
@@ -155,11 +158,18 @@ export class CutsService {
     const sources=new Map(await Promise.all(jobs.map(async job=>[job.id,await exists(join(cutDirectory(job.id),'source.mp4'))] as const)));
     const mapped=await Promise.all(clips.rows.map(async c=>{
       const {local_file:localFile,...rest}=c;
-      return {...rest,overlays:cutOverlaysSchema.parse(c.overlays||[]),publications:publications.filter(delivery=>delivery.video_id===c.id),caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
+      return {...rest,publicationText:cutEditorial(c),overlays:cutOverlaysSchema.parse(c.overlays||[]),publications:publications.filter(delivery=>delivery.video_id===c.id),caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
         output_duration:c.output_duration??c.end_seconds-c.start_seconds,error:c.error||c.delivery_error,hasMedia:!!localFile&&await exists(join(cutDirectory(c.job_id),c.id+'.mp4')),
         release_url:c.release_url||(c.post_id?'https://www.youtube.com/watch?v='+encodeURIComponent(c.post_id):null)};
     }));
     return {dependencies,channels,jobs:jobs.map(j=>({...j,hasSource:sources.get(j.id),clips:mapped.filter(c=>c.job_id===j.id)})),pagination};
+  }
+  async replayWindows(url:string,duration:number) {
+    const replay=await this.media.replay?.(url);
+    return {
+      ranges:replay?suggestSourceRanges(replay,duration):[],
+      status:replay?.status||'unavailable',
+    };
   }
   start() {
     const wake=()=>{void this.tick().catch(()=>logger.error({event:'cuts_tick_failed'},'O gerador de cortes será reavaliado no próximo ciclo.'));};
@@ -202,19 +212,22 @@ export class CutsService {
       await mkdir(dir,{recursive:true});
       if(!job.title||!await exists(join(dir,'source.mp4'))) {
         await this.stage(job.id,'downloading');
-        const source=await this.media.download(job.url,dir);job.title=source.title;job.duration=source.duration;
+        const source=await this.media.download(job.url,dir,job.source_range??undefined);job.title=source.title;job.duration=source.duration;
         job.replay_data=source.replay||null;
         await pool.query('UPDATE cut_jobs SET title=$2,duration=$3,replay_data=$4,source_removed_at=NULL WHERE id=$1',[job.id,source.title,source.duration,source.replay?JSON.stringify(source.replay):null]);
       }
       if(!job.transcript) {
-        await this.stage(job.id,'transcribing');job.transcript=await this.media.transcribe(dir,job.language);
+        await this.stage(job.id,'transcribing');
+        const transcript=await this.media.transcribe(dir,job.language);
+        job.transcript=job.source_range?clipCaptions(transcript,0,job.duration!):transcript;
         await pool.query('UPDATE cut_jobs SET transcript=$2 WHERE id=$1',[job.id,JSON.stringify(job.transcript)]);
       }
       let {rows:clips}=await pool.query<Clip>('SELECT * FROM cuts WHERE job_id=$1 ORDER BY created_at,id',[job.id]);
       if(!clips.length||job.pending_analysis) {
         await this.stage(job.id,'selecting');
         if(job.pending_analysis&&this.media.replay) {
-          const fresh=await this.media.replay(job.url);
+          const range=job.source_range?{start:job.source_range.start,end:job.source_range.start+job.duration!}:undefined;
+          const fresh=await this.media.replay(job.url,range);
           job.replay_data=fresh.status==='failed'&&job.replay_data?.status==='available'
             ?{...job.replay_data,message:'A atualização do mapa falhou. Usando o mapa de momentos mais revistos consultado anteriormente.'}:fresh;
         }
@@ -357,8 +370,12 @@ cutsRoutes.post('/api/cuts/jobs/:id/analyze',async(req,res)=>{
   });
   res.status(202).json({ok:true});
 });
+cutsRoutes.post('/api/cuts/replay-windows',async(req,res)=>{
+  const input=z.object({url:z.string().trim().max(2000),duration:z.number().min(.5).max(Number.MAX_SAFE_INTEGER/1000)}).strict().parse(req.body);
+  res.json(await service.replayWindows(youtubeVideoUrl(input.url),input.duration));
+});
 cutsRoutes.post('/api/cuts',async(req,res)=>{
-  const input=z.object({url:z.string().trim().max(2000),count:z.number().int().min(1).max(5).default(1),targetSeconds:z.number().int().min(20).max(180).default(60),language:z.enum(['pt','auto','en','es']).default('pt')}).parse(req.body);
+  const input=z.object({url:z.string().trim().max(2000),count:z.number().int().min(1).max(5).default(1),targetSeconds:z.number().int().min(20).max(180).default(60),language:z.enum(['pt','auto','en','es']).default('pt'),sourceRange:cutSourceRangeSchema.optional()}).parse(req.body);
   const url=youtubeVideoUrl(input.url);
   const dependencies=await service.dependencies();
   if(!dependencies.ready)throw new AppError('Instale as dependências do gerador: '+dependencies.details.join(' '),503);
@@ -368,7 +385,7 @@ cutsRoutes.post('/api/cuts',async(req,res)=>{
     const {rows:[count]}=await db.query(`SELECT count(*)::int AS n FROM cut_jobs j WHERE status<>'discarded'
       AND (source_removed_at IS NULL OR EXISTS(SELECT 1 FROM cuts c WHERE c.job_id=j.id AND c.local_file IS NOT NULL))`);
     if(count.n>=10)throw new AppError('Há 10 projetos com arquivos guardados no gerador. Exclua um projeto anterior para liberar espaço.',409);
-    await db.query('INSERT INTO cut_jobs(id,url,language,clip_count,target_seconds) VALUES($1,$2,$3,$4,$5)',[id,url,input.language,input.count,input.targetSeconds]);
+    await db.query('INSERT INTO cut_jobs(id,url,language,clip_count,target_seconds,source_range) VALUES($1,$2,$3,$4,$5,$6)',[id,url,input.language,input.count,input.targetSeconds,input.sourceRange??null]);
     await db.query('COMMIT');
   } catch(error) {await db.query('ROLLBACK');throw error;} finally {db.release();}
   res.status(202).json({id,status:'queued'});

@@ -3,14 +3,15 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile,writeFile,rename,rm,stat,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
+import {createCanvas} from '@napi-rs/canvas';
 import {z} from 'zod';
 import {AppError} from './config.js';
-import {overlayImageBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
+import {drawOverlayText,overlayImageBox,overlayTextBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
 
 const placement={id:z.string().uuid(),start:z.number().finite().min(0).max(180).default(0),end:z.number().finite().positive().max(180).nullable().default(null),x:z.number().finite().min(0).max(1).default(.5),y:z.number().finite().min(0).max(1).default(.1),width:z.number().finite().min(.05).max(1).default(.8)};
 export const cutOverlaySchema=z.discriminatedUnion('type',[
-  z.object({...placement,type:z.literal('text'),text:z.string().trim().min(1).max(1000).refine(t=>!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(t),'O texto contém caracteres inválidos.'),fontSize:z.number().finite().min(24).max(160).default(64),color:z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#FFFFFF'),background:z.enum(['none','box']).default('none')}),
-  z.object({...placement,type:z.literal('image'),imageId:z.string().uuid()})
+  z.object({...placement,type:z.literal('text'),text:z.string().trim().min(1).max(1000).refine(t=>!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(t),'O texto contém caracteres inválidos.'),fontSize:z.number().finite().min(24).max(160).default(64),color:z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#FFFFFF'),background:z.enum(['none','box']).default('none'),alignment:z.enum(['left','center','right','justify']).optional()}),
+  z.object({...placement,type:z.literal('image'),imageId:z.string().uuid(),opacity:z.number().finite().min(0).max(1).optional(),watermark:z.boolean().optional()})
 ]);
 export const cutOverlaysSchema=z.array(cutOverlaySchema).max(20).refine(items=>new Set(items.map(i=>i.id)).size===items.length,'Cada elemento precisa ter um identificador diferente.');
 export type CutOverlay=z.infer<typeof cutOverlaySchema>;
@@ -51,16 +52,27 @@ export async function cutOverlayFilters(dir:string,clipId:string,overlays:CutOve
   try{
     for(const [index,o] of overlays.entries()){
       const next='overlay'+index,enable=`gte(t,${o.start})*lt(t,${o.end??duration})`;
+      let position:{x:number;y:number},input:string,transform:string;
       if(o.type==='image'){
         const image=await overlayImage(dir,o.imageId),box=overlayImageBox(o,output,image);
-        args.push('-threads','1','-i',image.path);
-        graph.push(`[${imageIndex++}:v:0]format=rgba,scale=${box.width}:${box.height}:flags=lanczos[overlayimage${index}]`);
-        graph.push(`[${base}][overlayimage${index}]overlay=x=${box.x}:y=${box.y}:eof_action=repeat:enable='${enable}'[${next}]`);
+        position=box;
+        input=image.path;
+        transform=`format=rgba,scale=${box.width}:${box.height}:flags=lanczos`;
+        if(o.opacity!==undefined&&o.opacity!==1)transform+=`,colorchannelmixer=aa=${o.opacity}`;
       }else{
-        const layout=overlayTextLayout(o,output),name=`${clipId}.overlay-${index}.txt`,scale=output.height/1280;
-        temporary.push(join(dir,name));await writeFile(join(dir,name),layout.lines.join('\n'),'utf8');
-        graph.push(`[${base}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:textfile=${name}:expansion=none:fontsize=${layout.fontSize}:fontcolor=${o.color.replace('#','0x')}:borderw=${2*scale}:bordercolor=black:line_spacing=${layout.fontSize*.2}:box=${o.background==='box'?1:0}:boxcolor=black@0.65:boxborderw=${8*scale}:x=(w-text_w)*${o.x}:y=(h-text_h)*${o.y}:enable='${enable}'[${next}]`);
+        const layout=overlayTextLayout(o,output,createCanvas(1,1).getContext('2d'));
+        const box=overlayTextBox(o,output,layout),padding=Math.ceil(8*layout.scale)+2;
+        const canvas=createCanvas(box.width+2*padding,box.height+2*padding);
+        drawOverlayText(canvas.getContext('2d'),o,layout,padding,padding);
+        input=join(dir,`${clipId}.overlay-${index}.png`);
+        temporary.push(input);
+        await writeFile(input,await canvas.encode('png'));
+        position={x:box.x-padding,y:box.y-padding};
+        transform='format=rgba';
       }
+      args.push('-threads','1','-i',input);
+      graph.push(`[${imageIndex++}:v:0]${transform}[overlayimage${index}]`);
+      graph.push(`[${base}][overlayimage${index}]overlay=x=${position.x}:y=${position.y}:eof_action=repeat:enable='${enable}'[${next}]`);
       base=next;
     }
     return {args,graph,label:base,temporary};

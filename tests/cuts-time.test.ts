@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTimecode,parseTimecode } from '../public/cuts-time.js';
+import { formatSourceTimecode,formatTimecode,parseTimecode } from '../public/cuts-time.js';
+
+test('trechos podem exibir o horário da live sem alterar o relógio local do arquivo',()=>{
+  const range={start:7800,end:9600};
+  assert.equal(formatSourceTimecode(12.5,range),'02:10:12,500');
+  assert.equal(parseTimecode(formatSourceTimecode(12.5,range))-range.start,12.5);
+  assert.equal(formatSourceTimecode(12.5,null),'00:12,500');
+});
 
 test('tempo aparece em minutos e segundos com precisão de milissegundos quando necessária',()=>{
   assert.equal(formatTimecode(0),'00:00');

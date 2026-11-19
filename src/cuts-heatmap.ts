@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { AppError } from './config.js';
+import type {CutSourceRange} from './cuts-source-limits.js';
 
 export type ReplayPoint={start:number;end:number;value:number};
 export type ReplayData={
@@ -9,7 +10,7 @@ export type ReplayData={
 
 /** yt-dlp exposes YouTube's normalized interest curve, not clicks or view counts. */
 export function normalizeHeatmap(raw:unknown,duration:number):ReplayPoint[] {
-  if(!Array.isArray(raw)||!Number.isFinite(duration)||duration<=0||duration>7200)return [];
+  if(!Array.isArray(raw)||!Number.isFinite(duration)||duration<=0)return [];
   const points:ReplayPoint[]=[];
   for(const item of raw.slice(0,2000)) {
     if(!item||typeof item!=='object')continue;
@@ -28,9 +29,11 @@ export function normalizeHeatmap(raw:unknown,duration:number):ReplayPoint[] {
   return disjoint.some(p=>p.value>0)?disjoint:[];
 }
 
-export function replayFromMetadata(metadata:unknown,duration?:number):ReplayData {
+export function replayFromMetadata(metadata:unknown,duration?:number,sourceStart=0):ReplayData {
   const info=metadata&&typeof metadata==='object'?metadata as Record<string,unknown>:{};
-  const points=normalizeHeatmap(info.heatmap,duration??Number(info.duration));
+  const points=normalizeHeatmap(info.heatmap,sourceStart+(duration??Number(info.duration)))
+    .filter(point=>point.end>sourceStart)
+    .map(point=>({...point,start:Math.max(0,point.start-sourceStart),end:point.end-sourceStart}));
   return {status:points.length?'available':'unavailable',source:'youtube_most_replayed',points,
     message:points.length?'Mapa público de momentos mais repetidos disponível. Os valores indicam interesse relativo, sem contagem de cliques.':'O YouTube não disponibilizou o mapa público de momentos mais repetidos deste vídeo. As sugestões usam a fala e os limites de frases.'};
 }
@@ -74,9 +77,9 @@ async function metadataJson(url:string):Promise<unknown> {
   });
 }
 
-export async function fetchCutHeatmap(url:string):Promise<ReplayData> {
+export async function fetchCutHeatmap(url:string,range?:CutSourceRange):Promise<ReplayData> {
   const canonical=canonicalVideoUrl(url);
-  try {return replayFromMetadata(await metadataJson(canonical));}
+  try {return replayFromMetadata(await metadataJson(canonical),range?range.end-range.start:undefined,range?.start);}
   catch {return {status:'failed',source:'youtube_most_replayed',points:[],message:'Não foi possível consultar os momentos mais repetidos agora. O vídeo e as edições foram preservados; tente atualizar o mapa novamente.'};}
 }
 

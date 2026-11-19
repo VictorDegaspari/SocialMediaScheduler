@@ -14,6 +14,8 @@ import { nativeChannels,publisherEngine } from './native-auth.js';
 import { nativeScheduleSchema,planNativeDate,validScheduleDate,uploadBudgetAvailable,reservedCapacityAllowed,type Reservation } from './native-schedule.js';
 import { uploadYoutube,uploadTiktok,youtubeStatus,tiktokStatus,type UploadSession } from './native-api.js';
 import {genericVideoTitle,titleReview} from './video-titles.js';
+import {publicationMetadata} from './editorial-ai.js';
+import {editorialFromDefaults} from './editorial-config.js';
 import {cleanupPublishedMedia} from './media-cleanup.js';
 
 const MAX_BYTES=1024*1024*1024;
@@ -118,8 +120,12 @@ export class LocalPublisher {
         if((await stat(cleaned)).size>MAX_BYTES)throw new AppError('O vídeo após a limpeza excede o limite de 1 GiB.');
       }
       const assetHash=reused?.assetSha256||(!stripMetadata?hash:await sha256(asset));
+      const editorialByPlatform=new Map<string,Metadata>();
       for(const channel of targets) {
         if(!channel)continue;
+        const platform=channel.identifier==='youtube'?'youtube':'tiktok';
+        let metadata=editorialByPlatform.get(platform);
+        if(!metadata){metadata=await publicationMetadata(meta,{options:editorialFromDefaults(watch.pack_defaults)},platform);editorialByPlatform.set(platform,metadata);}
         const id=randomUUID(),filename=id+'.native.mp4';
         const db=await pool.connect();let copied=false;
         try {
@@ -135,7 +141,7 @@ export class LocalPublisher {
           const automatic=channel.identifier==='tiktok-browser'||channel.identifier==='youtube'&&['schedule','native_schedule'].includes(watch.mode)&&await youtubeAutoApproved(channel.id);
           const {rows:[delivery]}=await db.query(`INSERT INTO deliveries(id,video_id,integration_id,provider,engine,status,payload,local_file,planned_at,approved_at,request_id)
             VALUES($1,$2,$3,$4,$11,$5,$6,$7,$9,$8,$10) ON CONFLICT(video_id,integration_id) DO NOTHING RETURNING *`,
-            [id,video.id,channel.id,channel.identifier==='tiktok-browser'?'tiktok':channel.identifier,automatic?'pending':'review',JSON.stringify({metadata:meta,channelName:channel.name,assetSha256:assetHash,stripMetadata,automatic,nativeSchedule:watch.mode==='native_schedule'}),filename,automatic?new Date():null,plannedAt,request?.id||null,channel.identifier==='tiktok-browser'?'browser':'local']);
+            [id,video.id,channel.id,channel.identifier==='tiktok-browser'?'tiktok':channel.identifier,automatic?'pending':'review',JSON.stringify({metadata,channelName:channel.name,assetSha256:assetHash,stripMetadata,automatic,nativeSchedule:watch.mode==='native_schedule'}),filename,automatic?new Date():null,plannedAt,request?.id||null,channel.identifier==='tiktok-browser'?'browser':'local']);
           if(!delivery){await db.query('COMMIT');continue;}
           await db.query('INSERT INTO content_claims(sha256,integration_id,delivery_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[hash,channel.id,id]);
           const {rows:[claim]}=await db.query('SELECT delivery_id FROM content_claims WHERE sha256=$1 AND integration_id=$2',[hash,channel.id]);

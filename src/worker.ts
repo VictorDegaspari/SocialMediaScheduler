@@ -6,6 +6,8 @@ import { pool, redis, event, getSetting, setSetting, type Watch } from './db.js'
 import { postizClient, type DriveFile, type PostizConfig } from './clients.js';
 import { sourceFor } from './sources.js';
 import { metadataSchema, buildPost, nextRun, type Metadata, type Integration } from './domain.js';
+import {completeMetadata} from './editorial.js';
+import {editorialFromDefaults} from './editorial-config.js';
 import { AppError, dataDir, errorMessage } from './config.js';
 import { sha256, validateVideo, stripVideoMetadata } from './media.js';
 import { LocalPublisher } from './local-publisher.js';
@@ -137,7 +139,7 @@ export class Worker {
         if(!parsed.success) issue='JSON inválido: '+parsed.error.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; ').slice(0,500);
         else if(parsed.data.videoFileId && parsed.data.videoFileId!==file.id) issue='O videoFileId do JSON não corresponde ao vídeo.';
         else if(!parsed.data.ready) issue='JSON marcado como ready=false.';
-        else { metadata=parsed.data;status='ready'; }
+        else { metadata=!sidecar?completeMetadata(parsed.data,{sourceTitle:file.name,titlePrefix:String(defaults.title||''),options:editorialFromDefaults(watch.pack_defaults)}):parsed.data;status='ready'; }
       }
       if(file.capabilities?.canDownload===false) {status='waiting';issue='A conta não tem permissão para baixar este vídeo.';}
       if((!Number(file.size)&&!(watch.source_type==='gta6_pack'&&file.size===undefined)) || Number(file.size)>MAX_VIDEO_BYTES) {status='waiting';issue='Tamanho inválido ou acima de 1 GiB.';}

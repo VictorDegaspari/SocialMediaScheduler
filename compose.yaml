@@ -19,6 +19,9 @@ services:
       CUTS_CPU_THREADS: ${CUTS_CPU_THREADS:-4}
       BROWSER_AGENT_TOKEN: ${BROWSER_AGENT_TOKEN:-}
       PLAYWRIGHT_MCP_EXTENSION_TOKEN: ${PLAYWRIGHT_MCP_EXTENSION_TOKEN:-}
+      TEXT_AI_BASE_URL: ${TEXT_AI_BASE_URL:-}
+      TEXT_AI_MODEL: ${TEXT_AI_MODEL:-}
+      TEXT_AI_API_KEY: ${TEXT_AI_API_KEY:-}
     volumes:
       - spool:/app/data
       - type: bind

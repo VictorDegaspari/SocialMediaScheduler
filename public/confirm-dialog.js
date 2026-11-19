@@ -1,3 +1,5 @@
+import {drawWorkspace} from './build/workspace-view.js';
+
 let dialog,pending=false,stylesReady;
 
 function getDialog(){
@@ -11,7 +13,7 @@ function getDialog(){
   dialog.setAttribute('role','alertdialog');
   dialog.setAttribute('aria-labelledby','confirm-discard-title');
   dialog.setAttribute('aria-describedby','confirm-discard-name confirm-discard-message');
-  dialog.innerHTML='<div class="confirm-discard-content"><h2 id="confirm-discard-title"></h2><p id="confirm-discard-name"></p><p id="confirm-discard-message"></p><div class="dialog-footer"><button class="button" type="button" data-confirm-cancel>Cancelar</button><button class="button danger" type="button" data-confirm-submit></button></div></div>';
+  drawWorkspace(dialog,'discardConfirmation');
   document.body.append(dialog);return dialog;
 }
 

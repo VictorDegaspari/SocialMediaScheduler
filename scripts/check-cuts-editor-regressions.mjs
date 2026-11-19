@@ -24,7 +24,8 @@ const fixtureHtml='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta
 const fixtureJs=`import {createCutEditor} from '/cuts-editor.js';
 const clip=${JSON.stringify(clip)},job=${JSON.stringify(job)};
 const params=new URL(location.href).searchParams;
-if(params.has('timeline')||params.has('edge')){Object.assign(clip,${JSON.stringify(timelineClip)});job.duration=60;}
+if(params.has('timeline')||params.has('edge')||params.has('live-range')){Object.assign(clip,${JSON.stringify(timelineClip)});job.duration=60;}
+if(params.has('live-range'))job.source_range={start:7800,end:7860};
 const sourceCaptions=params.has('edge')?[${JSON.stringify(transcriptEdges[0])},...clip.captions,${JSON.stringify(transcriptEdges[1])}]:clip.captions;
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 window.__transcriptMode=new URL(location.href).searchParams.get('transcript')||'ok';window.__transcriptCalls=0;
@@ -261,6 +262,20 @@ try{
     await assertTimes('completo.','00:01','00:01,500');
     body=(await read()).body;
     assert.deepEqual(body.captions.filter(cue=>['Prefixo','Trecho manual.','completo.'].includes(cue.text)).map(cue=>[cue.start,cue.end]),[[8,8.5],[8.5,9],[9,9.5]],'a manual edit before transcript arrival replaces only its own source interval');
+
+    await page.goto('http://127.0.0.1:'+server.address().port+'/?live-range=1');
+    await page.getByRole('heading',{name:'Editar corte para YouTube',exact:true}).waitFor();
+    await revealEditorControl(page,'#cut-edit-start');
+    assert.equal(await page.getByLabel('Começo do corte',{exact:true}).inputValue(),'02:10:10');
+    assert.equal(await page.getByLabel('Fim do corte',{exact:true}).inputValue(),'02:10:40');
+    await setWindow('02:10:10','02:10:38');
+    assert.equal(await page.getByLabel('Fim do corte',{exact:true}).inputValue(),'02:10:38','blur keeps the original time offset exactly once');
+    await remove('02:10:18','02:10:20');
+    body=(await read()).body;
+    assert(body,'a selected live window remains editable');
+    assert.equal(body.start,10);assert.equal(body.end,38);
+    assert.deepEqual(body.excludedRanges,[{start:18,end:20}]);
+    await assertTimes('depois agora.','00:09','00:11');
   }
   assert.deepEqual(errors,[]);
   console.log(diagnostic?'Scroll diagnostic captured.':'Editor: single scroll, transcript retry, phone-relative caption clocks, gaps/junctions, source payloads and draft preservation validated.');

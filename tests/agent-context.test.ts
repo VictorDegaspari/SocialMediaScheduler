@@ -88,7 +88,7 @@ test('manifesto mantém arquivos, dependências e módulos src/public cobertos',
   assert.match(commands,/test-integration\.sh tests\/pagination\.integration\.ts tests\/requests-pages\.integration\.ts/);
   assert.match(await run(['checks','sources']),/test-ui\.sh # includes QA setup\/cleanup/);
   const accountChecks=await run(['checks','accounts']);
-  assert.match(accountChecks,/test-ui\.sh.*native MP4 fixture/);assert(!accountChecks.includes('node-local.sh scripts/check-native-ui.mjs'));
+  assert.match(accountChecks,/node-local\.sh scripts\/check-native-ui\.mjs/);assert(!accountChecks.includes('test-ui.sh'));
   await assert.rejects(run(['map','unknown']),/Unknown area/);
 });
 

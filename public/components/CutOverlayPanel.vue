@@ -10,7 +10,10 @@ const props = defineProps<{
   duration: number;
 }>();
 const current = computed(() => props.layers.find(layer => layer.id === props.selected));
-const name = (layer: CutOverlay) => layer.type === 'text' ? (layer.text.trim().slice(0, 55) || 'Texto sem conteúdo') : 'Imagem';
+function name(layer: CutOverlay) {
+  if (layer.type === 'text') return layer.text.trim().slice(0, 55) || 'Texto sem conteúdo';
+  return layer.watermark ? 'Marca-d’água' : 'Imagem';
+}
 const tabs = computed(() => [
   ...(current.value?.type === 'text' ? [['cut-overlay-content', 'Texto']] : []),
   ['cut-overlay-position', 'Posição e tamanho'], ['cut-overlay-timing', 'Duração'],
@@ -33,7 +36,9 @@ function tabChanged(event: Event) {
   <div class="cuts-overlay-add">
     <button class="button small" type="button" data-cut-overlay-action="add-text">Adicionar texto</button>
     <button class="button small" type="button" data-cut-overlay-action="add-image">Adicionar imagem</button>
+    <button class="button small" type="button" data-cut-overlay-action="add-watermark">Adicionar marca-d’água</button>
     <input id="cut-overlay-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+    <input id="cut-watermark-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
   </div>
   <p class="tip">Para colar uma imagem copiada, use Ctrl+V com o editor aberto. PNG, JPEG ou WebP, até 20 MB.</p>
   <p id="cut-overlay-status" class="cuts-overlay-status" role="status">{{ message }}</p>
@@ -64,10 +69,20 @@ function tabChanged(event: Event) {
             </select>
           </div>
         </div>
+        <div class="form-field">
+          <label for="cut-overlay-alignment">Alinhamento do texto</label>
+          <select id="cut-overlay-alignment" data-overlay-field="alignment" :value="current.alignment ?? 'left'">
+            <option value="left">À esquerda</option>
+            <option value="center">Centralizado</option>
+            <option value="right">À direita</option>
+            <option value="justify">Justificado</option>
+          </select>
+        </div>
         <OverlayRange field="fontSize" label="Tamanho do texto" :min="24" :max="160" :value="current.fontSize" />
       </div>
       <div id="cut-overlay-position" role="tabpanel" aria-labelledby="cut-overlay-position-tab" tabindex="0" data-editor-panel="overlay" :hidden="active !== 'cut-overlay-position'">
       <OverlayRange field="width" :label="current.type === 'image' ? 'Tamanho da imagem' : 'Largura do texto'" :min="5" :max="100" :value="Math.round(current.width * 100)" />
+      <OverlayRange v-if="current.type === 'image'" field="opacity" label="Opacidade" :min="0" :max="100" :value="Math.round((current.opacity ?? 1) * 100)" />
       <div class="field-row">
         <OverlayRange field="x" label="Posição horizontal" :min="0" :max="100" :value="Math.round(current.x * 100)" />
         <OverlayRange field="y" label="Posição vertical" :min="0" :max="100" :value="Math.round(current.y * 100)" />

@@ -1,8 +1,20 @@
 {
   "cuts": {
     "code": [
+      "public/components/CutsPage.vue",
+      "public/components/CutJobCard.vue",
+      "public/components/CutClipCard.vue",
+      "public/components/CutClipActions.vue",
+      "public/components/CutLibrary.vue",
+      "public/components/CutPublications.vue",
+      "public/components/CutsDependencies.vue",
+      "public/components/CutPublishFields.vue",
+      "public/components/CutSourcePreparation.vue",
+      "public/components/DiscardConfirmation.vue",
       "src/cuts.ts",
       "src/cuts-media.ts",
+      "src/cuts-source-limits.ts",
+      "src/cuts-source-range.ts",
       "src/cuts-heatmap.ts",
       "src/cuts-upload-files.ts",
       "scripts/transcribe-cuts.py",
@@ -11,6 +23,7 @@
       "public/cuts-list.css",
       "src/cut-publications.ts",
       "public/cut-publish.js",
+      "public/components/CutEditorialFields.vue",
       "src/cuts-framing.ts"
     ],
     "unit": [
@@ -39,9 +52,18 @@
   },
   "editor": {
     "code": [
+      "public/components/CutEditorFields.vue",
+      "public/components/CutEditorTabs.vue",
+      "public/components/CutRangeField.vue",
+      "public/components/CutSelectField.vue",
+      "public/components/CutTimeField.vue",
+      "public/components/CutSplitFields.vue",
+      "public/components/CutSplitPane.vue",
+      "public/components/CutReplayGraph.vue",
+      "public/components/CutCaptionRows.vue",
+      "public/components/CutRemovedRanges.vue",
       "src/cuts-edit.ts",
       "public/cuts-editor.js",
-      "public/cuts-editor-view.js",
       "public/cuts-editor-tabs.js",
       "scripts/cuts-ui-tabs.mjs",
       "public/cuts-playback.js",
@@ -109,6 +131,9 @@
   },
   "publishing": {
     "code": [
+      "public/components/DeliveryReviewFields.vue",
+      "public/components/DeliveryActions.vue",
+      "public/components/TiktokPublicationFields.vue",
       "src/local-publisher.ts",
       "src/native-api.ts",
       "src/native-routes.ts",
@@ -116,6 +141,14 @@
       "src/publication-requests.ts",
       "src/request-work.ts",
       "src/video-titles.ts",
+      "src/editorial-config.ts",
+      "src/editorial.ts",
+      "src/editorial-ai.ts",
+      "src/editorial-routes.ts",
+      "public/components/editorial-form.ts",
+      "public/components/editorial-view.ts",
+      "public/components/EditorialOptionFields.vue",
+      "public/components/EditorialSettings.vue",
       "public/requests-panel.js",
       "public/components/RequestsPanel.vue",
       "public/components/RequestOrders.vue",
@@ -129,7 +162,9 @@
       "public/requests.css"
     ],
     "unit": [
-      "tests/native.test.ts"
+      "tests/native.test.ts",
+      "tests/editorial.test.ts",
+      "tests/editorial-api.test.ts"
     ],
     "integration": [
       "tests/native.integration.ts",
@@ -142,7 +177,8 @@
     "docs": [
       "docs/MOTOR-LOCAL.md",
       "docs/ASSISTENTE-E-CONTAS.md",
-      "docs/TITULOS-DOS-VIDEOS.md"
+      "docs/TITULOS-DOS-VIDEOS.md",
+      "docs/TEXTOS-AUTOMATICOS.md"
     ],
     "depends": [
       "accounts",
@@ -152,6 +188,8 @@
   },
   "browser": {
     "code": [
+      "public/components/BrowserPage.vue",
+      "public/components/ImmediateVideoDialog.vue",
       "src/browser-bridge.ts",
       "src/browser-tiktok.ts",
       "src/browser-agent-core.ts",
@@ -223,6 +261,8 @@
   },
   "sources": {
     "code": [
+      "public/components/WatchFormFields.vue",
+      "public/components/PackDefaultsFields.vue",
       "src/sources.ts",
       "src/local.ts",
       "src/clients.ts",
@@ -243,7 +283,8 @@
       "tests/worker.integration.ts"
     ],
     "ui": [
-      "scripts/check-ui.mjs"
+      "scripts/check-ui.mjs",
+      "scripts/check-folders-ui.mjs"
     ],
     "docs": [
       "docs/PACK-GTA6.md"
@@ -309,8 +350,34 @@
     ],
     "depends": []
   },
+  "youtube-channels": {
+    "code": [
+      "src/youtube-channel-lookup.ts",
+      "src/youtube-channels.ts",
+      "public/components/YoutubeChannels.vue",
+      "public/components/LiveCutRangeDialog.vue",
+      "public/components/youtube-channels-view.ts",
+      "public/youtube-channels.css"
+    ],
+    "unit": ["tests/youtube-channel-lookup.test.ts"],
+    "integration": ["tests/youtube-channels.integration.ts"],
+    "ui": ["scripts/check-youtube-channels-ui.mjs"],
+    "docs": [],
+    "depends": ["cuts", "shell"]
+  },
   "shell": {
     "code": [
+      "public/design-tokens.css",
+      "public/components/workspace-view.ts",
+      "public/components/OverviewPage.vue",
+      "public/components/HistoryPage.vue",
+      "public/components/WorkspaceActivity.vue",
+      "public/components/WorkspaceHeading.vue",
+      "public/components/WatchCards.vue",
+      "public/components/FoldersPage.vue",
+      "public/components/StatusBadge.vue",
+      "public/components/RetryDetails.vue",
+      "public/components/WorkspaceSelectOptions.vue",
       "src/server.ts",
       "src/db.ts",
       "src/config.ts",

@@ -37,11 +37,6 @@ export function paginationView(meta,scope){
   return {page:current.index+1,previousDisabled:!current.index,nextDisabled:!(meta.hasMore&&meta.nextCursor),cursor:meta.nextCursor||''};
 }
 
-export function renderPagination(meta,scope,esc){
-  const page=paginationView(meta,scope);if(!page)return '';
-  return `<nav class="pagination" aria-label="Paginação: ${esc(scope)}"><button type="button" class="button small" data-pagination-scope="${esc(scope)}" data-pagination-direction="prev" ${page.previousDisabled?'disabled':''}>← Anterior</button><span class="pagination-label" aria-live="polite">Página ${page.page}</span><button type="button" class="button small" data-pagination-scope="${esc(scope)}" data-pagination-direction="next" data-pagination-cursor="${esc(page.cursor)}" ${page.nextDisabled?'disabled':''}>Próxima →</button></nav>`;
-}
-
 export function bindPagination({refresh,toast}){
   let busy=false;
   document.addEventListener('click',async event=>{

@@ -48,6 +48,7 @@ const stages:Record<string,string> = {
   upload_unconfirmed:'O TikTok não confirmou a publicação ou o agendamento. Confira o TikTok Studio antes de repetir.',
   browser_attempt_failed:'A preparação não foi confirmada. Confira o Chrome e o histórico.',
   browser_agent_failed:'Falha na execução local. Confira Chrome, arquivos e sessão gráfica.',
+  browser_job_invalid:'A tarefa é incompatível com o agente local. Atualize e reinicie o agente antes de tentar novamente.',
   browser_no_video:'Nenhum MP4 novo e estável encontrado na pasta.'
 };
 

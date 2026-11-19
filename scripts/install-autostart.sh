@@ -28,5 +28,6 @@ WantedBy=default.target
 UNIT
 systemctl --user daemon-reload
 systemctl --user enable --now drive-watcher.service
+./scripts/start-browser-agent.sh --ensure
 echo 'Início automático configurado para o login deste usuário.'
 echo 'O Docker precisa estar disponível. Para remover: systemctl --user disable --now drive-watcher.service'

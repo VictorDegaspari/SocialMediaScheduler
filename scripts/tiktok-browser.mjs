@@ -36,7 +36,10 @@ const cadence={cadence:configuration.cadence,interval_minutes:configuration.inte
 const privateDirectory=browserProfileDirectory(args['profile-id']),profile=join(privateDirectory,'profile');
 const journal=new BrowserJournal(join(privateDirectory,'jobs'));
 const folder=resolve(args.folder||'media'),work=join(privateDirectory,'work');
-for(const directory of [privateDirectory,profile,folder,work]){await mkdir(directory,{recursive:true,mode:0o700});}
+// Login and prepared/remote media do not depend on a local source folder.
+const directories=[privateDirectory,profile,work];
+if(!args.login&&!args.status&&!args['prepared-file']&&args.source!=='gta6_pack')directories.push(folder);
+for(const directory of directories){await mkdir(directory,{recursive:true,mode:0o700});}
 await chmod(privateDirectory,0o700);
 await journal.init();
 if(args.status){for(const job of await journal.list())console.log(JSON.stringify(browserJobLabel(job)));process.exit(0);}

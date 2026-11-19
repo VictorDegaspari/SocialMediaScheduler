@@ -115,12 +115,34 @@ try{
   await page.getByLabel('Origem dos vídeos do TikTok').selectOption('gta6_pack');
   await page.getByLabel('Prefixo do título').fill('Meu GTA 6');
   assert.equal(await page.getByRole('checkbox',{name:'YouTube: conteúdo realista alterado ou sintético',exact:false}).isChecked(),false,'declaração do YouTube inicia desmarcada');
+  const editorial=page.locator('#browser-pack-fields [data-pack-editorial]');
+  const editorialSummary=editorial.getByText('Geração automática de textos',{exact:true});
+  await editorialSummary.click();
+  const topic=editorial.getByLabel('Tema do conteúdo');
+  const enabled=editorial.getByRole('checkbox',{name:'Completar descrições, hashtags e tags sem IA'});
+  const ai=editorial.getByRole('checkbox',{name:/^Usar IA opcional/});
+  assert.equal(await topic.getAttribute('id'),'browser-editorial-topic');
+  assert.equal(await enabled.isChecked(),true);
+  assert.equal(await ai.isChecked(),false);
+  await topic.fill('Clipes de GTA 6');
+  await editorial.getByLabel('Palavras-chave',{exact:true}).fill('GTA 6, corridas');
+  await editorial.getByLabel('Contexto editorial',{exact:true}).fill('Use o contexto das legendas.');
+  await enabled.uncheck();
+  await ai.check();
   await page.getByRole('button',{name:'Salvar rotina do navegador',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#browser-source')?.value==='gta6_pack'&&!document.querySelector('#browser-config-form [type="submit"]').disabled);
   assert.equal(actions.at(-1).body.sourceType,'gta6_pack');
   assert.equal(actions.at(-1).body.packDefaults.titlePrefix,'Meu GTA 6');
   assert.equal(actions.at(-1).body.packDefaults.madeWithAI,true);
   assert.equal(actions.at(-1).body.packDefaults.youtubeContainsSyntheticMedia,false);
+  assert.deepEqual(actions.at(-1).body.packDefaults.editorial,{
+    enabled:false,ai:true,topic:'Clipes de GTA 6',keywords:['GTA 6','corridas'],context:'Use o contexto das legendas.',
+  });
+  await editorialSummary.click();
+  assert.equal(await topic.inputValue(),'Clipes de GTA 6');
+  assert.equal(await enabled.isChecked(),false);
+  assert.equal(await ai.isChecked(),true);
+  await editorialSummary.click();
   await mkdir('artifacts',{recursive:true});
   await page.screenshot({path:'artifacts/browser-panel-desktop.png',fullPage:true});
   for(const width of [390,320]){
@@ -129,7 +151,7 @@ try{
     if(width===390)await page.screenshot({path:'artifacts/browser-panel-mobile.png',fullPage:true});
   }
   fixture.connections.playwrightMcp={configured:false,source:null};fixture.browser.active=null;
-  await page.goto(base+'/#browser');await page.getByText('Adicione o token para configurar o TikTok.',{exact:true}).waitFor();
+  await page.reload();await page.getByText('Adicione o token para configurar o TikTok.',{exact:true}).waitFor();
   for(const name of ['Abrir login do TikTok','Salvar rotina do navegador','Postar agora no TikTok'])assert(await page.getByRole('button',{name,exact:true}).isDisabled(),'token required for '+name);
   assert(await page.locator('[data-browser-action="run"]').isDisabled());
   const beforeTokenActions=actions.length;await page.getByRole('link',{name:'Adicionar token em Conexões',exact:true}).click();await page.getByLabel('PLAYWRIGHT_MCP_EXTENSION_TOKEN',{exact:true}).waitFor();assert.equal(actions.length,beforeTokenActions,'the setup link does not queue work');

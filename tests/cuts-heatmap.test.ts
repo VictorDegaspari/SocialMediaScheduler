@@ -2,6 +2,28 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchCutHeatmap, normalizeHeatmap, replayFromMetadata, replayInterest, type ReplayData } from '../src/cuts-heatmap.js';
 import { selectHighlights, type Cue } from '../src/cuts-media.js';
+import { cutSourceRangeSchema, suggestSourceRanges } from '../src/cuts-source-range.js';
+
+test('trechos de lives longas são limitados a 30 minutos com precisão de milissegundos',()=>{
+  assert.deepEqual(cutSourceRangeSchema.parse({start:7800.001,end:9600.001}),{start:7800.001,end:9600.001});
+  for(const range of [{start:7800,end:9600.001},{start:-1,end:4},{start:40,end:30},{start:0,end:0.499}])
+    assert.equal(cutSourceRangeSchema.safeParse(range).success,false);
+});
+
+test('picos de uma live longa sugerem janelas distintas e o mapa do trecho usa o relógio do arquivo',()=>{
+  const metadata={duration:18000,heatmap:[
+    {start_time:7780,end_time:7810,value:0.8},
+    {start_time:9000,end_time:9020,value:1},
+    {start_time:9600,end_time:9630,value:0.5},
+    {start_time:16000,end_time:16010,value:0.9},
+  ]};
+  assert.deepEqual(suggestSourceRanges(replayFromMetadata(metadata),18000),[
+    {start:8110,end:9910},{start:15105,end:16905},
+  ]);
+  assert.deepEqual(replayFromMetadata(metadata,1800,7800).points,[
+    {start:0,end:10,value:0.8},{start:1200,end:1220,value:1},
+  ]);
+});
 
 test('normalização limita o mapa à duração e rejeita pontos não numéricos sem inventar valores',()=>{
   const points=normalizeHeatmap([

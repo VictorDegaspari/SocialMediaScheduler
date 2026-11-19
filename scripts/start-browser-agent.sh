@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+if (( $# > 1 )) || [[ -n "${1:-}" && "${1:-}" != '--ensure' ]]; then
+  echo 'Uso: scripts/start-browser-agent.sh [--ensure]' >&2
+  exit 2
+fi
 if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   echo 'Agente do Chrome: abra uma sessão gráfica no Ubuntu para usar o navegador pelo painel.'
   exit 0
@@ -23,7 +27,7 @@ PartOf=graphical-session.target
 Type=simple
 WorkingDirectory=$task_root
 ExecStart="$task_root/scripts/browser-agent.sh"
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=20
 KillMode=mixed
@@ -36,7 +40,10 @@ for variable in DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS XDG_
   if [[ -n "${!variable:-}" ]]; then systemctl --user import-environment "$variable"; fi
 done
 systemctl --user daemon-reload
-systemctl --user disable drive-watcher-browser-agent.service >/dev/null 2>&1 || true
 systemctl --user enable drive-watcher-browser-agent.service
-systemctl --user restart drive-watcher-browser-agent.service
+if [[ "${1:-}" == '--ensure' ]]; then
+  systemctl --user start drive-watcher-browser-agent.service
+else
+  systemctl --user restart drive-watcher-browser-agent.service
+fi
 echo 'Agente do Chrome ativo; login e envios podem ser solicitados pelo painel.'

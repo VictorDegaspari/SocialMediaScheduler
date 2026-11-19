@@ -218,6 +218,36 @@ test('CLI blocks browser startup when the mandatory extension token is missing',
   await assert.rejects(()=>stat(join(cliDirectory,'.browser-data')),'the rejected command does not create a browser profile');
 });
 
+for(const scheduled of [false,true])test(scheduled?'agendamento por pasta inicia o Playwright com vídeo elegível':'Enviar próximo agora inicia o Playwright com vídeo elegível',async()=>{
+  const root=join(directory,scheduled?'cli-scheduled':'cli-next'),media=join(root,'media');await mkdir(media,{recursive:true});
+  const source=join(media,'video.mp4'),sidecar=join(media,'video.json'),marker=join(root,'opened'),chrome=join(root,'fake-chrome');
+  await writeFile(source,await readFile(first));
+  await writeFile(sidecar,JSON.stringify({title:'Vídeo de teste',tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE'}}));
+  const stable=new Date(Date.now()-60_000);await utimes(source,stable,stable);await utimes(sidecar,stable,stable);
+  const originalHash=await sha256(source);
+  await writeFile(chrome,'#!/bin/sh\nprintf opened > "$CHROME_TEST_MARKER"\nexit 1\n',{mode:0o700});
+  await assert.rejects(()=>promisify(execFile)(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs'),'--once','--folder',media,
+    ...(scheduled?['--schedule-at',new Date(Date.now()+86400000).toISOString()]:[])],{
+    cwd:root,env:{...process.env,CHROME_PATH:chrome,CHROME_TEST_MARKER:marker,PLAYWRIGHT_MCP_EXTENSION_TOKEN:'test-extension-token',ENCRYPTION_KEY:'00'.repeat(32)},timeout:10000}),error=>{
+      const output=(error as {stdout:string}).stdout;
+      assert.match(output,/browser_preparing_source/);assert.match(output,/browser_attempt_failed/);
+      assert.doesNotMatch(output,/browser_source_failed|browser_upload_started|browser_no_video/);return true;
+    });
+  assert.equal(await readFile(marker,'utf8'),'opened','o executável deve ser iniciado automaticamente pelo Playwright');
+  assert.equal(await sha256(source),originalHash,'a tentativa preserva o vídeo original');
+  assert.deepEqual(await (await import('node:fs/promises')).readdir(join(root,'.browser-data/tiktok/work')),[],'a cópia temporária é removida após a falha simulada');
+});
+
+test('login abre o Chrome sem depender da pasta de vídeos',async()=>{
+  const root=join(directory,'login-without-media');await mkdir(root);
+  const blocked=join(root,'not-a-directory'),chrome=join(root,'fake-chrome'),marker=join(root,'opened');
+  await writeFile(blocked,'a origem não é usada no login');
+  await writeFile(chrome,'#!/bin/sh\nprintf opened > "$CHROME_TEST_MARKER"\n',{mode:0o700});
+  const {stdout}=await promisify(execFile)(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/tiktok-browser.mjs'),'--login','--folder',join(blocked,'videos')],{
+    cwd:root,env:{...process.env,CHROME_PATH:chrome,CHROME_TEST_MARKER:marker,PLAYWRIGHT_MCP_EXTENSION_TOKEN:'test-extension-token',ENCRYPTION_KEY:'00'.repeat(32)},timeout:5000});
+  assert.match(stdout,/browser_manual_login/);assert.equal(await readFile(marker,'utf8'),'opened');
+});
+
 test('agente executa tarefa do painel e rejeita origem fora da pasta local autorizada',async()=>{
   const {randomUUID}=await import('node:crypto');
   const root=join(directory,'agent-workspace'),empty=join(root,'media');
@@ -255,10 +285,41 @@ test('agente executa tarefa do painel e rejeita origem fora da pasta local autor
   }
 });
 
+test('agente informa tarefa incompatível antes do upload e continua recebendo tarefas',async()=>{
+  const {randomUUID}=await import('node:crypto');
+  const root=join(directory,'agent-invalid-job'),media=join(root,'media');await mkdir(media,{recursive:true});await symlink(resolve('scripts'),join(root,'scripts'));
+  const invalidId=randomUUID(),validId=randomUUID(),key='6'.repeat(64);
+  const jobs=[{id:invalidId,kind:'upload',folder:media,stripMetadata:true,publishNow:'invalid'},{id:validId,kind:'upload',folder:media,stripMetadata:true}];
+  const results:{id:string,result:string}[]=[],stages:{id:string,stage:string}[]=[];let sent=0,finished:()=>void;
+  const completed=new Promise<void>(done=>{finished=done;});
+  const server=createServer(async(req,res)=>{
+    try{
+      assert.equal(req.headers.authorization,'Bearer '+key);
+      let raw='';for await(const chunk of req)raw+=chunk;const body=raw?JSON.parse(raw):{};let response:unknown={ok:true};
+      if(req.url==='/api/browser-agent/playwright-mcp')response={PLAYWRIGHT_MCP_EXTENSION_TOKEN:'test-extension-token'};
+      else if(req.url==='/api/browser-agent/profiles')response=[{id:'default'}];
+      else if(req.url==='/api/browser-agent/poll')response={job:!body.activeJobId&&sent<jobs.length?jobs[sent++]:null,cancel:false};
+      else if(req.url?.endsWith('/progress'))stages.push({id:req.url.split('/')[4]!,stage:body.stage});
+      else if(req.url?.endsWith('/finish')){results.push({id:req.url.split('/')[4]!,result:body.result});if(results.length===2)finished();}
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify(response));
+    }catch{res.writeHead(400).end();}
+  });
+  await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));
+  const child=spawn(process.execPath,['--import',import.meta.resolve('tsx'),resolve('scripts/browser-agent.mjs')],{cwd:root,env:{...process.env,APP_URL:'http://127.0.0.1:'+(server.address() as {port:number}).port,BROWSER_AGENT_TOKEN:key,ENCRYPTION_KEY:'00'.repeat(32),LOCAL_MEDIA_DIR:media,LOCAL_MEDIA_HOST_DIR:media,LOG_LEVEL:'silent'},stdio:'ignore'});
+  const closed=new Promise<number|null>((done,reject)=>{child.once('close',done);child.once('error',reject);});const timer=setTimeout(()=>child.kill('SIGTERM'),12000);
+  try{
+    await Promise.race([completed,closed.then(()=>{throw new Error('O agente deixou uma tarefa sem resultado.');})]);
+    assert.deepEqual(results,[{id:invalidId,result:'failed'},{id:validId,result:'empty'}]);
+    assert(stages.some(s=>s.id===invalidId&&s.stage==='browser_job_invalid'));
+    assert(!stages.some(s=>s.id===invalidId&&s.stage==='browser_upload_started'));
+  }finally{clearTimeout(timer);child.kill('SIGINT');await closed;await new Promise<void>(done=>server.close(()=>done()));}
+});
+
 for(const commercial of [false,true])test(commercial?'publicação comercial imediata chega ao Chrome do Playwright após conferir a cópia':'agente recebe cópia privada do backend, confere hash e usa diretório do perfil correto',async()=>{
   const {randomUUID,createHash}=await import('node:crypto');const {browserProfileDirectory}=await import('../src/browser-profiles.js');
   const root=join(directory,commercial?'commercial-agent':'prepared-agent'),media=join(root,'media'),profileId=randomUUID(),jobId=randomUUID(),key='5'.repeat(64),bytes=await readFile(first),hash=createHash('sha256').update(bytes).digest('hex');
   await mkdir(media,{recursive:true});await symlink(resolve('scripts'),join(root,'scripts'));
+  const blocked=join(root,'unavailable-source');await writeFile(blocked,'a cópia preparada dispensa acesso à origem');
   const marker=join(root,'chrome-opened'),chrome=join(root,'fake-chrome');
   if(commercial)await writeFile(chrome,'#!/bin/sh\nprintf opened > "$CHROME_TEST_MARKER"\nexit 1\n',{mode:0o700});
   let sent=false,downloaded=false,finished:()=>void;const stages:string[]=[],completed=new Promise<void>(done=>{finished=done;});
@@ -270,7 +331,7 @@ for(const commercial of [false,true])test(commercial?'publicação comercial ime
       let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);let response:unknown={ok:true};
       if(req.url==='/api/browser-agent/profiles')response=[{id:profileId}];
       else if(req.url==='/api/browser-agent/poll'){
-        response={job:!sent&&!body.activeJobId?{id:jobId,kind:'upload',folder:media,stripMetadata:true,profileId,...(commercial?{publishNow:true}:{publishAt:new Date(Date.now()+86400000).toISOString()}),media:{metadata:metadataSchema.parse({title:'Teste privado',tiktok:{privacyLevel:commercial?'PUBLIC_TO_EVERYONE':null,commercialContent:commercial,ownBrand:commercial}}),hash,assetSha256:hash,name:'video.mp4',sourceId:'source-video-01'}}:null,cancel:false};sent=true;
+        response={job:!sent&&!body.activeJobId?{id:jobId,kind:'upload',folder:join(blocked,'videos'),stripMetadata:true,profileId,...(commercial?{publishNow:true}:{publishAt:new Date(Date.now()+86400000).toISOString()}),media:{metadata:metadataSchema.parse({title:'Teste privado',tiktok:{privacyLevel:commercial?'PUBLIC_TO_EVERYONE':null,commercialContent:commercial,ownBrand:commercial}}),hash,assetSha256:hash,name:'video.mp4',sourceId:'source-video-01'}}:null,cancel:false};sent=true;
       }else if(req.url?.endsWith('/progress'))stages.push(body.stage);
       else if(req.url?.endsWith('/finish')){assert.equal(body.result,'failed');finished();}
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify(response));

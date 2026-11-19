@@ -2,6 +2,7 @@ import type {PageMetadata} from '../../src/pagination.js';
 import type {PackDefaults} from '../../src/pack-config.js';
 import type {BrowserProfile, ConnectionChannel} from './connection-types.js';
 import type {NativeScheduleModel} from '../native-schedule.js';
+import type {EditorialPreviewApi} from './editorial-form.js';
 
 export const requestViews = [['orders', 'Pedidos'], ['profiles', 'Perfis'], ['accounts', 'Contas']] as const;
 export type RequestView = typeof requestViews[number][0];
@@ -34,4 +35,5 @@ export type RequestDate = (value: string, includeTime?: boolean) => string;
 export type RequestsSnapshot = {
   state: RequestsState; view: RequestView; editing: string | null; revisions: RequestRevisions;
   pagination: RequestPagination; schedule: NativeScheduleModel; date: RequestDate;
+  api: EditorialPreviewApi;
 };

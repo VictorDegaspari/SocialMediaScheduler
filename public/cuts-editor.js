@@ -1,20 +1,17 @@
-import {cutEditorFields} from './cuts-editor-view.js';
+import {clearWorkspace,drawWorkspace} from './build/workspace-view.js';
 import {bindEditorTabs} from './cuts-editor-tabs.js';
 import {createOverlayEditor} from './cuts-overlays.js';
 import {createSplitEditor,paintSplitPreview} from './cuts-split.js';
-import {formatTimecode,parseTimecode} from './cuts-time.js';
+import {formatSourceTimecode,formatTimecode,parseTimecode} from './cuts-time.js';
 import {previewTimeToSource,sourceTimeToPreview} from './cuts-playback.js';
 import {projectCaptionRows,mergeCaptionRows} from './cuts-captions.js';
-import {replayGraph,replayTimeAt,selectionFromReplay} from './cuts-replay.js';
-export {replayGraph} from './cuts-replay.js';
+import {replayTimeAt,selectionFromReplay} from './cuts-replay.js';
 const defaults={fontSize:42,color:'#FFFFFF',highlightColor:'#FFE600',outlineColor:'#101010',background:'none',position:'bottom',animation:'none'};
 export const cutFormats=[['shorts','Shorts · vertical (9:16)'],['video','Vídeo · horizontal (16:9)']];
 const layoutDefaults={format:'shorts',mode:'fit',focusX:.5,focusY:.5,zoom:1};
 const seconds=value=>Number(Number(value).toFixed(3));
 const clock=value=>formatTimecode(value,{precision:2});
 
-
-function cueRow(cue,index,esc){return `<div class="cuts-cue" data-caption-row="${esc(cue.id)}"${cue.conflict?' data-conflict="true"':''}><label><span class="cuts-cue-time-label">Começa em</span><input aria-label="Início da legenda ${index+1}" name="cueStart" type="text" data-timecode required autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" value="${formatTimecode(cue.start)}"></label><label><span class="cuts-cue-time-label">Termina em</span><input aria-label="Fim da legenda ${index+1}" name="cueEnd" type="text" data-timecode required autocomplete="off" spellcheck="false" placeholder="00:00" maxlength="18" value="${formatTimecode(cue.end)}"></label><label><span class="sr-only">Texto da legenda ${index+1}</span><textarea aria-label="Texto da legenda ${index+1}" name="cueText" rows="2" required maxlength="500">${esc(cue.text)}</textarea></label><button class="icon-button danger" type="button" data-cut-editor-action="remove-cue" aria-label="Remover legenda ${index+1}">×</button>${cue.conflict?'<p class="cuts-cue-warning">Esta legenda atravessa um limite ou trecho removido. Ajuste os tempos e o texto, divida a linha ou use a transcrição original.</p>':''}</div>`;}
 
 function retainedParts(start,end,gaps){
   if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Escolha um início e um fim válidos no vídeo original.');
@@ -29,30 +26,48 @@ function retainedParts(start,end,gaps){
   return {parts,duration:output};
 }
 
-/** The source clock stays absolute. The phone preview skips discarded intervals. */
-export function createCutEditor({clip,job,esc,api}){
+/** Media and caption edits use the file clock. A live range offsets only the original clock shown to users. */
+export function createCutEditor({clip,job,api}){
   const form=document.querySelector('#cuts-dialog-form'),controller=new AbortController(),signal=controller.signal;
   const style={...defaults,...clip.caption_style},framing={...layoutDefaults,mode:clip.framing||'fit',...clip.framing_options};
   const state={gaps:structuredClone(clip.excluded_ranges||[]),original:null,originalLoading:false,originalError:null,parts:[],duration:0,frame:0,alive:true,seek:Number(clip.start_seconds),dragging:false,replayPointer:null,cueCache:structuredClone(clip.captions||[]),captionBase:structuredClone(clip.captions||[]),captionRows:[],captionParts:[],captionPlan:null,captionError:null,edgesApplied:false,nextCue:0,captionsDirty:false,previewPlaying:false,framePending:true,seekVersion:0,videoFrame:null};
-  form.innerHTML=cutEditorFields({clip,job,style,framing,cutFormats,esc});
+  clearWorkspace(form);
+  drawWorkspace(form,'cutEditor',{clip,job,style,framing,cutFormats});
   const tabs=bindEditorTabs(form,signal);
-  if(clip.delivery_id||clip.publications?.length||['posted','publishing'].includes(clip.status)){
-    const notice=document.createElement('p');notice.className='notice cuts-version-notice';notice.textContent='Ao salvar, será criada uma nova versão para revisão. O arquivo já enviado e o histórico serão preservados. Você poderá postar a nova versão depois de conferir a prévia.';form.querySelector('.cuts-editor-tools').prepend(notice);
+  const cues=form.querySelector('#cuts-cues'),removals=form.querySelector('#cut-removed-ranges'),replay=form.querySelector('#cut-editor-replay');
+  const sourceRange=job.source_range;
+  const sourceTime=value=>formatSourceTimecode(value,sourceRange);
+  const renderReplay=data=>drawWorkspace(replay,'cutReplay',{replay:data,duration:job.duration,sourceRange,interactive:true});
+  renderReplay(job.replay_data);
+  let displayedRows=[];
+  function showCaptionRows(rows){
+    displayedRows=rows;
+    drawWorkspace(cues,'captionRows',{rows});
   }
   const video=form.querySelector('#cut-source-player'),canvas=form.querySelector('#cut-phone-canvas'),ctx=canvas.getContext('2d'),caption=form.querySelector('#cut-phone-caption'),captionText=form.querySelector('#cut-phone-caption-text'),message=form.querySelector('#cut-editor-message');
   const get=name=>form.elements.namedItem(name),readStyle=()=>({enabled:get('captionsEnabled').checked,fontSize:Number(get('fontSize').value),color:get('color').value,highlightColor:get('highlightColor').value,outlineColor:get('outlineColor').value,background:get('background').value,position:get('position').value,animation:get('animation').value});
-  const readTime=name=>parseTimecode(get(name).value);
+  const originalFields=new Set([get('start'),get('end'),form.querySelector('#cut-remove-start'),form.querySelector('#cut-remove-end')]);
+  function readFieldTime(field){
+    const value=parseTimecode(field.value);
+    return sourceRange&&originalFields.has(field)?seconds(value-sourceRange.start):value;
+  }
+  const readTime=name=>readFieldTime(get(name));
   const playerTime=()=>video.readyState>=1&&Number.isFinite(video.currentTime)?video.currentTime:state.seek||0;
   const timeHint='Use minutos:segundos, como 09:11. Para ajuste fino, use 09:11,720.';
   function validateTimeField(field){
     const ignored=field.closest('#cuts-cues')&&get('originalCaptions').checked;
-    field.setCustomValidity(!field.name||ignored||Number.isFinite(parseTimecode(field.value))?'':timeHint);
+    const value=readFieldTime(field);
+    const outside=sourceRange&&originalFields.has(field)&&Number.isFinite(value)&&(value<0||value>Number(job.duration));
+    field.setCustomValidity(!field.name||ignored?'':outside?'Use um horário dentro do trecho selecionado da live.':Number.isFinite(value)?'':timeHint);
   }
-  function setTimeField(field,value){field.value=formatTimecode(value);validateTimeField(field);}
+  function setTimeField(field,value){field.value=originalFields.has(field)?sourceTime(value):formatTimecode(value);validateTimeField(field);}
   const splitEditor=createSplitEditor({form,video,layout:framing.split,onChange:refreshPlan,signal,isFrameReady:()=>!state.framePending&&!video.seeking&&video.readyState>=2});
   const readLayout=()=>({format:get('format').value,mode:get('framingMode').value,focusX:Number(get('focusX').value)/100,focusY:Number(get('focusY').value)/100,zoom:Number(get('zoom').value),
     ...(get('framingMode').value==='split'||splitEditor.used?{split:splitEditor.read()}:{})});
-  const overlayEditor=createOverlayEditor({form,canvas,overlays:clip.overlays||[],jobId:job.id,signal,getDuration:()=>state.duration,seek:seekPreview,onChange:paint});
+  const overlayEditor=createOverlayEditor({form,canvas,overlays:clip.overlays||[],jobId:job.id,signal,getDuration:()=>state.duration,onChange:paint,onAdd:previewAddedOverlay,seek:time=>{
+    seekPreview(time);
+    revealOverlayPreview();
+  }});
   function editedCues(){
     if(!state.captionParts.length)return structuredClone(state.cueCache);
     const edits=[...form.querySelectorAll('.cuts-cue')].map(row=>({id:row.dataset.captionRow,start:parseTimecode(row.querySelector('[name="cueStart"]').value),end:parseTimecode(row.querySelector('[name="cueEnd"]').value),text:row.querySelector('[name="cueText"]').value.trim()}));
@@ -63,19 +78,13 @@ export function createCutEditor({clip,job,esc,api}){
     try{state.cueCache=editedCues();state.captionError=null;return true;}
     catch(error){state.captionError=error;return false;}
   }
-  function numberCaptionRows(){
-    [...form.querySelectorAll('.cuts-cue')].forEach((row,index)=>{
-      for(const [name,label] of [['cueStart','Início'],['cueEnd','Fim'],['cueText','Texto']])row.querySelector('[name="'+name+'"]').setAttribute('aria-label',label+' da legenda '+(index+1));
-      row.querySelector('[data-cut-editor-action="remove-cue"]').setAttribute('aria-label','Remover legenda '+(index+1));
-      row.querySelector('.sr-only').textContent='Texto da legenda '+(index+1);
-    });
-  }
   function renderCaptionRows(parts){
     const active=document.activeElement,row=active?.closest('.cuts-cue');
     const focus=row?{name:active.name,start:parseTimecode(row.querySelector('[name="cueStart"]').value),end:parseTimecode(row.querySelector('[name="cueEnd"]').value),text:row.querySelector('[name="cueText"]').value,selection:[active.selectionStart,active.selectionEnd]}:null;
     const projection=projectCaptionRows(state.cueCache,parts);
     state.captionBase=structuredClone(state.cueCache);state.captionRows=projection.rows;state.captionParts=structuredClone(parts);state.captionPlan=JSON.stringify(parts);
-    form.querySelector('#cuts-cues').innerHTML=projection.rows.map((cue,index)=>cueRow(cue,index,esc)).join('');
+    clearWorkspace(cues);
+    showCaptionRows(projection.rows);
     form.querySelector('#cuts-cues-state').textContent=projection.rows.length?'':'Nenhuma legenda nos trechos mantidos. Ajuste o intervalo ou adicione uma linha.';
     if(focus){
       const index=projection.rows.findIndex(cue=>Math.abs(cue.start-focus.start)<.001&&Math.abs(cue.end-focus.end)<.001&&cue.text===focus.text);
@@ -111,7 +120,7 @@ export function createCutEditor({clip,job,esc,api}){
       if(!state.alive)return;
       state.original=result.captions||[];
       refreshPlan();
-      if(result.replay)form.querySelector('#cut-editor-replay').innerHTML=replayGraph(result.replay,job.duration,esc,{interactive:true});
+      if(result.replay)renderReplay(result.replay);
       status.textContent='Transcrição original disponível.';paint();
     }catch(error){
       if(!state.alive)return;
@@ -132,11 +141,11 @@ export function createCutEditor({clip,job,esc,api}){
   }
   function updateReplayMarker(){
     const start=readTime('start'),end=readTime('end'),range=form.querySelector('#cut-replay-position'),svg=form.querySelector('#cut-editor-replay svg');
-    form.querySelector('#cut-replay-selected').textContent=Number.isFinite(start)?formatTimecode(start):'Revise o início';
+    form.querySelector('#cut-replay-selected').textContent=Number.isFinite(start)?sourceTime(start):'Revise o início';
     if(!Number.isFinite(start)){svg?.querySelector('.cuts-replay-marker')?.setAttribute('visibility','hidden');return;}
-    range.value=start;range.setAttribute('aria-valuetext',formatTimecode(start));form.querySelector('#cut-replay-time').textContent=formatTimecode(start);
+    range.value=start;range.setAttribute('aria-valuetext',sourceTime(start));form.querySelector('#cut-replay-time').textContent=sourceTime(start);
     if(!svg)return;
-    svg.setAttribute('aria-valuenow',String(start));svg.setAttribute('aria-valuetext',formatTimecode(start));
+    svg.setAttribute('aria-valuenow',String(start));svg.setAttribute('aria-valuetext',sourceTime(start));
     const point=curvePoint(svg,start),marker=svg.querySelector('.cuts-replay-marker'),window=svg.querySelector('.cuts-replay-window');
     marker.setAttribute('visibility','visible');marker.setAttribute('transform',`translate(${point.x},0)`);marker.querySelector('circle').setAttribute('cy',String(point.y));
     window.setAttribute('x',String(point.x));window.setAttribute('width',String(Math.max(0,Math.min(1000,Number.isFinite(end)?end/(Number(job.duration)||1)*1000:point.x)-point.x)));
@@ -179,17 +188,18 @@ export function createCutEditor({clip,job,esc,api}){
     const position=sourceTimeToPreview(state.parts,time),valid=Number.isFinite(position.time),range=form.querySelector('#cut-phone-seek'),play=form.querySelector('#cut-phone-play');
     range.max=String(seconds(state.duration));range.value=valid?String(seconds(position.time)):'0';range.disabled=!state.parts.length;
     range.setAttribute('aria-valuetext',`${valid?formatTimecode(position.time):'00:00'} de ${formatTimecode(state.duration)}`);
-    form.querySelector('#cut-source-time').textContent=formatTimecode(time);
+    form.querySelector('#cut-source-time').textContent=sourceTime(time);
     form.querySelector('#cut-preview-time').textContent=valid&&position.included?`${clock(position.time)} / ${clock(state.duration)}`:'Fora do corte atual';
-    form.querySelector('#cut-phone-source-time').textContent='Original '+formatTimecode(time);
+    form.querySelector('#cut-phone-source-time').textContent='Original '+sourceTime(time);
     const preview=get('format').value==='video'?'prévia do vídeo':'prévia no celular';
-    play.setAttribute('aria-label',(video.paused?'Reproduzir ':'Pausar ')+preview);play.title=video.paused?'Reproduzir prévia':'Pausar prévia';play.innerHTML=video.paused?'<span aria-hidden="true">▶</span>':'<span aria-hidden="true">Ⅱ</span>';
+    play.setAttribute('aria-label',(video.paused?'Reproduzir ':'Pausar ')+preview);play.title=video.paused?'Reproduzir prévia':'Pausar prévia';play.querySelector('span').textContent=video.paused?'▶':'Ⅱ';
     const mute=form.querySelector('#cut-phone-mute');mute.setAttribute('aria-label',video.muted?'Ativar áudio da prévia':'Silenciar prévia');mute.setAttribute('aria-pressed',String(video.muted));mute.textContent=video.muted?'⊘':'♪';
     updateReplayMarker();
+    return position;
   }
   function waitForFrame(){
     state.framePending=true;canvas.dataset.seeking='true';
-    const loading=form.querySelector('#cut-phone-loading');loading.hidden=false;loading.textContent=`Buscando ${formatTimecode(state.seek)}…`;
+    const loading=form.querySelector('#cut-phone-loading');loading.hidden=false;loading.textContent=`Buscando ${sourceTime(state.seek)}…`;
     caption.hidden=true;
   }
   function commitFrame(){
@@ -202,7 +212,7 @@ export function createCutEditor({clip,job,esc,api}){
   function paint(){
     if(!state.alive)return;
     const layout=readLayout(),textStyle=readStyle(),time=playerTime();
-    updatePhoneControls(time);splitEditor.drawSource();
+    const position=updatePhoneControls(time);splitEditor.drawSource();
     if(video.seeking||state.framePending||video.readyState<2){waitForFrame();return;}
     canvas.dataset.seeking='false';form.querySelector('#cut-phone-loading').hidden=true;
     const outWidth=canvas.width,outHeight=canvas.height;
@@ -219,7 +229,9 @@ export function createCutEditor({clip,job,esc,api}){
       }
       canvas.dataset.sourceTime=String(seconds(time));
     }
-    const overlayPosition=sourceTimeToPreview(state.parts,time);overlayEditor.paint(ctx,overlayPosition.included?overlayPosition.time:NaN,state.duration);
+    // At the end marker, keep the overlays from just inside the final frame's interval.
+    const overlayTime=position.included?Math.min(position.time,state.duration-.000001):NaN;
+    overlayEditor.paint(ctx,overlayTime,state.duration);
     const part=state.parts.find(p=>time>=p.start&&time<p.end);let cue=part?currentCues().find(c=>c.start<=time&&c.end>time):null;
     if(cue&&(cue.start<part.start||cue.end>part.end)){
       const words=cue.words?.filter(w=>w.start>=part.start&&w.end<=part.end);
@@ -252,7 +264,10 @@ export function createCutEditor({clip,job,esc,api}){
     if(!video.paused&&!video.requestVideoFrameCallback)paint();
     state.frame=requestAnimationFrame(playbackFrame);
   }
-  function renderGaps(){form.querySelector('#cut-removed-ranges').innerHTML=state.gaps.length?state.gaps.map((range,i)=>`<li><span>${clock(range.start)} → ${clock(range.end)} <small>${(range.end-range.start).toFixed(2)} s removidos</small></span><button class="button ghost small" type="button" data-cut-editor-action="restore-range" data-index="${i}" aria-label="Restaurar trecho ${i+1}">Restaurar</button></li>`).join(''):'<li class="cuts-no-removals">Nenhum trecho removido.</li>';refreshPlan();}
+  function renderGaps(){
+    drawWorkspace(removals,'cutRemovals',{gaps:[...state.gaps],sourceRange});
+    refreshPlan();
+  }
   function seekSource(time){
     if(!Number.isFinite(Number(time)))return;
     const available=video.readyState>=1&&Number.isFinite(video.duration)?video.duration:Number(job.duration)||7200;
@@ -265,6 +280,17 @@ export function createCutEditor({clip,job,esc,api}){
   function seekPreview(time,{pause=true}={}){
     const source=previewTimeToSource(state.parts,time);if(!Number.isFinite(source))throw new Error('Escolha um intervalo válido antes de navegar na prévia.');
     if(pause||time>=state.duration)video.pause();state.previewPlaying=true;seekSource(source);
+  }
+  function revealOverlayPreview(){
+    const box=canvas.getBoundingClientRect();
+    const center=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
+    if(!canvas.parentElement.contains(center))tabs.reveal('#cut-editor-preview');
+  }
+  function previewAddedOverlay(){
+    const position=sourceTimeToPreview(state.parts,playerTime());
+    if(!position.included&&Number.isFinite(position.time))seekPreview(position.time);
+    else paint();
+    revealOverlayPreview();
   }
   async function togglePreview(){
     retainedParts(readTime('start'),readTime('end'),state.gaps);
@@ -292,16 +318,17 @@ export function createCutEditor({clip,job,esc,api}){
     refreshPlan();
   },{signal});
   form.addEventListener('focusin',event=>{
-    if(event.target.matches('[data-timecode]'))event.target.dataset.focusTime=String(parseTimecode(event.target.value));
+    if(event.target.matches('[data-timecode]'))event.target.dataset.focusTime=String(readFieldTime(event.target));
   },{signal});
   form.addEventListener('blur',event=>{
     if(!event.target.matches('[data-timecode]'))return;
-    const value=parseTimecode(event.target.value),changed=Number(event.target.dataset.focusTime)!==value;
+    const value=readFieldTime(event.target),changed=Number(event.target.dataset.focusTime)!==value;
     if(Number.isFinite(value))setTimeField(event.target,value);
     else validateTimeField(event.target);
     if(event.target.closest('#cuts-cues'))cacheCues();refreshPlan();
     const marking=event.relatedTarget?.dataset?.cutEditorAction;
-    if(changed&&Number.isFinite(value)&&['start','end'].includes(event.target.name)&&!['set-start','set-end'].includes(marking)){
+    if(changed&&Number.isFinite(value)&&(!sourceRange||value>=0&&value<=Number(job.duration))&&
+      ['start','end'].includes(event.target.name)&&!['set-start','set-end'].includes(marking)){
       video.pause();state.previewPlaying=false;seekSource(value);
     }
   },{capture:true,signal});
@@ -346,25 +373,25 @@ export function createCutEditor({clip,job,esc,api}){
       else if(action==='phone-mute'){video.muted=!video.muted;paint();}
       else if(action==='set-start'||action==='set-end'){setTimeField(get(action==='set-start'?'start':'end'),time);refreshPlan();}
       else if(action==='step-time'){
-        const field=get(button.dataset.field),current=parseTimecode(field.value);if(!Number.isFinite(current))throw new Error(timeHint);
+        const field=get(button.dataset.field),current=readFieldTime(field);if(!Number.isFinite(current))throw new Error(timeHint);
         const next=Math.max(0,Math.min(Number(job.duration)||7200,seconds(current+Number(button.dataset.step))));setTimeField(field,next);refreshPlan();seekSource(next);
       }
       else if(action==='mark-remove-start'||action==='mark-remove-end')setTimeField(form.querySelector(action==='mark-remove-start'?'#cut-remove-start':'#cut-remove-end'),time);
       else if(action==='add-removal'){
         if(state.gaps.length>=20)throw new Error('Remova no máximo 20 trechos por vídeo.');
-        const gap={start:parseTimecode(form.querySelector('#cut-remove-start').value),end:parseTimecode(form.querySelector('#cut-remove-end').value)},gaps=[...state.gaps,gap].sort((a,b)=>a.start-b.start);
+        const gap={start:readFieldTime(form.querySelector('#cut-remove-start')),end:readFieldTime(form.querySelector('#cut-remove-end'))},gaps=[...state.gaps,gap].sort((a,b)=>a.start-b.start);
         retainedParts(readTime('start'),readTime('end'),gaps);state.gaps=gaps;renderGaps();
       }else if(action==='restore-range'){state.gaps.splice(Number(button.dataset.index),1);renderGaps();}
       else if(action==='reset-focus'){get('focusX').value=50;get('focusY').value=50;get('zoom').value=1;refreshPlan();}
       else if(action==='preset'){
         const values=button.dataset.preset==='highlight'?{...defaults,fontSize:50,animation:'karaoke'}:button.dataset.preset==='clean'?{...defaults,fontSize:38,background:'box',animation:'fade'}:defaults;
         for(const [key,value] of Object.entries(values))get(key).value=value;refreshPlan();
-      }else if(action==='remove-cue'){button.closest('.cuts-cue').remove();numberCaptionRows();get('originalCaptions').checked=false;state.captionsDirty=true;cacheCues();refreshPlan();}
+      }else if(action==='remove-cue'){showCaptionRows(displayedRows.filter(row=>row.id!==button.closest('.cuts-cue').dataset.captionRow));get('originalCaptions').checked=false;state.captionsDirty=true;cacheCues();refreshPlan();}
       else if(action==='add-cue'){
-        const container=form.querySelector('#cuts-cues'),position=sourceTimeToPreview(state.parts,time),start=Math.max(0,Math.min(position.time,state.duration-.5));
+        const position=sourceTimeToPreview(state.parts,time),start=Math.max(0,Math.min(position.time,state.duration-.5));
         if(!Number.isFinite(start)||!state.parts.length)throw new Error('Escolha um intervalo válido antes de adicionar uma legenda.');
         const part=state.parts.find(item=>start>=item.outputStart&&start<item.outputStart+item.end-item.start),end=Math.min(start+2,part.outputStart+part.end-part.start);
-        container.insertAdjacentHTML('beforeend',cueRow({id:'new:'+ ++state.nextCue,start,end,text:''},container.children.length,esc));numberCaptionRows();get('originalCaptions').checked=false;state.captionsDirty=true;container.lastElementChild.querySelector('textarea').focus();cacheCues();refreshPlan();
+        showCaptionRows([...displayedRows,{id:'new:'+ ++state.nextCue,start,end,text:''}]);get('originalCaptions').checked=false;state.captionsDirty=true;cues.lastElementChild.querySelector('textarea').focus();cacheCues();refreshPlan();
       }else if(action==='use-replay-window'){
         selectReplayStart(readTime('start'),{length:60});
       }
@@ -400,6 +427,6 @@ export function createCutEditor({clip,job,esc,api}){
         });if(!body.captions.length)throw new Error('Adicione uma linha de legenda ou use a transcrição original.');for(const cue of body.captions)if(cue.end<=cue.start||cue.start<start||cue.end>end||!cue.text)throw new Error('Cada legenda precisa ter texto e tempos válidos dentro do intervalo do corte.');}
       return body;
     },
-    destroy(){state.alive=false;video.pause();cancelAnimationFrame(state.frame);if(state.videoFrame!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(state.videoFrame);observer.disconnect();splitEditor.destroy();controller.abort();}
+    destroy(){state.alive=false;video.pause();cancelAnimationFrame(state.frame);if(state.videoFrame!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(state.videoFrame);observer.disconnect();splitEditor.destroy();controller.abort();clearWorkspace(cues);clearWorkspace(removals);clearWorkspace(replay);}
   };
 }

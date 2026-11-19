@@ -3,19 +3,10 @@ import {defaultSplitLayout,splitLayoutGeometry} from './cuts-split-layout.js';
 const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
 const names={webcam:'webcam',content:'vídeo'};
 const percent=value=>Number((value*100).toFixed(2));
-function initialLayout(value){
+export function initialSplitLayout(value){
   const defaults=defaultSplitLayout();
   return {...defaults,...value,webcam:{...defaults.webcam,...value?.webcam,region:{...defaults.webcam.region,...value?.webcam?.region}},
     content:{...defaults.content,...value?.content,region:{...defaults.content.region,...value?.content?.region}}};
-}
-
-export function splitEditorFields(value,esc){
-  const layout=initialLayout(value);
-  const paneFields=key=>{
-    const pane=layout[key],label=names[key],part=key==='webcam'?'da webcam':'do vídeo';
-    return `<fieldset data-split-fields="${key}" ${key==='content'?'hidden disabled':''}><legend>${key==='webcam'?'Webcam / reação · parte de cima':'Vídeo / jogo · parte de baixo'}</legend><div class="cuts-split-coordinates">${[['x','Esquerda'],['y','Topo'],['width','Largura'],['height','Altura']].map(([property,title])=>`<div class="form-field"><label for="split-${key}-${property}">${title} da área de ${label} (%)</label><input id="split-${key}-${property}" name="split-${key}-${property}" data-split-region="${property}" data-pane="${key}" type="number" min="${property==='width'||property==='height'?1:0}" max="100" step="0.01" value="${percent(pane.region[property])}" required></div>`).join('')}</div><div class="form-field"><label for="split-${key}-fit">Encaixe da ${key==='webcam'?'webcam':'parte de vídeo'}</label><select id="split-${key}-fit" data-split-property="fit" data-pane="${key}"><option value="crop" ${pane.fit==='crop'?'selected':''}>Preencher espaço · recortar sobras</option><option value="fit" ${pane.fit==='fit'?'selected':''}>Encaixar imagem inteira · manter proporção</option></select></div>${[['zoom','Aproximação',0.25,3,0.05],['focusX','Posição horizontal',0,1,0.01],['focusY','Posição vertical',0,1,0.01]].map(([property,title,min,max,step])=>`<div class="form-field cuts-editor-range"><label for="split-${key}-${property}">${title} ${part} <output data-split-output="${key}-${property}"></output></label><input id="split-${key}-${property}" data-split-property="${property}" data-pane="${key}" type="range" min="${min}" max="${max}" step="${step}" value="${esc(pane[property])}"></div>`).join('')}<button class="button ghost small" type="button" data-split-action="reset">Redefinir esta parte</button></fieldset>`;
-  };
-  return `<fieldset id="cut-split-controls" class="cuts-split-controls" hidden disabled><legend>Webcam em cima + vídeo embaixo</legend><p>Selecione duas regiões do mesmo vídeo. Cada parte tem seu próprio recorte e ajuste.</p><div class="form-field cuts-editor-range"><label for="cut-split-ratio">Espaço da webcam (%) <output id="cut-split-ratio-value">${percent(layout.topRatio)}</output></label><input id="cut-split-ratio" type="range" min="20" max="70" step="0.1" value="${percent(layout.topRatio)}"></div><button class="button ghost small" type="button" data-split-action="half">Metade para cada parte</button><div class="cuts-split-tabs" role="group" aria-label="Parte que deseja ajustar"><button class="button small" type="button" data-split-pane="webcam" aria-pressed="true">Webcam · cima</button><button class="button small" type="button" data-split-pane="content" aria-pressed="false">Vídeo · baixo</button></div><p id="cut-split-selection-label" class="cuts-split-selection-label">Selecione a webcam no vídeo original</p><div class="cuts-split-source"><canvas id="cut-split-source" width="640" height="360" tabindex="0" role="img" aria-label="Selecionar região da webcam no vídeo original" aria-describedby="cut-split-help"></canvas></div><p id="cut-split-help" class="tip">Arraste o retângulo para mover e os cantos para redimensionar. Arraste fora dele para selecionar outra área. As setas movem a seleção; Shift + setas ajusta o tamanho. A divisão na prévia também pode ser arrastada.</p>${paneFields('webcam')}${paneFields('content')}</fieldset>`;
 }
 
 export function paintSplitPreview(ctx,video,layout,width,height){
@@ -28,10 +19,8 @@ export function paintSplitPreview(ctx,video,layout,width,height){
 
 export function createSplitEditor({form,video,layout,onChange,signal,isFrameReady=()=>!video.seeking&&video.readyState>=2}){
   const root=form.querySelector('#cut-split-controls'),canvas=root.querySelector('canvas'),ctx=canvas.getContext('2d');
-  const state={layout:initialLayout(layout),active:'webcam',used:!!layout,enabled:false,drag:null,dividerDrag:null};
-  const divider=document.createElement('div');divider.id='cut-split-divider';divider.className='cuts-split-divider';divider.hidden=true;divider.tabIndex=0;
-  divider.setAttribute('role','separator');divider.setAttribute('aria-orientation','horizontal');divider.setAttribute('aria-label','Divisão entre webcam e vídeo');divider.setAttribute('aria-valuemin','20');divider.setAttribute('aria-valuemax','70');
-  divider.innerHTML='<span aria-hidden="true">↕</span>';form.querySelector('.cuts-phone-screen').append(divider);
+  const state={layout:initialSplitLayout(layout),active:'webcam',used:!!layout,enabled:false,drag:null,dividerDrag:null};
+  const divider=form.querySelector('#cut-split-divider');
   const regionInputs=key=>[...root.querySelectorAll(`[data-split-fields="${key}"] [data-split-region]`)];
   function syncFields(){
     root.querySelector('#cut-split-ratio').value=percent(state.layout.topRatio);root.querySelector('#cut-split-ratio-value').textContent=percent(state.layout.topRatio);
@@ -128,5 +117,5 @@ export function createSplitEditor({form,video,layout,onChange,signal,isFrameRead
   return {read:()=>structuredClone(state.layout),get used(){return state.used;},drawSource,
     refresh(enabled){state.enabled=enabled;state.used||=enabled;root.hidden=!enabled;root.disabled=!enabled;divider.hidden=!enabled;},
     commit(){for(const input of root.querySelectorAll('[data-split-region]'))input.setCustomValidity('');commitRegion(state.active);},
-    destroy(){observer.disconnect();divider.remove();}};
+    destroy(){observer.disconnect();}};
 }

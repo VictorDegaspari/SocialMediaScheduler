@@ -165,6 +165,17 @@ test('falha do Playwright encerra a tarefa mesmo com heartbeat ativo e permite a
   assert.equal((await post('/api/browser/jobs/'+id+'/retry',{})).status,409);
 });
 
+for(const started of [false,true])test(`tarefa incompatível libera o agente e conserva início do upload: ${started}`,async()=>{
+  await bridge.poll(report());const id=await bridge.request('upload');await bridge.poll(report());
+  if(started)await bridge.progress(id,{instanceId,stage:'browser_upload_started'});
+  await bridge.progress(id,{instanceId,stage:'browser_job_invalid'});
+  const state=await bridge.state();assert.equal(state.active,null);
+  assert.equal(state.jobs[0].status,started?'unknown':'failed');
+  assert.match(state.jobs[0].message,/incompatível.*Atualize e reinicie/);
+  assert.equal((await bridge.poll(report())).job,null,'a falha não cria uma nova tentativa automática');
+  if(started)assert.equal((await post('/api/browser/jobs/'+id+'/retry',{})).status,409);
+});
+
 test('recupera desconexão sem confirmação, falha antiga e execução sem progresso sem prender revisão manual',async()=>{
   await bridge.poll(report());let id=await bridge.request('upload');await bridge.poll(report());
   await pool.query("UPDATE browser_commands SET lease_until=now()-interval '1 second' WHERE id=$1",[id]);

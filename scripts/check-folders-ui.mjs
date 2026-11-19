@@ -7,9 +7,10 @@ import {chromium} from 'playwright-core';
 
 const root=resolve('public'),uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const channels=[{id:'native:youtube:qa',name:'Canal de teste',identifier:'youtube'},{id:'browser:tiktok:default',name:'Perfil TikTok',identifier:'tiktok-browser'}];
+const packId=uuid(40);
 const jobs=Array.from({length:3},(_,i)=>({id:uuid(i+1),title:i===0?'GTA 6 · gameplay e reações do streamer em alta qualidade':'Projeto '+(i+1),status:'review',duration:120,clips:Array.from({length:2},(_,j)=>({id:uuid(i*2+j+10),job_id:uuid(i+1),title:i===0&&j===0?'A reação do streamer ao descobrir uma nova área do mapa de GTA 6':'Meu corte '+(i*2+j+1),reason:'Descrição completa do corte, preservada para consulta nos detalhes.',status:j===0?'review':'posted',hasMedia:true,revision:2,start_seconds:0,end_seconds:3,output_duration:3,framing_options:{format:i===2?'video':'shorts',mode:'crop'},render_warnings:i===0&&j===0?['Confira os tempos das palavras antes de publicar.']:[],publications:j===0?[]:[{provider:'youtube',channel_name:'Meu canal',status:'published',release_url:'https://www.youtube.com/watch?v=qa'}],captions:[{start:0,end:3,text:'Fala original.'}]}))}));
 const watches=Array.from({length:2},(_,i)=>({id:uuid(i+30),name:i===0?'Vídeos do canal principal':'Minha pasta de vídeos com um nome longo para conferir a leitura',source_type:'local',folder_url:'/videos/'+('minha-subpasta/'.repeat(i===0?2:18)),enabled:i===0,pending_count:i===0?1:12,scan_minutes:5,cadence:i===0?'daily':'interval',times:['08:00','20:00'],interval_minutes:720,next_upload_at:'2026-11-18T20:00:00-03:00',recursive:true,integration_ids:['native:youtube:qa'],mode:'draft'}));
-const fixture={watches,connections:{local:{rootPath:'/videos'}},stats:{watches:2,pending:13,sent:0,attention:0},scheduler:{paused:false,queue:{}},cuts:{jobs,channels,dependencies:{ready:true}},cutFolders:{jobs,channels,pagination:{limit:10,hasMore:false}},pagination:{watches:{limit:20,hasMore:false}},publishing:{actions:[]}};
+const fixture={watches,connections:{local:{rootPath:'/videos'},google:{connected:false},native:{engine:'local',youtube:{connected:false}}},events:[],stats:{watches:2,pending:13,sent:0,attention:0},scheduler:{paused:false,queue:{}},cuts:{jobs,channels,dependencies:{ready:true}},cutFolders:{jobs,channels,pagination:{limit:10,hasMore:false}},pagination:{watches:{limit:20,hasMore:false}},publishing:{actions:[]}};
 const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=90x160:d=3','-c:v','libx264','-pix_fmt','yuv420p','-movflags','frag_keyframe+empty_moov','-f','mp4','-'],{maxBuffer:1024*1024});
 const server=createServer(async(req,res)=>{try{const path=new URL(req.url,'http://localhost').pathname,file=resolve(root,'.'+(path==='/'?'/index.html':path));if(!file.startsWith(root+'/'))throw Error('Not found');res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[extname(file)]||'text/plain');res.end(await readFile(file));}catch{res.writeHead(404).end();}});
 await new Promise(done=>server.listen(0,'127.0.0.1',done));
@@ -24,10 +25,21 @@ await page.route('**/api/**',async route=>{
   if(path.endsWith('/media')||path.endsWith('/source'))return route.fulfill({body:media,contentType:'video/mp4'});
   assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');mutations.push({path,body:request.postDataJSON()});
   if(path==='/api/watches/'+watches[0].id+'/toggle'){watches[0].enabled=!watches[0].enabled;return route.fulfill({json:{ok:true}});}
+  if(path==='/api/watches'){
+    const {body}=mutations.at(-1);
+    watches.push({...watches[0],id:packId,name:body.name,source_type:body.sourceType,pack_defaults:body.packDefaults});
+    return route.fulfill({status:201,json:{id:packId}});
+  }
   throw new Error('Unexpected mutation: '+path);
 });
 try{
-  await page.goto('http://127.0.0.1:'+server.address().port+'/#watches');await page.getByRole('heading',{name:'Minhas pastas',exact:true}).waitFor();
+  await page.goto('http://127.0.0.1:'+server.address().port+'/#overview');
+  await page.getByRole('heading',{name:'Seu conteúdo, no ritmo certo.',exact:true}).waitFor();
+  assert.deepEqual(await page.locator('.stat-number').allTextContents(),['02','13','00','00']);
+  const fonts=await page.locator('.stat-top, .stat-bottom, .watch-card small').evaluateAll(items=>items.map(item=>parseFloat(getComputedStyle(item).fontSize)));
+  assert(fonts.length&&fonts.every(size=>size>=13),'workspace typography has a readable minimum');
+  await page.locator('[data-page="watches"]').click();
+  await page.getByRole('heading',{name:'Minhas pastas',exact:true}).waitFor();
   assert.equal(await page.locator('#main h1').count(),1);assert.equal(await page.locator('.cuts-library-card').count(),6);assert.equal(await page.locator('.watch-card').count(),2);
   assert.equal(await page.locator('#main details[open]').count(),0);
   const cards=page.locator('.cuts-library-card'),boxes=await cards.evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect();return {x:r.x,y:r.y,height:r.height};}));
@@ -47,6 +59,37 @@ try{
   await page.getByRole('button',{name:'Pausar Vídeos do canal principal',exact:true}).click();await page.getByRole('button',{name:'Retomar Vídeos do canal principal',exact:true}).waitFor();
   assert.equal(await folderDetails.getAttribute('open'),'');assert.equal(mutations.length,1);
   await page.getByRole('button',{name:'Editar Vídeos do canal principal',exact:true}).click();await page.getByRole('heading',{name:'Editar rotina',exact:true}).waitFor();await page.getByRole('button',{name:'Cancelar',exact:true}).click();
+  await page.getByRole('button',{name:'Adicionar pasta',exact:true}).click();
+  const watch=page.locator('#watch-dialog'),source=watch.getByLabel('Origem dos vídeos');
+  await watch.getByLabel('Nome da rotina').fill('Pack editorial QA');
+  await source.selectOption('gta6_pack');
+  await watch.getByText('Geração automática de textos',{exact:true}).click();
+  const topic=watch.getByLabel('Tema do conteúdo');
+  const enabled=watch.getByRole('checkbox',{name:'Completar descrições, hashtags e tags sem IA'});
+  const ai=watch.getByRole('checkbox',{name:/^Usar IA opcional/});
+  assert.equal(await enabled.isChecked(),true);
+  assert.equal(await ai.isChecked(),false);
+  await enabled.uncheck();
+  await ai.check();
+  await topic.fill('Notícias de GTA 6');
+  await watch.getByLabel('Palavras-chave',{exact:true}).fill('GTA 6, mundo aberto');
+  await watch.getByLabel('Contexto editorial',{exact:true}).fill('Use os fatos disponíveis.');
+  await source.selectOption('local');
+  assert.equal(await topic.isVisible(),false);
+  await source.selectOption('gta6_pack');
+  assert.equal(await topic.inputValue(),'Notícias de GTA 6');
+  await watch.getByRole('button',{name:'Criar rotina',exact:true}).click();
+  const editPack=page.getByRole('button',{name:'Editar Pack editorial QA',exact:true});
+  await editPack.waitFor();
+  assert.deepEqual(mutations.at(-1).body.packDefaults.editorial,{
+    enabled:false,ai:true,topic:'Notícias de GTA 6',keywords:['GTA 6','mundo aberto'],context:'Use os fatos disponíveis.',
+  });
+  await editPack.click();
+  await watch.getByText('Geração automática de textos',{exact:true}).click();
+  assert.equal(await enabled.isChecked(),false);
+  assert.equal(await ai.isChecked(),true);
+  assert.equal(await topic.inputValue(),'Notícias de GTA 6');
+  await watch.getByRole('button',{name:'Cancelar',exact:true}).click();
   await page.getByRole('button',{name:'Cortes salvos',exact:true}).click();
   await page.locator('#main details').evaluateAll(items=>items.forEach(item=>item.open=false));await page.evaluate(()=>scrollTo(0,0));
   await mkdir('artifacts',{recursive:true});await page.screenshot({path:'artifacts/my-folders-desktop.png',fullPage:true});

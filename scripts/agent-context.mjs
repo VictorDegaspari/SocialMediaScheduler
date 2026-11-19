@@ -95,11 +95,10 @@ export function checkCommands(area){
   if(area.ui.length)commands.push('./scripts/node-local.sh node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.frontend.json','./scripts/node-local.sh node_modules/vite/bin/vite.js build');
   if(area.unit.length)commands.push('./scripts/node-local.sh --test '+area.unit.join(' '));
   if(area.integration.length)commands.push('./scripts/test-integration.sh '+area.integration.join(' '));
-  const fullUi=area.ui.some(script=>['scripts/check-ui.mjs','scripts/check-native-ui.mjs'].includes(script));
-  if(fullUi)commands.push('./scripts/test-ui.sh # includes QA setup/cleanup and native MP4 fixture');
+  const fullUi=area.ui.includes('scripts/check-ui.mjs');
+  if(fullUi)commands.push('./scripts/test-ui.sh # includes QA setup/cleanup');
   else for(const script of area.ui)commands.push('./scripts/node-local.sh '+script);
   if(area.browser?.length)commands.push('# Browser fixtures: inspect '+area.browser.join(' ')+' before running.');
-  if(area.ui.some(script=>!['scripts/check-cuts-ui.mjs','scripts/check-pagination-ui.mjs'].includes(script)))commands.push('# Other UI checks use the running service for assets; rebuild when frontend changed.');
   return commands.join('\n');
 }
 

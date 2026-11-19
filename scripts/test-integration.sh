@@ -17,5 +17,6 @@ SELECT 'CREATE DATABASE watcher_cuts_test' WHERE NOT EXISTS (SELECT FROM pg_data
 SELECT 'CREATE DATABASE watcher_cuts_files_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='watcher_cuts_files_test')\gexec
 SELECT 'CREATE DATABASE watcher_pagination_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='watcher_pagination_test')\gexec
 SELECT 'CREATE DATABASE watcher_requests_pages_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='watcher_requests_pages_test')\gexec
+SELECT 'CREATE DATABASE watcher_youtube_channels_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='watcher_youtube_channels_test')\gexec
 SQL
 docker compose run --rm --no-deps -e LOG_LEVEL=silent -v "$PWD:/app" app node --import tsx --test "${test_files[@]}"

@@ -7,6 +7,7 @@ import {pipeline} from 'node:stream/promises';
 import {z} from 'zod';
 import {AppError,retryAfter,dataDir} from './config.js';
 import {metadataSchema,type Metadata} from './domain.js';
+import {completeMetadata} from './editorial.js';
 import type {DriveFile} from './clients.js';
 import {PACK_ROOT,PACK_CATALOG_URL,packDefaultsSchema,packYoutubeSynthetic,type PackDefaults} from './pack-config.js';
 
@@ -26,9 +27,10 @@ export function parsePackCatalog(value:unknown):PackVideo[] {
   return videos;
 }
 export function packMetadata(video:PackVideo,defaults:PackDefaults):Metadata {
-  return metadataSchema.parse({title:[defaults.titlePrefix,video.t].filter(Boolean).join(' ').slice(0,100),description:defaults.description,hashtags:defaults.hashtags,
+  const meta=metadataSchema.parse({title:[defaults.titlePrefix,video.t].filter(Boolean).join(' ').slice(0,100),description:defaults.description,hashtags:defaults.hashtags,
     youtube:{visibility:defaults.youtubeVisibility,madeForKids:defaults.madeForKids,containsSyntheticMedia:packYoutubeSynthetic(defaults)},
     tiktok:{privacyLevel:'PUBLIC_TO_EVERYONE',madeWithAI:defaults.madeWithAI}});
+  return completeMetadata(meta,{sourceTitle:video.t,titlePrefix:defaults.titlePrefix,options:defaults.editorial});
 }
 async function request(url:string,timeout=30_000) {
   let response:Response;

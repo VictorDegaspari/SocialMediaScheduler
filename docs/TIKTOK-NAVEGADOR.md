@@ -29,7 +29,7 @@ Se não houver vídeo novo, a oportunidade aguarda e a pasta é consultada novam
 
 ## Agente no Ubuntu
 
-`./scripts/start.sh` gera a chave local, inicia os containers e instala/atualiza **drive-watcher-browser-agent.service** no systemd do usuário quando há sessão gráfica, Google Chrome e dependências locais disponíveis. O agente inicia com a sessão gráfica e encerra com ela. Não recebe sua senha nem usa o perfil habitual do Chrome.
+`./scripts/start.sh` gera a chave local, inicia os containers e instala/atualiza **drive-watcher-browser-agent.service** no systemd do usuário quando há sessão gráfica, Google Chrome e dependências locais disponíveis. `./scripts/install-autostart.sh` também configura esse agente. Ele inicia com a sessão gráfica, reinicia se encerrar sozinho e encerra com ela. A opção `--ensure`, usada pelo instalador de início automático, preserva tarefas em andamento. Não recebe sua senha nem usa o perfil habitual do Chrome.
 
 Se o agente estiver desconectado, execute na pasta do projeto:
 

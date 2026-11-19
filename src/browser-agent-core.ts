@@ -2,8 +2,8 @@ import { readFile, readlink, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
 export const browserStages = new Set(['browser_duplicate','browser_source_failed','browser_preparing_source','browser_scheduled','browser_published','platform_limit','browser_manual_login','browser_upload_started','browser_review_required','browser_manual_action',
-  'login_required','security_check','page_changed','upload_unconfirmed','browser_attempt_failed','browser_agent_failed','browser_no_video']);
-export const browserFailureStages = new Set(['browser_source_failed','platform_limit','login_required','security_check','page_changed','upload_unconfirmed','browser_attempt_failed','browser_agent_failed']);
+  'login_required','security_check','page_changed','upload_unconfirmed','browser_attempt_failed','browser_agent_failed','browser_job_invalid','browser_no_video']);
+export const browserFailureStages = new Set(['browser_source_failed','platform_limit','login_required','security_check','page_changed','upload_unconfirmed','browser_attempt_failed','browser_agent_failed','browser_job_invalid']);
 export function browserProgress(line:string){
   if(line.length>65536)return;
   try {

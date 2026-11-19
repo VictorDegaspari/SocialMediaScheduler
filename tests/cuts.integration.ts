@@ -6,6 +6,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
+import type {CutSourceRange} from '../src/cuts-source-limits.js';
 
 const dbUrl=new URL(process.env.DATABASE_URL!);dbUrl.pathname='/watcher_cuts_test';process.env.DATABASE_URL=dbUrl.toString();
 const redisUrl=new URL(process.env.REDIS_URL!);redisUrl.pathname='/12';process.env.REDIS_URL=redisUrl.toString();
@@ -26,10 +27,11 @@ const { cleanupPublishedMedia }=await import('../src/media-cleanup.js');
 const {sha256:sha256File}=await import('../src/media.js');
 await initDb();
 let downloads=0,renders=0,failRender=false,renderInputs:any[]=[];
+let downloadedRanges:(CutSourceRange|undefined)[]=[];
 const transcript=[{start:5,end:8,text:'Como aprender algo novo?',words:[{start:5,end:5.5,text:'Como'},{start:5.6,end:6.2,text:'aprender'},{start:6.3,end:6.8,text:'algo'},{start:7,end:8,text:'novo?'}]},{start:9,end:13,text:'Pratique todos os dias.'},{start:15,end:19,text:'Assim você melhora.'}];
 const media={
   dependencies:async()=>({ready:true,details:[]}),
-  download:async(_url:string,dir:string)=>{downloads++;await copyFile(fixture,join(dir,'source.mp4'));return {title:'Vídeo fonte de teste',duration:60};},
+  download:async(_url:string,dir:string,range?:CutSourceRange)=>{downloads++;downloadedRanges.push(range);await copyFile(fixture,join(dir,'source.mp4'));return {title:'Vídeo fonte de teste',duration:60};},
   transcribe:async()=>structuredClone(transcript),
   select:(_cues:unknown,_duration:number,count:number,_seconds:number,replay?:any)=>replay?.status==='available'
     ?[{start:15,end:19,title:'Pico de replay',reason:'Mapa público de replay.',score:99}]
@@ -50,7 +52,7 @@ const currentClip=async()=>((await state()).jobs[0].clips[0]);
 const publishBody=(clip:any)=>({channelId:'native:youtube:cuts-channel',title:'Título revisado',description:'Descrição revisada',visibility:'private',madeForKids:false,containsSyntheticMedia:false,confirm:true,revision:clip.revision});
 
 beforeEach(async()=>{
-  globalThis.fetch=originalFetch;downloads=0;renders=0;failRender=false;renderInputs=[];
+  globalThis.fetch=originalFetch;downloads=0;renders=0;failRender=false;renderInputs=[];downloadedRanges=[];
   await pool.query('TRUNCATE cuts,cut_jobs,content_claims,deliveries,videos,watches,publication_requests,publishing_profiles,manual_actions,events,connected_accounts,settings,browser_commands,browser_agent,browser_settings CASCADE');
   await rm(process.env.DATA_DIR!,{recursive:true,force:true});await mkdir(process.env.DATA_DIR!);
   await setSetting('playwrightMcpExtension',{extensionToken:'test-extension-token'});
@@ -64,6 +66,27 @@ test('URLs são normalizadas e hosts externos, credenciais e playlists são recu
   assert.equal(youtubeVideoUrl('https://youtu.be/abcdefghijk?t=20'),'https://www.youtube.com/watch?v=abcdefghijk');
   assert.equal(youtubeVideoUrl('https://www.youtube.com/shorts/abcdefghijk'),'https://www.youtube.com/watch?v=abcdefghijk');
   for(const url of ['https://youtube.com.evil.test/watch?v=abcdefghijk','http://youtube.com/watch?v=abcdefghijk','https://user:pass@youtube.com/watch?v=abcdefghijk','https://youtube.com/playlist?list=xyz','https://127.0.0.1/watch?v=abcdefghijk'])assert.throws(()=>youtubeVideoUrl(url));
+});
+test('trecho acima de duas horas é aceito com janela limitada, persistida e reutilizada na recuperação',async()=>{
+  const url='https://youtu.be/abcdefghijk',sourceRange={start:7800,end:7860};
+  const suggestions=await call('/replay-windows',{url,duration:18000});
+  assert.equal(suggestions.status,200);
+  assert.deepEqual((await suggestions.json()).ranges,[{start:0,end:1800}]);
+  const invalid=await call('',{url,sourceRange:{start:7800,end:9600.001}});
+  assert.equal(invalid.status,400);assert.equal((await state()).jobs.length,0);
+  const queued=await call('',{url,sourceRange});
+  assert.equal(queued.status,202);
+  const {id}=await queued.json();
+  await service.tick();
+  const [job]=(await state()).jobs;
+  assert.equal(job.status,'review');assert.deepEqual(job.source_range,sourceRange);
+  assert.deepEqual(downloadedRanges,[sourceRange]);
+  assert.equal(job.clips[0].start_seconds,5);
+  await rm(join(cutDirectory(id),'source.mp4'));
+  assert.equal((await call('/jobs/'+id+'/prepare-source',{})).status,202);
+  await service.tick();
+  assert.deepEqual(downloadedRanges,[sourceRange,sourceRange]);
+  assert.equal((await state()).jobs[0].clips[0].id,job.clips[0].id);
 });
 test('publishing a cut to TikTok requires its browser token before creating media or deliveries',async()=>{
   await create();await service.tick();const clip=await currentClip(),previous=process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
