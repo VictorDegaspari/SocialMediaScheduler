@@ -50,6 +50,7 @@ try{
   assert(fonts.length&&fonts.every(size=>size>=13),'workspace typography has a readable minimum');
   await page.locator('[data-page="watches"]').click();
   await page.getByRole('heading',{name:'Minhas pastas',exact:true}).waitFor();
+  assert.equal(await page.getByRole('link',{name:'Gerar novos cortes',exact:true}).getAttribute('href'),'#cuts/new');
   assert.equal(await page.locator('#main h1').count(),1);assert.equal(await page.locator('.cuts-library-card').count(),6);assert.equal(await page.locator('.watch-card').count(),2);
   assert.equal(await page.locator('#main details[open]').count(),0);
   const cards=page.locator('.cuts-library-card'),boxes=await cards.evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect();return {x:r.x,y:r.y,height:r.height};}));

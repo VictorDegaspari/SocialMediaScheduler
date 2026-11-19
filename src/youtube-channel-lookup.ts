@@ -76,14 +76,15 @@ async function youtubeTab(url: string): Promise<unknown> {
 
 type ChannelTab = z.infer<typeof tabSchema>;
 
-function candidates(tab: ChannelTab | null, kind: 'video' | 'live') {
+function candidates(tab: ChannelTab | null, tabName: 'videos' | 'streams') {
   const items: {video: ChannelVideo; timestamp: number}[] = [];
   for (const entry of tab?.entries ?? []) {
     const parsed = entrySchema.safeParse(entry);
     if (!parsed.success) continue;
     const {id, title, url, duration, timestamp, live_status: liveStatus, availability} = parsed.data;
-    const eligible = kind === 'live' ? liveStatus === 'was_live' : !liveStatus || liveStatus === 'not_live';
-    if (!eligible || url !== youtube + '/watch?v=' + id || (availability && availability !== 'public')) continue;
+    if (url !== youtube + '/watch?v=' + id || (availability && availability !== 'public')) continue;
+    const kind = liveStatus === 'was_live' ? 'live' : tabName === 'videos' && (!liveStatus || liveStatus === 'not_live') ? 'video' : null;
+    if (!kind) continue;
     items.push({video: {id, title: title.slice(0, 500), duration: duration ?? null, kind}, timestamp: timestamp ?? 0});
   }
   return items;
@@ -118,7 +119,7 @@ export async function lookupYoutubeChannel(reference: string, readTab = youtubeT
   if (!id) throw new AppError('Canal não encontrado. Confira o @ ou o link no YouTube.', 404);
   const name = (profile.channel?.trim() || profile.uploader?.trim() ||
     profile.title?.replace(/\s+-\s+(?:Videos|Live|Streams)$/i, '').trim() || id).slice(0, 300);
-  const items = [...candidates(uploads, 'video'), ...candidates(streams, 'live')];
+  const items = [...candidates(uploads, 'videos'), ...candidates(streams, 'streams')];
   // When a replay appears on both tabs, keep its explicit live classification.
   const unique = new Map(items.map(item => [item.video.id, item]));
   const videos = [...unique.values()].sort((a, b) => b.timestamp - a.timestamp).slice(0, 3).map(item => item.video);

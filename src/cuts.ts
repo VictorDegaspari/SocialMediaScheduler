@@ -10,7 +10,7 @@ import { AppError, dataDir, errorMessage, logger } from './config.js';
 import { pool } from './db.js';
 import { publisherEngine } from './native-auth.js';
 import { cutDestinations,cutPublishSchema,publishCut } from './cut-publications.js';
-import { cutParallelism, cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue } from './cuts-media.js';
+import { cutParallelism, cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue, type CutSourceQuality, type RenderCutInput } from './cuts-media.js';
 import type {CutSourceRange} from './cuts-source-limits.js';
 import {cutSourceRangeSchema, suggestSourceRanges} from './cuts-source-range.js';
 import { sweepCutUploadFiles } from './cuts-upload-files.js';
@@ -93,11 +93,27 @@ function captionWords(cue:Cue,sources:Cue[]):Cue['words'] {
   }
 }
 
-type Job={id:string;url:string;status:string;title:string|null;duration:number|null;language:string;clip_count:number;target_seconds:number;transcript:Cue[]|null;error:string|null;replay_data:ReplayData|null;source_range:CutSourceRange|null;pending_analysis:{count:number;targetSeconds:number}|null};
-type Clip={id:string;job_id:string;title:string;reason:string;score:number;edited_from_cut_id:string|null;start_seconds:number;end_seconds:number;captions:Cue[];framing:'fit'|'crop';status:string;revision:number;local_file:string|null;delivery_id:string|null;caption_style:CaptionStyle;framing_options:FramingOptions;excluded_ranges:TimeRange[];overlays:CutOverlay[];output_duration:number};
+type Job={id:string;url:string;status:string;title:string|null;duration:number|null;language:string;clip_count:number;target_seconds:number;transcript:Cue[]|null;error:string|null;replay_data:ReplayData|null;source_range:CutSourceRange|null;source_quality:CutSourceQuality;pending_analysis:{count:number;targetSeconds:number}|null};
+type Clip={id:string;job_id:string;title:string;reason:string;score:number;edited_from_cut_id:string|null;start_seconds:number;end_seconds:number;captions:Cue[];framing:'fit'|'crop';status:string;revision:number;local_file:string|null;delivery_id:string|null;caption_style:CaptionStyle;framing_options:FramingOptions;excluded_ranges:TimeRange[];overlays:CutOverlay[];output_duration:number;export_status:'queued'|'rendering'|'ready'|'failed'|null};
 type CutsMedia={download:typeof downloadCutSource;transcribe:typeof transcribeCutSource;select:typeof selectHighlights;render:typeof renderCut;dependencies:typeof cutsDependencies;replay?:typeof fetchCutHeatmap};
 
 async function exists(path:string) {return stat(path).then(s=>s.isFile()).catch(()=>false);}
+const playableStatuses=['review','publishing','posted','failed'];
+const exportPending="export_status IN ('queued','rendering')";
+
+async function finalCutFile(quality:CutSourceQuality,clip:Clip) {
+  const dir=cutDirectory(clip.job_id);
+  if(quality==='original')return join(dir,clip.id+'.mp4');
+  const path=join(dir,clip.id+'.master.mp4');
+  return clip.export_status==='ready'&&await exists(path)?path:null;
+}
+
+function renderInput(clip:Clip):RenderCutInput {
+  return {start:clip.start_seconds,end:clip.end_seconds,captions:clip.captions,framing:clip.framing,
+    captionStyle:captionStyleSchema.parse(clip.caption_style||{}),
+    framingOptions:framingOptionsSchema.parse({...clip.framing_options,mode:clip.framing_options?.mode||clip.framing}),
+    excludedRanges:clip.excluded_ranges||[],overlays:cutOverlaysSchema.parse(clip.overlays||[])};
+}
 
 async function cutSourceState(job:Job){
   return {ready:!!job.transcript&&!['downloading','transcribing'].includes(job.status)&&await exists(join(cutDirectory(job.id),'source.mp4')),
@@ -132,7 +148,9 @@ async function ensureDiscardable(db:PoolClient,clips:Clip[]) {
 }
 
 async function removeCutFiles(jobId:string,clipId:string) {
-  for(const suffix of ['.mp4','.master.mp4','.ass'])await rm(join(cutDirectory(jobId),clipId+suffix),{force:true});
+  const base=join(cutDirectory(jobId),clipId);
+  for(const suffix of ['.mp4','.master.mp4','.master.rendering.mp4','.ass','.master.ass'])await rm(base+suffix,{force:true});
+  await rm(base+'.export-source',{recursive:true,force:true});
 }
 
 export class CutsService {
@@ -150,7 +168,7 @@ export class CutsService {
   async state(page:PageOptions=parsePagination({},{scope:'cuts',defaultLimit:10})) {
     const values:unknown[]=[];
     const [dependencies,channels,result]=await Promise.all([
-      this.dependencies(),cutDestinations(),pool.query(`SELECT j.id,j.url,j.status,j.title,j.duration,j.error,j.replay_data,j.source_range,j.analysis_message,j.created_at,${cursorFields('j.created_at','j.id')}
+      this.dependencies(),cutDestinations(),pool.query(`SELECT j.id,j.url,j.status,j.title,j.duration,j.error,j.replay_data,j.source_range,j.source_quality,j.analysis_message,j.created_at,${cursorFields('j.created_at','j.id')}
         FROM cut_jobs j WHERE j.status<>'discarded'${page.scope==='cutFolders'?" AND EXISTS(SELECT 1 FROM cuts c WHERE c.job_id=j.id AND c.local_file IS NOT NULL AND c.status IN ('review','publishing','posted','failed'))":''}${keysetClause(page,'j.created_at','j.id',values)}
         ORDER BY j.created_at DESC,j.id DESC${pageLimit(page,values)}`,values)
     ]);
@@ -161,10 +179,13 @@ export class CutsService {
     const {rows:publications}=await pool.query(`SELECT id,video_id,integration_id,provider,engine,status,error,post_id,release_url,payload->>'channelName' AS channel_name
       FROM deliveries WHERE video_id=ANY($1::uuid[]) ORDER BY created_at,id`,[clips.rows.map(clip=>clip.id)]);
     const sources=new Map(await Promise.all(jobs.map(async job=>[job.id,await exists(join(cutDirectory(job.id),'source.mp4'))] as const)));
+    const qualities=new Map(jobs.map(job=>[job.id,job.source_quality]));
     const mapped=await Promise.all(clips.rows.map(async c=>{
       const {local_file:localFile,...rest}=c;
+      const hasMedia=!!localFile&&await exists(join(cutDirectory(c.job_id),c.id+'.mp4'));
       return {...rest,publicationText:cutEditorial(c),overlays:cutOverlaysSchema.parse(c.overlays||[]),publications:publications.filter(delivery=>delivery.video_id===c.id),caption_style:captionStyleSchema.parse(c.caption_style||{}),framing_options:framingOptionsSchema.parse({mode:c.framing,...c.framing_options}),
-        output_duration:c.output_duration??c.end_seconds-c.start_seconds,error:c.error||c.delivery_error,hasMedia:!!localFile&&await exists(join(cutDirectory(c.job_id),c.id+'.mp4')),
+        output_duration:c.output_duration??c.end_seconds-c.start_seconds,error:c.error||c.delivery_error,hasMedia,
+        finalReady:hasMedia&&!!await finalCutFile(qualities.get(c.job_id),c),
         release_url:c.release_url||(c.post_id?'https://www.youtube.com/watch?v='+encodeURIComponent(c.post_id):null)};
     }));
     return {dependencies,channels,jobs:jobs.map(j=>({...j,hasSource:sources.get(j.id),clips:mapped.filter(c=>c.job_id===j.id)})),pagination};
@@ -216,23 +237,64 @@ export class CutsService {
     const lock=await pool.connect();
     let acquired=false;
     try {
-      const {rows}=await lock.query<{id:string}>('SELECT id FROM cut_jobs WHERE status=ANY($1::text[]) ORDER BY created_at,id',[stages]);
+      const {rows}=await lock.query<{id:string}>(`SELECT id FROM cut_jobs WHERE status=ANY($1::text[]) OR EXISTS
+        (SELECT 1 FROM cuts WHERE job_id=cut_jobs.id AND ${exportPending}) ORDER BY created_at,id`,[stages]);
       for(const job of rows){
         const key=lockKey(job.id);
         const {rows:[claimed]}=await lock.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS ok',[key]);
         if(!claimed.ok)continue;
         try {
           const {rows:[current]}=await lock.query<Job>('SELECT * FROM cut_jobs WHERE id=$1',[job.id]);
-          if(!current||!stages.includes(current.status))continue;
+          if(!current||current.status==='discarded')continue;
+          const generatePreview=stages.includes(current.status);
+          const final=generatePreview?undefined:(await lock.query<Clip>(
+            `SELECT * FROM cuts WHERE job_id=$1 AND ${exportPending} ORDER BY updated_at,id LIMIT 1`,[job.id])).rows[0];
+          if(!generatePreview&&!final)continue;
           acquired=await claimSlot(lock,slot);
           if(!acquired)return;
-          await this.generate(current,lock,slot);
+          if(final)await this.exportFinal(current,final);
+          else await this.generate(current,lock,slot);
           return;
         } finally {await lock.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);}
       }
     } finally {
       try{if(acquired)await releaseSlot(lock,slot);}finally{lock.release();}
     }
+  }
+  private async exportFinal(job:Job,clip:Clip) {
+    const dir=cutDirectory(job.id),scratch=join(dir,clip.id+'.export-source');
+    await pool.query("UPDATE cuts SET export_status='rendering',export_error=NULL WHERE id=$1",[clip.id]);
+    let failure:string|null=null;
+    try {
+      // A worker stopped during FFmpeg can leave temporary high-quality inputs.
+      await rm(scratch,{recursive:true,force:true});
+      const input=renderInput(clip),sourceParts=[];
+      const offset=job.source_range?.start??0,limitMs=Math.floor((offset+job.duration!)*1000);
+      for(const [i,part] of cutTimeline(input.start,input.end,input.excludedRanges).entries()){
+        // YouTube ranges use millisecond precision and require at least half a second.
+        const startMs=Math.floor((offset+part.start)*1000);
+        const endMs=Math.min(limitMs,Math.max(Math.ceil((offset+part.end)*1000),startMs+500));
+        const start=Math.max(offset,Math.min(startMs,endMs-500)/1000);
+        const end=endMs/1000;
+        const partDir=join(scratch,String(i));
+        await mkdir(partDir,{recursive:true});
+        const source=await this.media.download(job.url,partDir,{start,end},'original');
+        const seek=Math.max(0,offset+part.start-start);
+        if(source.duration+.1<seek+part.end-part.start)throw new AppError('O YouTube entregou um trecho incompleto. Tente gerar o MP4 final novamente.');
+        sourceParts.push({path:join(partDir,'source.mp4'),seek});
+      }
+      await this.media.render(dir,clip.id,input,{sourceParts});
+    } catch(error) {
+      failure=errorMessage(error);
+    }
+    try {
+      await rm(scratch,{recursive:true,force:true});
+      await rm(join(dir,clip.id+'.master.rendering.mp4'),{force:true});
+      await rm(join(dir,clip.id+'.master.ass'),{force:true});
+    } catch(error) {
+      failure??=errorMessage(error);
+    }
+    await pool.query('UPDATE cuts SET export_status=$2,export_error=$3 WHERE id=$1',[clip.id,failure?'failed':'ready',failure]);
   }
   private async stage(id:string,status:string) {await pool.query('UPDATE cut_jobs SET status=$2,error=NULL,updated_at=now() WHERE id=$1',[id,status]);}
   private async generate(job:Job,lock:PoolClient,slot:number) {
@@ -241,14 +303,14 @@ export class CutsService {
       await mkdir(dir,{recursive:true});
       if(!job.title||!await exists(join(dir,'source.mp4'))) {
         await this.stage(job.id,'downloading');
-        const source=await this.media.download(job.url,dir,job.source_range??undefined);job.title=source.title;job.duration=source.duration;
+        const source=await this.media.download(job.url,dir,job.source_range??undefined,job.source_quality);job.title=source.title;job.duration=source.duration;
         job.replay_data=source.replay||null;
         await pool.query('UPDATE cut_jobs SET title=$2,duration=$3,replay_data=$4,source_removed_at=NULL WHERE id=$1',[job.id,source.title,source.duration,source.replay?JSON.stringify(source.replay):null]);
       }
       if(!job.transcript) {
         await this.stage(job.id,'transcribing');
         const transcript=await this.media.transcribe(dir,job.language);
-        job.transcript=job.source_range?clipCaptions(transcript,0,job.duration!):transcript;
+        job.transcript=job.source_range||job.source_quality==='review'?clipCaptions(transcript,0,job.duration!):transcript;
         await pool.query('UPDATE cut_jobs SET transcript=$2 WHERE id=$1',[job.id,JSON.stringify(job.transcript)]);
       }
       let {rows:clips}=await pool.query<Clip>('SELECT * FROM cuts WHERE job_id=$1 ORDER BY created_at,id',[job.id]);
@@ -283,8 +345,11 @@ export class CutsService {
       await this.stage(job.id,'rendering');
       const render=async(clip:Clip)=>{
         await pool.query("UPDATE cuts SET status='rendering',error=NULL,updated_at=now() WHERE id=$1",[clip.id]);
-        const result=await this.media.render(dir,clip.id,{start:clip.start_seconds,end:clip.end_seconds,captions:clip.captions,framing:clip.framing,
-          captionStyle:captionStyleSchema.parse(clip.caption_style||{}),framingOptions:framingOptionsSchema.parse({...clip.framing_options,mode:clip.framing_options?.mode||clip.framing}),excludedRanges:clip.excluded_ranges||[],overlays:cutOverlaysSchema.parse(clip.overlays||[])});
+        if(job.source_quality==='review'&&!clip.export_status){
+          await rm(join(dir,clip.id+'.master.mp4'),{force:true});
+          await rm(join(dir,clip.id+'.export-source'),{recursive:true,force:true});
+        }
+        const result=await this.media.render(dir,clip.id,renderInput(clip),job.source_quality==='review'?{preview:true}:undefined);
         await pool.query("UPDATE cuts SET status='review',local_file=$2,render_warnings=$3,error=NULL,updated_at=now() WHERE id=$1",[clip.id,clip.id+'.mp4',JSON.stringify(result.warnings||[])]);
       };
       const queued=clips.filter(c=>['queued','rendering'].includes(c.status)),otherSlot=workerSlots.find(value=>value!==slot);
@@ -390,8 +455,7 @@ cutsRoutes.post('/api/cuts/jobs/:id/prepare-source',async(req,res)=>{
     if(job.status==='discarded')throw new AppError('Este projeto foi descartado. Crie outro projeto para gerar novos cortes.',409);
     const source=await cutSourceState(job);
     if(source.ready||stages.includes(job.status))return source;
-    // The regular worker restores the best source without changing existing cuts
-    // or uploads. Repeated requests share this job and never start publication.
+    // Restore the project's editing source without changing cuts or uploads.
     await db.query("UPDATE cut_jobs SET status='queued',error=NULL,updated_at=now() WHERE id=$1",[job.id]);
     return {...source,status:'queued',error:null};
   });
@@ -424,7 +488,7 @@ cutsRoutes.post('/api/cuts',async(req,res)=>{
     const {rows:[count]}=await db.query(`SELECT count(*)::int AS n FROM cut_jobs j WHERE status<>'discarded'
       AND (source_removed_at IS NULL OR EXISTS(SELECT 1 FROM cuts c WHERE c.job_id=j.id AND c.local_file IS NOT NULL))`);
     if(count.n>=10)throw new AppError('Há 10 projetos com arquivos guardados no gerador. Exclua um projeto anterior para liberar espaço.',409);
-    await db.query('INSERT INTO cut_jobs(id,url,language,clip_count,target_seconds,source_range) VALUES($1,$2,$3,$4,$5,$6)',[id,url,input.language,input.count,input.targetSeconds,input.sourceRange??null]);
+    await db.query("INSERT INTO cut_jobs(id,url,language,clip_count,target_seconds,source_range,source_quality) VALUES($1,$2,$3,$4,$5,$6,'review')",[id,url,input.language,input.count,input.targetSeconds,input.sourceRange??null]);
     await db.query('COMMIT');
   } catch(error) {await db.query('ROLLBACK');throw error;} finally {db.release();}
   res.status(202).json({id,status:'queued'});
@@ -432,12 +496,44 @@ cutsRoutes.post('/api/cuts',async(req,res)=>{
 
 cutsRoutes.get('/api/cuts/:id/media',async(req,res)=>{
   const id=uuid.parse(req.params.id);
-  const {rows:[clip]}=await pool.query<Clip>('SELECT * FROM cuts WHERE id=$1',[id]);
-  if(!clip?.local_file||!['review','publishing','posted','failed'].includes(clip.status))throw new AppError('O arquivo não está disponível. Ele pode ter sido excluído manualmente.',404);
+  const {rows:[clip]}=await pool.query<Clip&{source_quality:CutSourceQuality}>(
+    'SELECT c.*,j.source_quality FROM cuts c JOIN cut_jobs j ON j.id=c.job_id WHERE c.id=$1',[id]);
+  if(!clip?.local_file||!playableStatuses.includes(clip.status))throw new AppError('O arquivo não está disponível. Ele pode ter sido excluído manualmente.',404);
+  if(req.query.download==='1'||req.query.final==='1'){
+    if(req.query.v!==undefined&&String(clip.revision)!==req.query.v)throw new AppError('O corte mudou. Atualize a página para baixar a versão atual.',409);
+    const final=await finalCutFile(clip.source_quality,clip);
+    if(!final)throw new AppError('Gere o MP4 final para baixar em alta qualidade.',409);
+    if(!await exists(final))throw new AppError('O arquivo deste corte não está disponível.',404);
+    if(req.query.download==='1')res.download(final,clip.title+'.mp4');
+    else res.type('video/mp4').sendFile(final);
+    return;
+  }
   const path=join(cutDirectory(clip.job_id),id+'.mp4');
   if(!await exists(path))throw new AppError('O arquivo da prévia não está disponível.',404);
-  if(req.query.download==='1'){res.download(path,clip.title+'.mp4');return;}
   res.type('video/mp4');res.sendFile(path);
+});
+
+cutsRoutes.get('/api/cuts/:id/export',async(req,res)=>{
+  const id=uuid.parse(req.params.id);
+  const {rows:[clip]}=await pool.query<Clip&{source_quality:CutSourceQuality;export_error:string|null}>(
+    'SELECT c.*,j.source_quality FROM cuts c JOIN cut_jobs j ON j.id=c.job_id WHERE c.id=$1',[id]);
+  if(!clip?.local_file||!playableStatuses.includes(clip.status)||String(clip.revision)!==req.query.v)
+    throw new AppError('O corte mudou. Escolha a versão atual para continuar.',409);
+  const final=await finalCutFile(clip.source_quality,clip);
+  res.json({status:final?'ready':clip.export_status==='ready'?null:clip.export_status,error:clip.export_error});
+});
+
+cutsRoutes.post('/api/cuts/:id/export',async(req,res)=>{
+  const {revision}=z.object({revision:z.number().int().positive()}).parse(req.body);
+  const status=await withJob(uuid.parse(req.params.id),true,async(db,job,clip)=>{
+    if(!clip?.local_file||!playableStatuses.includes(clip.status))throw new AppError('Aguarde uma prévia pronta para gerar o MP4 final.',409);
+    if(revision!==clip.revision)throw new AppError('O corte mudou. Confira a nova prévia antes de gerar o MP4 final.',409);
+    if(await finalCutFile(job.source_quality,clip))return 'ready';
+    if(clip.export_status==='queued'||clip.export_status==='rendering')return clip.export_status;
+    await db.query("UPDATE cuts SET export_status='queued',export_error=NULL,updated_at=now() WHERE id=$1",[clip.id]);
+    return 'queued';
+  });
+  res.status(status==='ready'?200:202).json({status});
 });
 
 cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
@@ -490,7 +586,7 @@ cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
     if(createdVersion)await db.query(`INSERT INTO cuts(id,title,start_seconds,end_seconds,framing,captions,caption_style,framing_options,excluded_ranges,output_duration,overlays,job_id,reason,score,edited_from_cut_id)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,[...values,job.id,clip.reason,clip.score,id]);
     else await db.query(`UPDATE cuts SET title=$2,start_seconds=$3,end_seconds=$4,framing=$5,captions=$6,caption_style=$7,framing_options=$8,excluded_ranges=$9,output_duration=$10,overlays=$11,
-      status='queued',local_file=NULL,revision=revision+1,error=NULL,render_warnings='[]',updated_at=now() WHERE id=$1`,values);
+      status='queued',local_file=NULL,revision=revision+1,error=NULL,render_warnings='[]',export_status=NULL,export_error=NULL,updated_at=now() WHERE id=$1`,values);
     await db.query("UPDATE cut_jobs SET status='rendering',error=NULL,updated_at=now() WHERE id=$1",[job.id]);
     return {ok:true,id:targetId,createdVersion};
   });
@@ -500,7 +596,8 @@ cutsRoutes.put('/api/cuts/:id',async(req,res)=>{
 cutsRoutes.post('/api/cuts/:id/publish',async(req,res)=>{
   const id=uuid.parse(req.params.id),input=cutPublishSchema.parse(req.body);
   if(input.channelId.startsWith('native:youtube:')&&await publisherEngine()!=='local')throw new AppError('Selecione Motor local em Conexões para postar os cortes pelo YouTube direto.',409);
-  const result=await withJob(id,true,(db,job,clip)=>publishCut(db,job,clip,cutDirectory(job.id),input));
+  const result=await withJob(id,true,async(db,job,clip)=>publishCut(db,job,clip,
+    clip?await finalCutFile(job.source_quality,clip):null,input));
   res.status(202).json(result);
 });
 
@@ -509,7 +606,7 @@ cutsRoutes.post('/api/cuts/:id/discard',async(req,res)=>{
   await withJob(uuid.parse(req.params.id),true,async(db,job,clip)=>{
     if(!clip)throw new AppError('Corte não encontrado.',404);
     await ensureDiscardable(db,[clip]);
-    await db.query("UPDATE cuts SET status='discarded',local_file=NULL,error=NULL,updated_at=now() WHERE id=$1",[clip.id]);
+    await db.query("UPDATE cuts SET status='discarded',local_file=NULL,error=NULL,export_status=NULL,export_error=NULL,updated_at=now() WHERE id=$1",[clip.id]);
     await removeCutFiles(job.id,clip.id);
   });
   await service.retirePublished();res.json({ok:true});
@@ -520,19 +617,24 @@ cutsRoutes.post('/api/cuts/jobs/:id/discard',async(req,res)=>{
   await withJob(uuid.parse(req.params.id),false,async(db,job)=>{
     const {rows:clips}=await db.query<Clip>('SELECT * FROM cuts WHERE job_id=$1 FOR UPDATE',[job.id]);
     await ensureDiscardable(db,clips);
-    await db.query("UPDATE cuts SET status='discarded',local_file=NULL,error=NULL,updated_at=now() WHERE job_id=$1",[job.id]);
+    await db.query("UPDATE cuts SET status='discarded',local_file=NULL,error=NULL,export_status=NULL,export_error=NULL,updated_at=now() WHERE job_id=$1",[job.id]);
     await db.query("UPDATE cut_jobs SET status='discarded',source_removed_at=now(),error=NULL,updated_at=now() WHERE id=$1",[job.id]);
     await rm(cutDirectory(job.id),{recursive:true,force:true});
   });res.json({ok:true});
 });
 
 cutsRoutes.post('/api/cuts/jobs/:id/retry',async(req,res)=>{
+  const {sourceRange}=z.object({sourceRange:cutSourceRangeSchema.optional()}).strict().parse(req.body??{});
   const dependencies=await service.dependencies();
   if(!dependencies.ready)throw new AppError('As dependências de geração ainda não estão disponíveis.',503);
   await withJob(uuid.parse(req.params.id),false,async(db,job)=>{
     if(job.status!=='failed')throw new AppError('Somente uma geração com falha pode ser retomada.',409);
+    if(sourceRange&&(job.title||job.transcript||await exists(join(cutDirectory(job.id),'source.mp4'))||
+      (await db.query('SELECT 1 FROM cuts WHERE job_id=$1 LIMIT 1',[job.id])).rowCount)){
+      throw new AppError('Este projeto já tem uma fonte ou cortes. Crie um novo projeto para escolher outro trecho.',409);
+    }
     await db.query("UPDATE cuts SET status='queued',error=NULL WHERE job_id=$1 AND status='failed' AND delivery_id IS NULL",[job.id]);
-    await db.query("UPDATE cut_jobs SET status='queued',error=NULL,updated_at=now() WHERE id=$1",[job.id]);
+    await db.query("UPDATE cut_jobs SET status='queued',error=NULL,source_range=COALESCE($2::jsonb,source_range),updated_at=now() WHERE id=$1",[job.id,sourceRange??null]);
   });res.status(202).json({ok:true});
 });
 return cutsRoutes;

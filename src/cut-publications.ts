@@ -1,7 +1,6 @@
 import {requireTikTokBrowserToken} from './playwright-mcp.js';
 import {randomUUID} from 'node:crypto';
 import {stat} from 'node:fs/promises';
-import {join} from 'node:path';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
 import {AppError} from './config.js';
@@ -27,7 +26,7 @@ export async function cutDestinations(){
 }
 
 /** The caller holds the cuts job lock until the delivery and upload copy commit. */
-export async function publishCut(db:PoolClient,job:{id:string;title:string|null;url:string},clip:any,dir:string,input:z.infer<typeof cutPublishSchema>){
+export async function publishCut(db:PoolClient,job:{id:string;title:string|null;url:string},clip:any,source:string|null,input:z.infer<typeof cutPublishSchema>){
   if(!clip)throw new AppError('Corte não encontrado.',404);
   if(clip.revision!==input.revision)throw new AppError('A prévia mudou. Confira a versão atual antes de postar.',409);
   const channel=(await cutDestinations()).find(channel=>channel.id===input.channelId&&!channel.disabled);
@@ -40,7 +39,8 @@ export async function publishCut(db:PoolClient,job:{id:string;title:string|null;
   const format=framingOptionsSchema.parse(clip.framing_options||{}).format;
   if(input.format&&input.format!==format)throw new AppError('O formato escolhido precisa de uma nova prévia. Ajuste o corte e confira antes de postar.',409);
   if(tiktok&&(!input.tiktok||input.tiktok.privacyLevel!=='PUBLIC_TO_EVERYONE'))throw new AppError('Confira a publicação pública e as declarações do TikTok antes de postar.');
-  const source=join(dir,clip.id+'.mp4');await validateVideo(source,format);
+  if(!source)throw new AppError('Gere o MP4 final em alta qualidade antes de postar.',409);
+  await validateVideo(source,format);
   const hash=await sha256(source),deliveryId=randomUUID(),filename=deliveryId+'.native.mp4';
   const suggestion=cutEditorial(clip)[tiktok?'tiktok':'youtube'];
   const metadata=metadataSchema.parse({title:input.title,description:input.description,hashtags:input.hashtags??(!tiktok&&format==='shorts'?['Shorts']:[]),

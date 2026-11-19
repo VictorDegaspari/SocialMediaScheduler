@@ -331,6 +331,15 @@ async function approvedBrowserVideo(){
   return {...video,id};
 }
 
+async function previousBrowserUpload(videoId:string,status:'scheduled'|'unknown'){
+  const previousVideo=randomUUID(),id=randomUUID();
+  await pool.query(`INSERT INTO videos(id,watch_id,file_id,name,parent_id,status)
+    SELECT $1,watch_id,$1::uuid::text,'Vídeo anterior',parent_id,'sent' FROM videos WHERE id=$2`,[previousVideo,videoId]);
+  await pool.query(`INSERT INTO deliveries(id,video_id,integration_id,provider,engine,status,planned_at,upload_started_at)
+    VALUES($1,$2,'browser:tiktok:default','tiktok','browser',$3,CASE WHEN $3='scheduled' THEN now() END,now())`,[id,previousVideo,status]);
+  return id;
+}
+
 test('retry da entrega TikTok preserva mídia, conta e consentimento e bloqueia resultados incertos',async()=>{
   const video=await approvedBrowserVideo(),sourceHash=await sha256(video.path);await bridge.poll(report());await bridge.tick();
   let {job}=await bridge.poll(report());assert(job);
@@ -385,9 +394,10 @@ test('cancelar vídeo na origem preserva arquivo e rejeita disputa com a prepara
   assert.equal((await pool.query('SELECT status FROM videos WHERE id=$1',[video.videoId])).rows[0].status,'cancelled');assert.ok((await stat(video.path)).size>0);
 });
 
-test('vídeo comercial da pasta só publica pelo navegador após prévia e consentimento, preservando bytes e conta',async()=>{
+test('postagem imediata com consentimento funciona quando o teto diário dos agendamentos foi atingido',async()=>{
   const video=await manualVideo(),hash=await sha256(video.path);
-  const routine=await bridge.save(config({mode:'native_schedule',enabled:false}));
+  const routine=await bridge.save(config({mode:'native_schedule',enabled:false,nativeSchedule:{postsPerDay:1}}));
+  await previousBrowserUpload(video.videoId,'scheduled');
   const prepared=await post('/api/browser/videos/'+video.videoId+'/prepare',{profileId:'default',version:video.version});
   assert.equal(prepared.status,201,await prepared.clone().text());const {id}=await prepared.json();
   const preview=await fetch(base+'/api/native/deliveries/'+id+'/media');assert.deepEqual(Buffer.from(await preview.arrayBuffer()),await readFile(video.path));
@@ -406,6 +416,37 @@ test('vídeo comercial da pasta só publica pelo navegador após prévia e conse
   assert.equal(await sha256(video.path),hash);assert.equal((await pool.query('SELECT status FROM deliveries WHERE id=$1',[id])).rows[0].status,'completed');
   const after=(await bridge.state()).config;assert.equal(after.mode,'native_schedule');assert.equal(after.nextAt,routine.nextAt);assert.equal(after.enabled,false);
   await assert.rejects(stat(join(process.env.DATA_DIR!,id+'.native.mp4')));
+});
+
+test('postagem imediata diferencia o teto local de uploads e o bloqueio informado pelo TikTok',async()=>{
+  await bridge.save(config({nativeSchedule:{uploadsPer24h:1}}));
+  const video=await approvedBrowserVideo(),otherId=await previousBrowserUpload(video.videoId,'unknown');
+  await bridge.poll(report());await bridge.tick();
+  const error=async()=>(await pool.query('SELECT error FROM deliveries WHERE id=$1',[video.id])).rows[0].error;
+  assert.match(await error(),/24 horas configurado no app/);
+  assert.equal((await bridge.poll(report())).job,null);
+  await pool.query("UPDATE deliveries SET upload_started_at=now()-interval '25 hours' WHERE id=$1",[otherId]);
+  await bridge.tick();assert((await bridge.state()).active);
+  const cooldown='uploadCooldown:browser:tiktok:default';
+  await setSetting(cooldown,new Date(Date.now()+60_000).toISOString());
+  assert.equal((await bridge.poll(report())).job,null,'o agente revalida a pausa mesmo depois de enfileirar');
+  assert.match(await error(),/limite informado pelo TikTok/);
+  await setSetting(cooldown,new Date(Date.now()-60_000).toISOString());
+  assert.equal((await bridge.poll(report())).job?.publishNow,true);
+  assert.equal(await error(),null);
+});
+
+test('envio imediato que ficou preso no teto diário volta à revisão sem iniciar um novo upload',async()=>{
+  const old=await approvedBrowserVideo();
+  const message='Aguardando capacidade no limite diário desta conta.';
+  await pool.query('UPDATE deliveries SET error=$2 WHERE id=$1',[old.id,message]);
+  await initDb();
+  const {rows:[row]}=await pool.query('SELECT status,approved_at,local_file,error FROM deliveries WHERE id=$1',[old.id]);
+  assert.equal(row.status,'review');assert.equal(row.approved_at,null);assert.equal(row.local_file,old.id+'.native.mp4');
+  assert.match(row.error,/publicado manualmente/);
+  await bridge.poll(report());await bridge.tick();
+  assert.equal((await bridge.poll(report())).job,null);
+  assert.equal((await pool.query('SELECT 1 FROM browser_commands WHERE delivery_id=$1',[old.id])).rowCount,0);
 });
 
 test('recuperação de uma preparação usa o lock do escritor e mantém os arquivos originais',async()=>{

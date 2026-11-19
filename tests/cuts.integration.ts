@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
 import type {CutSourceRange} from '../src/cuts-source-limits.js';
+import type {CutSourceQuality,RenderCutOptions} from '../src/cuts-media.js';
 
 const dbUrl=new URL(process.env.DATABASE_URL!);dbUrl.pathname='/watcher_cuts_test';process.env.DATABASE_URL=dbUrl.toString();
 const redisUrl=new URL(process.env.REDIS_URL!);redisUrl.pathname='/12';process.env.REDIS_URL=redisUrl.toString();
@@ -17,6 +18,8 @@ const fixture=join(temp,'short.mp4');
 execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=green:s=64x96:d=1','-f','lavfi','-i','sine=frequency=400:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',fixture]);
 const horizontalFixture=join(temp,'video.mp4');
 execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=green:s=128x72:d=1','-f','lavfi','-i','sine=frequency=400:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',horizontalFixture]);
+const finalFixture=join(temp,'final.mp4');
+execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=blue:s=96x144:r=60:d=1','-f','lavfi','-i','sine=frequency=660:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',finalFixture]);
 const { pool,redis,initDb,setSetting }=await import('../src/db.js');
 const { AppError }=await import('../src/config.js');
 const { CutsService,createCutsRoutes,cutDirectory,youtubeVideoUrl,clipCaptions,validateCutEdit }=await import('../src/cuts.js');
@@ -29,15 +32,20 @@ const {sha256:sha256File}=await import('../src/media.js');
 await initDb();
 let downloads=0,renders=0,failRender=false,renderInputs:any[]=[];
 let downloadedRanges:(CutSourceRange|undefined)[]=[];
+let downloadQualities:CutSourceQuality[]=[];
 const transcript=[{start:5,end:8,text:'Como aprender algo novo?',words:[{start:5,end:5.5,text:'Como'},{start:5.6,end:6.2,text:'aprender'},{start:6.3,end:6.8,text:'algo'},{start:7,end:8,text:'novo?'}]},{start:9,end:13,text:'Pratique todos os dias.'},{start:15,end:19,text:'Assim você melhora.'}];
 const media={
   dependencies:async()=>({ready:true,details:[]}),
-  download:async(_url:string,dir:string,range?:CutSourceRange)=>{downloads++;downloadedRanges.push(range);await copyFile(fixture,join(dir,'source.mp4'));return {title:'Vídeo fonte de teste',duration:60};},
+  download:async(_url:string,dir:string,range?:CutSourceRange,quality:CutSourceQuality='original')=>{downloads++;downloadedRanges.push(range);downloadQualities.push(quality);await copyFile(fixture,join(dir,'source.mp4'));return {title:'Vídeo fonte de teste',duration:60};},
   transcribe:async()=>structuredClone(transcript),
   select:(_cues:unknown,_duration:number,count:number,_seconds:number,replay?:any)=>replay?.status==='available'
     ?[{start:15,end:19,title:'Pico de replay',reason:'Mapa público de replay.',score:99}]
     :Array.from({length:count},(_,i)=>({start:5+i*10,end:13+i*10,title:'Corte '+(i+1),reason:'Trecho de teste.',score:90})),
-  render:async(dir:string,id:string,input:any)=>{renders++;renderInputs.push(structuredClone(input));if(failRender)throw new AppError('Falha de renderização simulada.');const path=join(dir,id+'.mp4');await copyFile(input.framingOptions?.format==='video'?horizontalFixture:fixture,path);return {path,warnings:[]};},
+  render:async(dir:string,id:string,input:any,options?:RenderCutOptions)=>{renders++;renderInputs.push(structuredClone(input));if(failRender)throw new AppError('Falha de renderização simulada.');
+    const final=options&&'sourceParts' in options;
+    const path=join(dir,id+(final?'.master.mp4':'.mp4'));
+    await copyFile(final?finalFixture:input.framingOptions?.format==='video'?horizontalFixture:fixture,path);
+    return {path,warnings:[]};},
   replay:async()=>({status:'available' as const,source:'youtube_most_replayed' as const,points:[{start:15,end:19,value:1}],message:'Interesse relativo do YouTube.'})
 };
 const service=new CutsService(media);
@@ -47,13 +55,20 @@ const server=app.listen(0,'127.0.0.1');await new Promise<void>(r=>server.once('l
 const base='http://127.0.0.1:'+(server.address() as {port:number}).port;
 const originalFetch=globalThis.fetch;
 const call=(path:string,body?:unknown,method='POST')=>originalFetch(base+'/api/cuts'+path,body===undefined?{}:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-const create=async(count=1)=>{const response=await call('',{url:'https://youtu.be/abcdefghijk',count,targetSeconds:60,language:'pt'});assert.equal(response.status,202,await response.clone().text());return (await response.json()).id as string;};
+// The existing publication scenarios also cover projects created before the preview migration.
+const create=async(count=1)=>{
+  const response=await call('',{url:'https://youtu.be/abcdefghijk',count,targetSeconds:60,language:'pt'});
+  assert.equal(response.status,202,await response.clone().text());
+  const {id}=await response.json();
+  await pool.query("UPDATE cut_jobs SET source_quality='original' WHERE id=$1",[id]);
+  return id as string;
+};
 const state=()=>service.state();
 const currentClip=async()=>((await state()).jobs[0].clips[0]);
 const publishBody=(clip:any)=>({channelId:'native:youtube:cuts-channel',title:'Título revisado',description:'Descrição revisada',visibility:'private',madeForKids:false,containsSyntheticMedia:false,confirm:true,revision:clip.revision});
 
 beforeEach(async()=>{
-  globalThis.fetch=originalFetch;downloads=0;renders=0;failRender=false;renderInputs=[];downloadedRanges=[];
+  globalThis.fetch=originalFetch;downloads=0;renders=0;failRender=false;renderInputs=[];downloadedRanges=[];downloadQualities=[];
   await pool.query('TRUNCATE cuts,cut_jobs,content_claims,deliveries,videos,watches,publication_requests,publishing_profiles,manual_actions,events,connected_accounts,settings,browser_commands,browser_agent,browser_settings CASCADE');
   await rm(process.env.DATA_DIR!,{recursive:true,force:true});await mkdir(process.env.DATA_DIR!);
   await setSetting('playwrightMcpExtension',{extensionToken:'test-extension-token'});
@@ -62,6 +77,56 @@ beforeEach(async()=>{
   },{clientId:'test-client',clientSecret:'test-secret',autoPublishApproved:false});
 });
 after(async()=>{globalThis.fetch=originalFetch;await service.stop();await new Promise<void>(r=>server.close(()=>r()));await redis.quit();await pool.end();await rm(temp,{recursive:true,force:true});});
+
+test('exports only retained live sections in original quality and publishes the reviewed final bytes',async()=>{
+  const sourceRange={start:8400,end:8460};
+  const response=await call('',{url:'https://youtu.be/abcdefghijk',sourceRange});
+  assert.equal(response.status,202);
+  const {id}=await response.json();
+  await service.tick();
+  assert.deepEqual(downloadedRanges,[sourceRange]);
+  assert.deepEqual(downloadQualities,['review']);
+  let clip=await currentClip();
+  assert.equal(clip.hasMedia,true);assert.equal(clip.finalReady,false);
+  const path='/'+clip.id,dir=cutDirectory(id);
+  const excludedRanges=[{start:5.125,end:9}];
+  const edit={title:clip.title,start:5,end:13,excludedRanges};
+  const adjusted=await call(path,{...edit,revision:clip.revision},'PUT');
+  assert.equal(adjusted.status,202,await adjusted.clone().text());
+  await service.tick();clip=await currentClip();
+  assert.equal((await call(path+'/media?download=1')).status,409);
+  assert.equal((await call(path+'/media?final=1')).status,409);
+  assert.equal((await call(path+'/publish',publishBody(clip))).status,409);
+  assert.equal((await call(path+'/export',{revision:clip.revision-1})).status,409);
+  const queue=()=>call(path+'/export',{revision:clip.revision});
+  assert.equal((await queue()).status,202);assert.equal((await queue()).status,202);
+  failRender=true;await service.tick();failRender=false;
+  assert.equal((await currentClip()).export_status,'failed');
+  assert.equal((await currentClip()).hasMedia,true);
+  await assert.rejects(stat(join(dir,clip.id+'.export-source')),{code:'ENOENT'});
+  assert.equal((await queue()).status,202);
+  await new CutsService(media).tick();
+  assert.deepEqual(downloadQualities,['review','original','original','original','original']);
+  const parts=[{start:8405,end:8405.5},{start:8409,end:8413}];
+  assert.deepEqual(downloadedRanges,[sourceRange,...parts,...parts]);
+  assert.deepEqual(renderInputs.at(-1).excludedRanges,excludedRanges);
+  assert.equal((await currentClip()).finalReady,true);
+  assert.equal((await (await call(path+'/export?v='+clip.revision)).json()).status,'ready');
+  await assert.rejects(stat(join(dir,clip.id+'.export-source')),{code:'ENOENT'});
+  const read=async(query:string)=>Buffer.from(await (await call(path+'/media'+query)).arrayBuffer());
+  assert.deepEqual(await read(''),await readFile(fixture));
+  assert.deepEqual(await read('?final=1&v='+clip.revision),await readFile(finalFixture));
+  assert.deepEqual(await read('?download=1'),await readFile(finalFixture));
+  assert.equal((await call(path,{...edit,title:'Nova revisão',revision:clip.revision},'PUT')).status,202);
+  await service.tick();clip=await currentClip();
+  assert.equal(clip.finalReady,false);
+  await assert.rejects(stat(join(dir,clip.id+'.master.mp4')),{code:'ENOENT'});
+  assert.equal((await queue()).status,202);await service.tick();
+  const delivery=await call(path+'/publish',publishBody(clip));
+  assert.equal(delivery.status,202,await delivery.clone().text());
+  const {deliveryId}=await delivery.json();
+  assert.deepEqual(await readFile(join(process.env.DATA_DIR!,deliveryId+'.native.mp4')),await readFile(finalFixture));
+});
 
 test('supports parallel projects with independent claims and two renders from a single project',async()=>{
   let release!:()=>void;
@@ -130,6 +195,30 @@ test('trecho acima de duas horas é aceito com janela limitada, persistida e reu
   assert.deepEqual(downloadedRanges,[sourceRange,sourceRange]);
   assert.equal((await state()).jobs[0].clips[0].id,job.clips[0].id);
 });
+test('a failed download can be retried with a shorter source range in the same project',async()=>{
+  const jobId=await create();
+  const worker=new CutsService({...media,download:async(url,dir,range)=>{
+    if(!range)throw new AppError('Espaço insuficiente no disco para baixar a fonte.');
+    return media.download(url,dir,range);
+  }});
+  await worker.tick();
+  const retry='/jobs/'+jobId+'/retry';
+  assert.equal((await state()).jobs[0].status,'failed');
+  assert.equal((await call(retry,{sourceRange:{start:7800,end:9601}})).status,400);
+  const sourceRange={start:7800,end:7920};
+  const response=await call(retry,{sourceRange});
+  assert.equal(response.status,202,await response.clone().text());
+  await worker.tick();
+  const [job]= (await state()).jobs;
+  assert.equal(job.id,jobId);
+  assert.equal(job.status,'review');
+  assert.deepEqual(job.source_range,sourceRange);
+  assert.deepEqual(downloadedRanges,[sourceRange]);
+  await pool.query("UPDATE cut_jobs SET status='failed' WHERE id=$1",[jobId]);
+  assert.equal((await call(retry,{sourceRange:{start:9700,end:9800}})).status,409);
+  assert.deepEqual((await state()).jobs[0].source_range,sourceRange);
+});
+
 test('publishing a cut to TikTok requires its browser token before creating media or deliveries',async()=>{
   await create();await service.tick();const clip=await currentClip(),previous=process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;
   try{

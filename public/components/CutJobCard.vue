@@ -16,7 +16,7 @@ const jobLabels = {queued:'Na fila',downloading:'Baixando vídeo',transcribing:'
       <div>
         <h2>{{ job.title||'Vídeo do YouTube' }}</h2>
         <a class="cuts-source" :href="safeLink(job.url)" target="_blank" rel="noreferrer">{{ job.url }}</a>
-        <small v-if="job.source_range">{{ date(job.created_at, true) }} · Trecho da live: {{ formatSourceTimecode(0, job.source_range) }} a {{ formatTimecode(job.source_range.end, {hours: true}) }}</small>
+        <small v-if="job.source_range">{{ date(job.created_at, true) }} · Trecho da origem: {{ formatSourceTimecode(0, job.source_range) }} a {{ formatTimecode(job.source_range.end, {hours: true}) }}</small>
         <small v-else>{{ date(job.created_at,true) }}{{ job.duration?` · Vídeo original: ${stamp(job.duration)}`:'' }}</small>
       </div>
       <StatusBadge :label="jobLabels[job.status]||job.status" :tone="job.status==='failed'?'amber':'gray'" />
@@ -58,6 +58,7 @@ const jobLabels = {queued:'Na fila',downloading:'Baixando vídeo',transcribing:'
     <div class="cuts-job-actions">
       <template v-if="job.status==='failed'">
         <button class="button small" data-cuts-action="retry-job" :data-id="job.id">Tentar gerar novamente</button>
+        <button v-if="!job.title&&!job.hasSource&&!clips.length" class="button small" data-cuts-action="retry-source-range" :data-id="job.id">Escolher trecho</button>
       </template>
       <template v-if="!['discarded','downloading','transcribing','selecting','rendering'].includes(job.status)&&!clips.some(c=>c.status==='publishing')">
         <button class="button ghost danger small" data-cuts-action="discard-job" :data-id="job.id">Descartar projeto e liberar arquivos</button>

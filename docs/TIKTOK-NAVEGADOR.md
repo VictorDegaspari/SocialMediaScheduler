@@ -10,6 +10,8 @@ Ao clicar em **Autorizar e postar agora**, tanto em um corte quanto em um vídeo
 
 Para publicar um vídeo específico sem agendar, use **Postar agora no TikTok**. Escolha **Cortes do aplicativo** ou **Vídeos das minhas pastas**, selecione o perfil e abra a prévia. Um MP4 já encontrado em Minhas pastas pode ser revisado mesmo sem JSON: preencha o título e a legenda nessa etapa. Confira também permissões e declarações antes de **Autorizar e postar agora**. A preparação da prévia não inicia upload. Esse envio é individual e não altera os horários da rotina; a publicação pública só é registrada após uma confirmação nova do TikTok Studio. Login, limites da conta ou uma confirmação incerta ficam visíveis no painel e no histórico.
 
+O teto de publicações por dia organiza os agendamentos da rotina. **Postar agora** usa o limite de uploads em 24 horas configurado no app e respeita as pausas solicitadas quando o TikTok informa um limite.
+
 Os cortes também ficam em **Minhas pastas → Cortes do aplicativo**, com reprodução, download e o botão **Postar no TikTok**. O arquivo revisado é copiado para o envio sem reduzir a qualidade. Um corte pode ter envios independentes para YouTube e TikTok; a repetição para a mesma conta reutiliza o envio existente.
 
 Abra **http://localhost:4317/#browser**, pela opção **TikTok navegador** do menu ou pelo atalho em Conexões. Todos os controles desta rotina ficam nessa tela:

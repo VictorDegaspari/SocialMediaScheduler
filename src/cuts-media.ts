@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { availableParallelism } from 'node:os';
 import { AppError, dataDir } from './config.js';
@@ -14,7 +14,10 @@ import { normalizeHeatmap, replayFromMetadata, replayInterest, type ReplayData }
 export type Cue = { start:number; end:number; text:string; words?:{start:number;end:number;text:string}[] };
 export type Highlight = { start:number; end:number; title:string; reason:string; score:number };
 export type SourceInfo = { title:string; duration:number; replay?:ReplayData };
-const MAX_SOURCE_BYTES=2*1024*1024*1024;
+// Leave room for PostgreSQL and other workers sharing the media filesystem.
+const DISK_RESERVE_BYTES=512*1024*1024;
+const downloadDiskError='Espaço insuficiente no disco para baixar a fonte. Escolha um trecho menor ou libere espaço e tente novamente.';
+const renderDiskError='Espaço insuficiente no disco para renderizar o corte. Libere espaço e tente novamente.';
 const python=()=>process.env.CUTS_PYTHON || 'python3';
 const transcriptionScript=resolve('scripts/transcribe-cuts.py');
 export const cutParallelism=Number(process.env.CUTS_PARALLELISM)===1?1:
@@ -22,9 +25,17 @@ export const cutParallelism=Number(process.env.CUTS_PARALLELISM)===1?1:
 const automaticThreads=Math.min(4,Math.floor(availableParallelism()/cutParallelism));
 const renderThreads=Math.min(8,Math.max(1,Math.floor(Number(process.env.CUTS_RENDER_THREADS)||automaticThreads)));
 
+async function freeDiskBytes(dir:string){
+  const {bavail,bsize}=await statfs(dir);
+  return bavail*bsize;
+}
+
 // Run without a shell; terminate the process group, including FFmpeg children,
 // when downloads, transcription or renders exceed their resource budget.
-async function command(binary:string,args:string[],options:{cwd?:string;timeout:number;maxOutput?:number;maxDirBytes?:number}) {
+async function command(binary:string,args:string[],options:{cwd?:string;timeout:number;maxOutput?:number;diskError?:string}) {
+  const diskError=options.diskError;
+  const directory=options.cwd??process.cwd();
+  if(diskError&&await freeDiskBytes(directory)<=DISK_RESERVE_BYTES)throw new AppError(diskError);
   return new Promise<string>((done,fail)=>{
     const child=spawn(binary,args,{cwd:options.cwd,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
     let stdout='',outputBytes=0,reason:Error|undefined,checking=false;
@@ -33,11 +44,10 @@ async function command(binary:string,args:string[],options:{cwd?:string;timeout:
       try {if(process.platform!=='win32'&&child.pid)process.kill(-child.pid,'SIGKILL');else child.kill('SIGKILL');}catch{/* already exited */}
     };
     const timer=setTimeout(()=>stop(new AppError('O processamento excedeu o tempo permitido. Tente um vídeo menor.')),options.timeout);
-    const monitor=options.maxDirBytes&&options.cwd?setInterval(()=>{
+    const monitor=diskError?setInterval(()=>{
       if(checking)return;checking=true;
-      void readdir(options.cwd!,{withFileTypes:true}).then(async entries=>{
-        const sizes=await Promise.all(entries.filter(e=>e.isFile()).map(async e=>(await stat(join(options.cwd!,e.name)).catch(()=>({size:0}))).size));
-        if(sizes.reduce((a,b)=>a+b,0)>options.maxDirBytes!)stop(new AppError('O vídeo excedeu o limite de download de 2 GiB.'));
+      void freeDiskBytes(directory).then(bytes=>{
+        if(bytes<=DISK_RESERVE_BYTES)stop(new AppError(diskError));
       }).catch(()=>{}).finally(()=>{checking=false;});
     },400):undefined;
     child.stdout.setEncoding('utf8');
@@ -47,7 +57,13 @@ async function command(binary:string,args:string[],options:{cwd?:string;timeout:
       else stdout+=chunk;
     });
     // Always drain stderr, but never return URLs, cookies or process credentials.
-    child.stderr.on('data',()=>{});
+    let stderrTail='';
+    child.stderr.setEncoding('utf8').on('data',(chunk:string)=>{
+      if(!diskError)return;
+      const text=stderrTail+chunk;
+      if(/no space left on device|ENOSPC/i.test(text))stop(new AppError(diskError));
+      stderrTail=text.slice(-64);
+    });
     const cleanup=()=>{clearTimeout(timer);if(monitor)clearInterval(monitor);};
     child.on('error',error=>{cleanup();fail(reason||error);});
     child.on('close',code=>{cleanup();if(reason)fail(reason);else if(code!==0)fail(new Error(`Media processor exited ${code}`));else done(stdout);});
@@ -77,33 +93,40 @@ function sourceUrl(value:string) {
   return 'https://www.youtube.com/watch?v='+id;
 }
 
-export async function downloadCutSource(url:string,dir:string,requestedRange?:CutSourceRange):Promise<SourceInfo> {
+export type CutSourceQuality='original'|'review';
+export async function downloadCutSource(url:string,dir:string,requestedRange?:CutSourceRange,quality:CutSourceQuality='original'):Promise<SourceInfo> {
   const canonical=sourceUrl(url);
   const range=requestedRange?cutSourceRangeSchema.parse(requestedRange):undefined;
   await mkdir(dir,{recursive:true});
   const base=['-m','yt_dlp','--ignore-config','--no-plugin-dirs','--no-playlist','--no-warnings','--no-progress','--socket-timeout','30','--retries','2','--fragment-retries','2','--no-js-runtimes','--js-runtimes',`node:${process.execPath}`];
+  // Select quality before container compatibility; remuxing keeps both streams intact.
+  const downloadArgs=['--concurrent-fragments','1','--format',quality==='review'?'bv*+ba/b':'bv+ba/b','--merge-output-format','mp4'];
+  if(quality==='review')downloadArgs.push('--format-sort-force','--format-sort','res:480');
   try {
-    const metadata=JSON.parse(await command(python(),[...base,'--dump-single-json','--skip-download','--',canonical],{cwd:dir,timeout:120_000}));
+    const metadata=JSON.parse(await command(python(),[...base,...downloadArgs,'--dump-single-json','--skip-download','--',canonical],{cwd:dir,timeout:120_000}));
     const duration=Number(metadata.duration);
     if(metadata._type==='playlist'||metadata.entries||metadata.is_live||['is_live','is_upcoming'].includes(metadata.live_status))throw new AppError('Use um vídeo gravado. Playlists e transmissões ao vivo não são aceitas.');
     if(!Number.isFinite(duration)||duration<=0)throw new AppError('Não foi possível determinar a duração do vídeo de origem.');
-    if(range&&range.end>duration)throw new AppError('O fim do trecho precisa estar dentro da duração da live.');
-    if(!range&&duration>MAX_SOURCE_SECONDS)throw new AppError('O vídeo de origem precisa ter até 2 horas. Para lives longas, escolha um trecho em Canais do YouTube.');
-    // Select quality before container compatibility; remuxing keeps both streams intact.
-    const downloadArgs=['--concurrent-fragments','1','--format','bv+ba/b','--merge-output-format','mp4'];
+    if(range&&range.end>duration)throw new AppError('O fim do trecho precisa estar dentro da duração do vídeo.');
+    if(!range&&duration>MAX_SOURCE_SECONDS)throw new AppError('Para usar uma gravação com mais de 2 horas, selecione até 30 minutos em Escolher trecho.');
+    if(!range){
+      const selected:{filesize?:number}[]=metadata.requested_formats??[metadata];
+      const knownBytes=selected.reduce((sum,stream)=>sum+(Number.isSafeInteger(stream.filesize)&&stream.filesize!>0?stream.filesize!:0),0);
+      if(knownBytes>await freeDiskBytes(dir)-DISK_RESERVE_BYTES)throw new AppError(downloadDiskError);
+    }
     // An MP4 edit list hides the keyframe preroll without re-encoding the source streams.
     const sectionArgs=range?['--download-sections',`*${range.start}-${range.end}`,
       '--downloader-args','ffmpeg_o:-f mp4 -avoid_negative_ts disabled -use_editlist 1',
-      '--output','source.download.mp4']:['--max-filesize',String(MAX_SOURCE_BYTES),'--match-filters',`duration <= ${MAX_SOURCE_SECONDS} & !is_live`,
+      '--output','source.download.mp4']:['--match-filters',`duration <= ${MAX_SOURCE_SECONDS} & !is_live`,
       '--remux-video','mp4','--output','source.download.%(ext)s'];
-    await command(python(),[...base,...downloadArgs,...sectionArgs,'--',canonical],{cwd:dir,timeout:45*60_000,maxDirBytes:MAX_SOURCE_BYTES});
+    await command(python(),[...base,...downloadArgs,...sectionArgs,'--',canonical],{cwd:dir,timeout:45*60_000,diskError:downloadDiskError});
     const downloaded=join(dir,'source.download.mp4');
-    if((await stat(downloaded)).size>MAX_SOURCE_BYTES)throw new AppError('O vídeo excedeu o limite de download de 2 GiB.');
     const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration,start_time:stream=codec_type,start_time','-of','json',downloaded],{timeout:30_000}));
     const actualDuration=Number(probe.format?.duration);
     if(!Number.isFinite(actualDuration)||actualDuration<=0||actualDuration>MAX_SOURCE_SECONDS)throw new AppError('O vídeo baixado precisa ter até 2 horas.');
     if(!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='video')||!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio'))throw new AppError('O vídeo de origem precisa conter imagem e áudio.');
-    const selectedDuration=range?range.end-range.start:actualDuration;
+    // Whole-file previews can have mux padding beyond YouTube's last seekable instant.
+    const selectedDuration=range?range.end-range.start:quality==='review'?Math.min(duration,actualDuration):actualDuration;
     if(range&&(Math.abs(actualDuration-selectedDuration)>.5||!Number.isFinite(Number(probe.format.start_time))||
       Math.abs(Number(probe.format.start_time))>.05||
       probe.streams.some((stream:{codec_type:string;start_time:string})=>['video','audio'].includes(stream.codec_type)&&
@@ -300,7 +323,8 @@ export type RenderCutInput={
   start:number;end:number;captions:Cue[];framing:'fit'|'crop'|'blur';
   captionStyle?:CaptionStyle;framingOptions?:FramingOptions;excludedRanges?:TimeRange[];overlays?:CutOverlay[];
 };
-export async function renderCut(dir:string,clipId:string,input:RenderCutInput):Promise<{path:string;warnings:string[]}> {
+export type RenderCutOptions={preview:true}|{sourceParts:{path:string;seek:number}[]};
+export async function renderCut(dir:string,clipId:string,input:RenderCutInput,options?:RenderCutOptions):Promise<{path:string;warnings:string[]}> {
   if(!/^[a-fA-F0-9-]{16,80}$/.test(clipId))throw new AppError('Identificador de corte inválido.');
   const {start,end,captions}=input;
   if(!['fit','crop','blur'].includes(input.framing)||!Array.isArray(captions)||captions.length>50000)throw new AppError('Escolha um trecho válido de até 3 minutos.');
@@ -315,17 +339,21 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
   }
   const relative=timelineCaptions(captions,parts);
   if(!relative.length)throw new AppError('O trecho precisa conter fala e legendas. Ajuste o início ou o fim.');
-  const assName=`${clipId}.ass`,partialName=`${clipId}.rendering.mp4`,path=join(dir,`${clipId}.mp4`);
+  const preview=!!options&&'preview' in options;
+  const sourceParts=options&&'sourceParts' in options?options.sourceParts:undefined;
+  if(sourceParts&&sourceParts.length!==parts.length)throw new AppError('Faltam trechos da fonte para gerar o MP4 final.');
+  const name=sourceParts?`${clipId}.master`:clipId;
+  const assName=`${name}.ass`,partialName=`${name}.rendering.mp4`,path=join(dir,`${name}.mp4`);
   let overlayFiles:string[]=[];
   try {
-    const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type,width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate:stream_side_data_list','-of','json','source.mp4'],{cwd:dir,timeout:30_000}));
+    const probe=JSON.parse(await command('ffprobe',['-v','error','-show_entries','format=duration:stream=codec_type,width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate:stream_side_data_list','-of','json',sourceParts?.[0].path??'source.mp4'],{cwd:dir,timeout:30_000}));
     const sourceVideo=probe.streams?.find((s:{codec_type:string})=>s.codec_type==='video');
     const rotation=Math.abs(Number(sourceVideo?.side_data_list?.find((d:{rotation?:number})=>d.rotation!==undefined)?.rotation||sourceVideo?.tags?.rotate||0))%180;
     const width=rotation===90?sourceVideo?.height:sourceVideo?.width,height=rotation===90?sourceVideo?.width:sourceVideo?.height;
-    if(!width||!height||!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio')||end>Number(probe.format?.duration)+0.05)throw new AppError('O intervalo escolhido ultrapassa o vídeo ou a origem não contém imagem e áudio.');
-    // Full HD is the floor; higher-resolution sources retain their shorter edge.
+    if(!width||!height||!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio')||(!sourceParts&&end>Number(probe.format?.duration)+0.05))throw new AppError('O intervalo escolhido ultrapassa o vídeo ou a origem não contém imagem e áudio.');
+    // Full HD is the export floor; higher-resolution sources retain their shorter edge.
     // Multiples of 9 and 16 keep the canvas exact and both dimensions even.
-    const unit=Math.max(120,Math.ceil(Math.min(width,height)/18)*2);
+    const unit=preview?Math.max(2,Math.floor(Math.min(width,height,480)/18)*2):Math.max(120,Math.ceil(Math.min(width,height)/18)*2);
     const output=framing.format==='video'?{width:16*unit,height:9*unit}:{width:9*unit,height:16*unit};
     const {rate,fps}=sourceFrameRate(sourceVideo);
     const {ass,warnings}=style.enabled?captionAss(relative,style,output):{ass:'',warnings:[]};
@@ -337,7 +365,8 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
       const frames=Math.max(2,Math.ceil(length*fps-1e-7));
       // Separate seeks skip removed spans even when they are many minutes long.
       // Decoder/filter thread counts keep the maximum 21 inputs bounded.
-      args.push('-threads','1','-ss',String(parts[i].start),'-t',String(length+Math.max(0.05,1/fps)),'-i','source.mp4');
+      const source=sourceParts?.[i];
+      args.push('-threads','1','-ss',String(source?.seek??parts[i].start),'-t',String(length+Math.max(0.05,1/fps)),'-i',source?.path??'source.mp4');
       // concat extrapolates a video's duration from its mean frame interval.
       // Give every part its exact timeline duration before joining, otherwise
       // fractional-frame trims would pad audio and accumulate an AV offset.
@@ -354,8 +383,8 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput):P
     const layers=await cutOverlayFilters(dir,clipId,cutOverlaysSchema.parse(input.overlays||[]),output,duration,parts.length);
     overlayFiles=layers.temporary;args.push(...layers.args);graph.push(...layers.graph);
     graph.push(`[${layers.label}]${style.enabled?`ass=${assName}`:'null'}[outv]`);
-    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset','slow','-crf','16','-pix_fmt','yuv420p','-r',rate,'-threads',String(renderThreads),'-c:a','aac','-b:a','320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
-    await command('ffmpeg',args,{cwd:dir,timeout:60*60_000});
+    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset',preview?'veryfast':'slow','-crf',preview?'24':'16','-pix_fmt','yuv420p','-r',rate,'-threads',String(renderThreads),'-c:a','aac','-b:a',preview?'128k':'320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
+    await command('ffmpeg',args,{cwd:dir,timeout:60*60_000,diskError:renderDiskError});
     const actual=await validateVideo(join(dir,partialName),framing.format);
     if(Math.abs(actual.duration-duration)>0.5)throw new AppError('A duração renderizada não corresponde aos trechos mantidos. Confira os tempos do corte.');
     await rename(join(dir,partialName),path);

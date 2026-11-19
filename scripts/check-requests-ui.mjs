@@ -8,6 +8,7 @@ const id='11111111-1111-4111-8111-111111111111',requestId='22222222-2222-4222-82
 const fixture={publishing:{profiles:[{id,name:'Bíblicos',watch_id:null,youtube_id:null,tiktok_profile_id:null,source_roots:[],pack_defaults:{}}],accounts:[{id:'native:youtube:channel-one',identifier:'youtube',name:'GTA 6',disabled:false,autoPublishApproved:true},{id:'native:youtube:channel-two',identifier:'youtube',name:'Bíblicos',disabled:false,autoPublishApproved:false}],browserProfiles:[{id:'default',name:'GTA 6',profileSaved:true}],agentOnline:true,googleConnected:false,requests:[],actions:[]},browser:{},
   scheduler:{paused:false,queue:{}},watches:[],stats:{pending:0,sent:0,attention:0},videos:[],events:[],connections:{playwrightMcp:{configured:true,source:'input'},local:{rootPath:'/videos'},google:{},postiz:{},native:{engine:'local',youtube:{configured:true},tiktok:{}}}};
 const calls=[],errors=[];let polls=0,failRequest=false;
+fixture.publishing.pagination={actions:{limit:20,hasMore:false,nextCursor:null}};
 // Serve the checkout with simulated APIs; this check never connects real accounts.
 const publicRoot=resolve('public');
 const server=createServer(async(req,res)=>{
@@ -47,6 +48,7 @@ async function pollRequests(){
 }
 try {
   await page.goto(base+'/#requests');await page.getByRole('heading',{name:'Pedidos e contas',exact:true}).waitFor();
+  assert.equal(await page.locator('.requests-attention').count(),0,'empty action pages do not render the panel');
   assert.equal(await page.getByRole('tab',{name:'Pedidos',exact:true}).getAttribute('aria-selected'),'true');
   assert.equal(await page.getByRole('heading',{name:'Perfis de conteúdo',exact:true}).isVisible(),false);
   assert.equal(await page.getByLabel('Máximo de vídeos agendados').isVisible(),false,'advanced limits start collapsed');
@@ -141,6 +143,9 @@ try {
   }
   await page.getByRole('tab',{name:'Pedidos',exact:true}).click();await page.screenshot({path:'artifacts/requests-mobile.png',fullPage:true});
   const attention=await page.locator('.requests-attention').boundingBox(),compose=await page.locator('.requests-compose').boundingBox();assert(attention.y<compose.y,'mobile puts pending actions before the form');
+  fixture.publishing.actions=[];
+  await pollRequests();
+  await page.locator('.requests-attention').waitFor({state:'detached'});
   fixture.connections.playwrightMcp={configured:false,source:null};await page.reload();
   assert(await page.getByRole('checkbox',{name:'TikTok',exact:true}).isDisabled());
   await page.getByRole('tab',{name:'Contas',exact:true}).click();assert(await page.getByRole('button',{name:'Abrir login',exact:true}).first().isDisabled());

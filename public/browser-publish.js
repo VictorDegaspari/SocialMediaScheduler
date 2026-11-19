@@ -14,7 +14,7 @@ export function bindImmediatePublication({api,refresh,toast,getState,openReview}
     const select=current.form.elements.namedItem('videoId');
     drawWorkspace(select,'selectOptions',{options:[
       {value:'',label:'Escolha o vídeo'},
-      ...current.rows.map(row=>({value:row.id,label:(row.title||row.name)+(row.folder?' · '+row.folder:'')})),
+      ...current.rows.map(row=>({value:row.id,label:(row.title||row.name)+(row.folder?' · '+row.folder:'')+(row.clip?.finalReady===false?' · MP4 final pendente':'')})),
     ]});
     select.value='';
     current.form.querySelector('[data-immediate-empty]').hidden=current.rows.length>0;
@@ -57,11 +57,26 @@ export function bindImmediatePublication({api,refresh,toast,getState,openReview}
   dialog.addEventListener('submit',async event=>{
     event.preventDefault();const current=session;if(!current||current.pending)return;
     const form=current.form,button=form.querySelector('[type="submit"]'),errorBox=form.querySelector('[data-immediate-error]'),f=new FormData(form);
+    const progress=form.querySelector('[data-immediate-progress]');
     const selected=current.rows.find(row=>row.id===f.get('videoId'));if(!selected)return;
     current.pending=true;button.disabled=true;errorBox.hidden=true;form.querySelectorAll('select').forEach(select=>{select.disabled=true;});
     try{
       const channelId=String(f.get('profileId'));
       if(f.get('source')==='cuts'){
+        const {clip}=selected;
+        if(clip.finalReady===false){
+          const path='/cuts/'+encodeURIComponent(clip.id)+'/export',statusPath=path+'?v='+clip.revision;
+          progress.hidden=false;progress.textContent='Gerando o MP4 em alta qualidade para revisão…';
+          let result=await api(statusPath);
+          if(!['ready','queued','rendering'].includes(result.status))result=await api(path,{revision:clip.revision});
+          while(session===current&&dialog.open&&['queued','rendering'].includes(result.status)){
+            await new Promise(resolve=>setTimeout(resolve,1500));
+            if(session!==current||!dialog.open)return;
+            result=await api(statusPath);
+          }
+          if(session!==current||!dialog.open)return;
+          if(result.status!=='ready')throw new Error(result.error||'Não foi possível gerar o MP4 final. Tente novamente.');
+        }
         dialog.close();openCutPublication(selected,current.channels,channelId);
       }else{
         const result=await api('/browser/videos/'+encodeURIComponent(selected.id)+'/prepare',{profileId:channelId.slice('browser:tiktok:'.length),version:selected.version});
@@ -69,6 +84,6 @@ export function bindImmediatePublication({api,refresh,toast,getState,openReview}
         await refresh(true);
       }
     }catch(error){if(session===current&&dialog.open){errorBox.textContent=error.message;errorBox.hidden=false;}toast(error.message,true);}
-    finally{current.pending=false;if(button.isConnected){button.disabled=false;form.querySelectorAll('select').forEach(select=>{select.disabled=false;});}}
+    finally{current.pending=false;progress.hidden=true;if(button.isConnected){button.disabled=false;form.querySelectorAll('select').forEach(select=>{select.disabled=false;});}}
   });
 }

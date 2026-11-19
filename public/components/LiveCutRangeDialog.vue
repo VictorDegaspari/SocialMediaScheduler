@@ -5,15 +5,16 @@ import type {ChannelVideo} from '../../src/youtube-channel-lookup.js';
 import {formatTimecode, parseTimecode} from '../cuts-time.js';
 
 const props = defineProps<{
-  video: ChannelVideo;
+  video: Pick<ChannelVideo, 'title' | 'kind' | 'duration'>;
   save: (range: CutSourceRange) => Promise<void>;
-  findRanges: () => Promise<{ranges: CutSourceRange[]; status: string}>;
+  initialRange?: CutSourceRange | null;
+  findRanges?: () => Promise<{ranges: CutSourceRange[]; status: string}>;
 }>();
 const emit = defineEmits<{close: []}>();
 const dialog = useTemplateRef<HTMLDialogElement>('dialog');
 const time = (seconds: number) => formatTimecode(seconds, {hours: true});
-const startText = ref(time(0));
-const endText = ref(time(Math.min(props.video.duration ?? MAX_CUT_SECTION_SECONDS, MAX_CUT_SECTION_SECONDS)));
+const startText = ref(time(props.initialRange?.start ?? 0));
+const endText = ref(time(props.initialRange?.end ?? Math.min(props.video.duration ?? MAX_CUT_SECTION_SECONDS, MAX_CUT_SECTION_SECONDS)));
 const pending = ref(false);
 const finding = ref(false);
 const ranges = ref<CutSourceRange[]>([]);
@@ -30,7 +31,7 @@ function selectRange(range: CutSourceRange) {
 }
 
 async function suggest() {
-  if (finding.value || pending.value) return;
+  if (!props.findRanges || finding.value || pending.value) return;
   finding.value = true;
   notice.value = '';
   try {
@@ -39,7 +40,7 @@ async function suggest() {
     ranges.value = result.ranges;
     if (!result.ranges.length) notice.value = result.status === 'failed'
       ? 'O mapa não carregou. Você pode marcar os tempos manualmente ou tentar novamente.'
-      : 'O YouTube não disponibilizou sugestões para esta live. Marque os tempos manualmente.';
+      : 'O YouTube não disponibilizou sugestões para este vídeo. Marque os tempos manualmente.';
   } catch (cause) {
     if (active) notice.value = cause instanceof Error ? cause.message : 'Não foi possível consultar os momentos mais revistos.';
   } finally {
@@ -56,7 +57,7 @@ async function submit() {
     return;
   }
   if (props.video.duration !== null && end > props.video.duration) {
-    error.value = 'O fim do trecho precisa estar dentro da duração da live.';
+    error.value = 'O fim do trecho precisa estar dentro da duração do vídeo.';
     return;
   }
   pending.value = true;
@@ -76,14 +77,14 @@ async function submit() {
   <dialog ref="dialog" class="dialog" aria-labelledby="live-range-title" @close="emit('close')" @cancel="pending && $event.preventDefault()">
     <div class="dialog-head">
       <div>
-        <h2 id="live-range-title">Escolher trecho da live</h2>
-        <p class="subtitle">{{ video.title }}</p>
+        <h2 id="live-range-title">{{ video.kind === 'live' ? 'Escolher trecho da live' : 'Escolher trecho do vídeo' }}</h2>
+        <p v-if="video.title" class="subtitle">{{ video.title }}</p>
       </div>
       <button class="icon-button" type="button" aria-label="Fechar seleção de trecho" :disabled="pending" @click="dialog?.close()">×</button>
     </div>
     <form @submit.prevent="submit">
       <p class="tip">Selecione até 30 minutos em horas, minutos e segundos, como 02:10:00.
-        <template v-if="video.duration"> A live dura {{ time(video.duration) }}.</template>
+        <template v-if="video.duration"> Duração total de {{ time(video.duration) }}.</template>
       </p>
       <div class="field-row">
         <div class="form-field">
@@ -95,7 +96,7 @@ async function submit() {
           <input id="live-range-end" v-model="endText" type="text" placeholder="00:30:00" maxlength="18" required :disabled="pending">
         </div>
       </div>
-      <button v-if="video.duration" class="button small" type="button" :disabled="finding || pending" @click="suggest">
+      <button v-if="video.duration && findRanges" class="button small" type="button" :disabled="finding || pending" @click="suggest">
         {{ finding ? 'Consultando…' : 'Buscar momentos mais revistos' }}
       </button>
       <p v-if="notice" class="tip" role="status">{{ notice }}</p>

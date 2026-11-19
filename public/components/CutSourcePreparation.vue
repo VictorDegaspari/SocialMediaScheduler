@@ -1,9 +1,9 @@
 <script setup>
-defineProps(['id']);
+defineProps(['id','sourceQuality']);
 </script>
 
 <template>
-  <p class="notice">O vídeo original deste projeto precisa ser recuperado. O download usa a melhor qualidade disponível de imagem e áudio e preserva os cortes e envios anteriores. Você pode fechar esta janela; a recuperação continua em segundo plano.</p>
+  <p class="notice">{{ sourceQuality==='review'?'Vamos recuperar a cópia leve usada para ajustar este corte.':'O vídeo original deste projeto precisa ser recuperado. O download usa a melhor qualidade disponível de imagem e áudio.' }} Os cortes e envios anteriores ficam guardados. Você pode fechar esta janela enquanto a recuperação continua.</p>
   <p id="cut-source-preparation" role="status">Preparando recuperação…</p>
   <p id="cut-source-preparation-error" class="error-banner" role="alert" hidden></p>
   <div class="dialog-footer">

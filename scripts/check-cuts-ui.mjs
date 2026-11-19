@@ -78,7 +78,7 @@ await page.route('**/api/**',async route=>{
   if(path.endsWith('/transcript'))return route.fulfill({json:{captions:clip.captions,duration:job.duration,replay:job.replay_data}});
   assert.equal(request.headers()['x-watcher-request'],'1');const body=request.postDataJSON();actions.push({path,body,method:request.method()});
   if(path==='/api/cuts/jobs/'+jobId+'/prepare-source')return route.fulfill({json:{ready:false,status:'queued'}});
-  if(path==='/api/cuts')fixture.cuts.jobs.unshift({id:'33333333-3333-4333-8333-333333333333',url:body.url,title:'Novo projeto',status:'queued',created_at:'2026-11-17T14:00:00Z',clips:[]});
+  if(path==='/api/cuts')fixture.cuts.jobs.unshift({id:'33333333-3333-4333-8333-333333333333',url:body.url,title:'Novo projeto',status:'queued',created_at:'2026-11-17T14:00:00Z',clips:[],source_range:body.sourceRange});
   else if(path==='/api/cuts/'+clipId&&request.method()==='PUT'){
     if(['posted','publishing'].includes(clip.status)){
       adjusted={...structuredClone(clip),id:body.versionId,edited_from_cut_id:clip.id,title:body.title,start_seconds:body.start,end_seconds:body.end,framing_options:body.framingOptions,caption_style:body.captionStyle,excluded_ranges:body.excludedRanges,captions:body.captions||clip.captions,revision:1,status:'review',hasMedia:true,delivery_id:null,delivery_status:null,release_url:null,publications:[]};job.clips.push(adjusted);
@@ -87,6 +87,15 @@ await page.route('**/api/**',async route=>{
     Object.assign(clip,{title:body.title,start_seconds:body.start,end_seconds:body.end,framing:body.framing,framing_options:body.framingOptions,caption_style:body.captionStyle,excluded_ranges:body.excludedRanges,captions:body.captions||clip.captions,revision:clip.revision+1,status:'rendering',hasMedia:false});
   }
   else if(path==='/api/cuts/jobs/'+jobId+'/analyze'){job.replay_data.status='available';}
+  else if(path==='/api/cuts/'+clipId+'/export'){
+    assert.deepEqual(body,{revision:clip.revision});
+    clip.export_status='queued';
+  }
+  else if(path.endsWith('/retry')){
+    const item=fixture.cuts.jobs.find(item=>path==='/api/cuts/jobs/'+item.id+'/retry');
+    assert(item);
+    Object.assign(item,{status:'queued',error:null,source_range:body.sourceRange});
+  }
   else if(path==='/api/cuts/'+clipId+'/publish'){Object.assign(clip,{status:'publishing',delivery_id:'qa-delivery',delivery_status:'pending'});}
   else if(path.endsWith('/discard')){
     if(body.confirm!==true)return route.fulfill({status:400,json:{error:'Confirme o descarte.'}});
@@ -100,13 +109,39 @@ await page.route('**/api/**',async route=>{
 try{
   await page.goto(base+'/#cuts');
   await page.getByRole('heading',{name:'Gerador de cortes',exact:true}).waitFor();
+  Object.assign(clip,{finalReady:false,export_status:null});
+  await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  const exportButton=page.getByRole('button',{name:'Gerar MP4 final',exact:true});
+  await exportButton.waitFor();
+  assert.equal(await page.getByRole('link',{name:'Baixar MP4',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Postar',exact:true}).count(),0);
+  await exportButton.click();
+  await page.getByText('MP4 final na fila',{exact:true}).waitFor();
+  assert.equal(actions.pop().path,'/api/cuts/'+clipId+'/export');
+  Object.assign(clip,{finalReady:true,export_status:'ready'});
+  await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  await page.getByRole('link',{name:'Baixar MP4',exact:true}).waitFor();
+  delete clip.finalReady;delete clip.export_status;
   assert.equal(await page.locator('#breadcrumb').textContent(),'Gerador de cortes');
   assert.equal(await page.getByText('Projeto já descartado',{exact:true}).count(),0,'discarded projects stay hidden even in stale API data');
+  const projectsTab=page.getByRole('tab',{name:'Projetos',exact:true}),createTab=page.getByRole('tab',{name:'Criar novos cortes',exact:true});
+  const createForm=page.locator('#cuts-create-form'),projectList=page.locator('#cuts-jobs');
+  assert.equal(await projectsTab.getAttribute('aria-selected'),'true');
+  assert(await projectList.isVisible());
+  assert(!(await createForm.isVisible()),'the form starts out of the projects view');
+  await projectsTab.focus();
+  await projectsTab.press('ArrowRight');
+  await createForm.waitFor();
+  assert.equal(await page.evaluate(()=>location.hash),'#cuts/new');
+  assert.equal(await createTab.getAttribute('aria-selected'),'true');
+  assert(!(await projectList.isVisible()));
   await page.getByLabel('Link do vídeo no YouTube').fill('https://youtu.be/dQw4w9WgXcQ');
   await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   assert.equal(await page.getByLabel('Link do vídeo no YouTube').inputValue(),'https://youtu.be/dQw4w9WgXcQ');
   await page.getByRole('button',{name:'Gerar cortes',exact:true}).click();
   await page.getByText('Novo projeto',{exact:true}).waitFor();
+  assert.equal(await projectsTab.getAttribute('aria-selected'),'true','successful creation returns to the projects tab');
+  assert(!(await createForm.isVisible()));
   assert.deepEqual(actions.at(-1),{path:'/api/cuts',method:'POST',body:{url:'https://youtu.be/dQw4w9WgXcQ',count:3,targetSeconds:60,language:'pt'}});
 
   const player=page.locator('[data-cut-clip="'+clipId+'"] video');
@@ -491,12 +526,16 @@ try{
   await page.waitForFunction(()=>document.querySelectorAll('[data-cut-job]').length===10);
   assert.equal(await page.locator('[data-cut-job]').count(),10);
   assert.equal(await page.getByText('Projeto já descartado',{exact:true}).count(),0);
+  await createTab.click();
   await page.getByLabel('Link do vídeo no YouTube').fill('https://youtu.be/dQw4w9WgXcQ');
+  await projectsTab.click();
   const nextPage=page.locator('[data-pagination-scope="cuts"][data-pagination-direction="next"]');
   await nextPage.click();await page.getByRole('heading',{name:'Projeto antigo 8',exact:true}).waitFor();
   assert.equal(await page.locator('[data-cut-job]').count(),3);
   assert(stateRequests.at(-1).searchParams.get('cutsCursor'),'next page uses the API cursor');
+  await createTab.click();
   assert.equal(await page.getByLabel('Link do vídeo no YouTube').inputValue(),'https://youtu.be/dQw4w9WgXcQ');
+  await projectsTab.click();
   await page.locator('[data-pagination-scope="cuts"][data-pagination-direction="prev"]').click();
   await page.getByRole('heading',{name:'Novo projeto',exact:true}).waitFor();assert.equal(await page.locator('[data-cut-job]').count(),10);
   const projectCard=page.locator('[data-cut-job="33333333-3333-4333-8333-333333333333"]');
@@ -523,7 +562,38 @@ try{
   await page.waitForFunction(()=>document.querySelectorAll('[data-cut-job]').length===10);
   assert.equal(stateRequests.at(-1).searchParams.has('cutsCursor'),false,'discarding the last item returns to a populated first page');
   assert.equal(await page.locator('[data-cut-job="qa-old-10"]').count(),0);
+  const failed={id:'qa-source-too-large',url:'https://youtu.be/dQw4w9WgXcQ',status:'failed',error:'Espaço insuficiente no disco para baixar a fonte.',created_at:'2026-11-18T14:00:00Z',clips:[]};
+  fixture.cuts.jobs.unshift(failed);
+  await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  const failedCard=page.locator('[data-cut-job="'+failed.id+'"]');
+  await failedCard.getByRole('button',{name:'Escolher trecho',exact:true}).click();
+  const sourceDialog=page.getByRole('dialog',{name:'Escolher trecho do vídeo',exact:true});
+  const sectionStart=sourceDialog.getByLabel('Começo do trecho');
+  const sectionEnd=sourceDialog.getByLabel('Fim do trecho');
+  const sectionSubmit=sourceDialog.getByRole('button',{name:'Gerar cortes do trecho',exact:true});
+  await sectionStart.fill('02:10:00');
+  await sectionEnd.fill('02:12:00');
+  await sectionSubmit.click();
+  await sourceDialog.waitFor({state:'detached'});
+  assert.deepEqual(actions.at(-1),{path:'/api/cuts/jobs/'+failed.id+'/retry',method:'POST',body:{sourceRange:{start:7800,end:7920}}});
+  await failedCard.getByText(/Trecho da origem/).waitFor();
+
+  await createTab.click();
+  await createForm.getByLabel('Link do vídeo no YouTube').fill('https://www.youtube.com/live/dQw4w9WgXcQ');
+  await createForm.getByRole('button',{name:'Escolher trecho',exact:true}).click();
+  const beforeRange=actions.length;
+  await sectionEnd.fill('00:30:01');
+  await sectionSubmit.click();
+  const rangeError=sourceDialog.getByRole('alert');
+  await rangeError.waitFor();
+  assert.match(await rangeError.textContent(),/30 minutos/);
+  assert.equal(actions.length,beforeRange);
+  await sectionEnd.fill('00:02:00');
+  await sectionSubmit.click();
+  await sourceDialog.waitFor({state:'detached'});
+  assert.deepEqual(actions.at(-1),{path:'/api/cuts',method:'POST',body:{url:'https://www.youtube.com/live/dQw4w9WgXcQ',count:3,targetSeconds:60,language:'pt',sourceRange:{start:0,end:120}}});
   fixture.cuts.dependencies={ready:false,details:['Python de transcrição não está disponível.']};await page.getByRole('button',{name:'Atualizar',exact:true}).click();
+  await createTab.click();
   await page.getByText('Preparação necessária',{exact:true}).waitFor();assert(await page.getByRole('button',{name:'Gerar cortes',exact:true}).isDisabled());
   assert.deepEqual(errors,[]);console.log('Cortes UI: frame exato no celular, controles de reprodução/pausa/seek, montagem sem lacunas, replay, estilos, publicação simulada, ajustes após envio, recuperação da fonte, confirmação de descarte, paginação e mobile OK.');
 }finally{releaseTextPreview();await browser.close();await new Promise(resolve=>server.close(resolve));await rm(temp,{recursive:true,force:true});}

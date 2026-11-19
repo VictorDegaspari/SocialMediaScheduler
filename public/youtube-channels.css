@@ -83,11 +83,6 @@
   margin-inline-start: var(--space-8);
 }
 
-.youtube-cut-limit {
-  display: block;
-  margin-top: var(--space-4);
-}
-
 .youtube-range-suggestions {
   display: flex;
   flex-wrap: wrap;

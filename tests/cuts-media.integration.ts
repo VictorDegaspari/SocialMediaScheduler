@@ -1,12 +1,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { downloadCutSource, renderCut } from '../src/cuts-media.js';
-import { captionStyleSchema } from '../src/cuts-edit.js';
+import { captionStyleSchema, framingOptionsSchema } from '../src/cuts-edit.js';
 import { sha256, validateVideo } from '../src/media.js';
 
 const dir=await mkdtemp(join(tmpdir(),'watcher-cuts-render-'));
@@ -30,6 +30,13 @@ test('renders a true vertical H264/AAC preview with burnt-in, time-shifted capti
   assert.equal(await sha256(source),before);
   assert.ok((await stat(path)).size>1000);
   assert.ok(!(await readdir(dir)).some(name=>name.endsWith('.ass')||name.includes('.rendering.')));
+});
+
+test('review encoding uses a smaller canvas and a separate preview file',async()=>{
+  const {path}=await renderCut(dir,randomUUID(),{start:1,end:3,captions,framing:'fit'},{preview:true});
+  const {width,height}=await validateVideo(path);
+  assert.deepEqual({width,height},{width:180,height:320});
+  assert.ok(!path.endsWith('.master.mp4'));
 });
 
 test('crop preview tolerates literal ASS control characters without treating them as styles',async()=>{
@@ -85,13 +92,18 @@ test('download selects the best source streams without resolution or codec restr
     {format_id:'best-audio',url:high,ext:'webm',vcodec:'none',acodec:'opus',abr:256,asr:48000}
   ];
   const fixture=join(downloadDir,'downloader.py');
-  await writeFile(join(downloadDir,'downloader.json'),JSON.stringify({id:'dQw4w9WgXcQ',title:'Origem máxima',duration:0.15,extractor:'fixture',formats:formats.map(format=>({...format,url:'file://'+format.url}))}));
+  const metadata={id:'dQw4w9WgXcQ',title:'Origem máxima',duration:0.15,extractor:'fixture',formats:formats.map(format=>({...format,url:'file://'+format.url}))};
+  const metadataFile=join(downloadDir,'downloader.json');
+  await writeFile(metadataFile,JSON.stringify(metadata));
+  const unrelated=join(downloadDir,'arquivo-esparso');
+  await writeFile(unrelated,'');
+  await truncate(unrelated,3*1024**3);
   const previousPython=process.env.CUTS_PYTHON;
   const interpreter=execFileSync(previousPython||'python3',['-c','import sys; print(sys.executable)'],{encoding:'utf8'}).trim();
   // Replace only remote I/O. The installed yt-dlp parses our real CLI options
   // and selects formats from synthetic metadata; FFmpeg remuxes real streams.
   await writeFile(fixture,`#!${interpreter}
-import json, subprocess, sys
+import json, subprocess, sys, time
 from pathlib import Path
 import yt_dlp
 info = json.loads(Path(__file__).with_suffix('.json').read_text())
@@ -99,6 +111,8 @@ if '--dump-single-json' in sys.argv:
     print(json.dumps(info))
 else:
     options = yt_dlp.parse_options(sys.argv[3:]).ydl_opts
+    assert options.get('max_filesize') is None
+    time.sleep(0.5)
     with yt_dlp.YoutubeDL(options) as downloader:
         selected = downloader.process_ie_result(info, download=False)
         streams = selected.get('requested_formats') or [selected]
@@ -120,6 +134,12 @@ else:
       const hashes=(path:string)=>packets(path).filter((packet:{stream_index:number})=>packet.stream_index===stream).map((packet:{data_hash:string})=>packet.data_hash);
       assert.deepEqual(hashes(downloaded),hashes(high),'original encoded source packets survive the MP4 remux');
     }
+    await downloadCutSource('https://youtu.be/dQw4w9WgXcQ',downloadDir,undefined,'review');
+    const preview=JSON.parse(execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','json',downloaded],{encoding:'utf8'})).streams[0];
+    assert.deepEqual(preview,{width:320,height:180});
+    await writeFile(metadataFile,JSON.stringify({...metadata,requested_formats:[{filesize:Number.MAX_SAFE_INTEGER}]}));
+    await assert.rejects(()=>downloadCutSource('https://youtu.be/dQw4w9WgXcQ',downloadDir),/Espaço insuficiente no disco para baixar a fonte/);
+    assert.equal((await stat(unrelated)).size,3*1024**3,'disk checks leave existing files alone');
   }finally {
     if(previousPython===undefined)delete process.env.CUTS_PYTHON;else process.env.CUTS_PYTHON=previousPython;
   }
@@ -148,7 +168,7 @@ from pathlib import Path
 import yt_dlp
 info = json.loads(Path(__file__).with_suffix('.json').read_text())
 if '--dump-single-json' in sys.argv:
-    print(json.dumps(info))
+    print(json.dumps({**info, 'filesize': 9007199254740991}))
 else:
     options = yt_dlp.parse_options(sys.argv[3:]).ydl_opts
     options['enable_file_urls'] = True
@@ -167,6 +187,18 @@ else:
     assert.ok(streams.every((stream:{start_time:string})=>Math.abs(Number(stream.start_time))<.05));
     const first=execFileSync('ffmpeg',['-v','error','-i',file,'-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-']);
     assert.ok(first[0]<10&&first[1]<10&&first[2]>240,'the first presented frame comes from the selected window');
+    const firstPart=join(downloadDir,'first-part');
+    await downloadCutSource('https://youtu.be/dQw4w9WgXcQ',firstPart,{start:1.25,end:2});
+    const {path}=await renderCut(downloadDir,randomUUID(),{
+      start:1.25,end:5.25,captions:[{start:1.4,end:1.7,text:'Antes'},{start:4.8,end:5.2,text:'Depois'}],
+      framing:'fit',framingOptions:framingOptionsSchema.parse({format:'video'}),captionStyle:noCaptions,excludedRanges:[{start:2,end:4.5}]
+    },{sourceParts:[{path:join(firstPart,'source.mp4'),seek:0},{path:file,seek:0}]});
+    assert.ok(path.endsWith('.master.mp4'));
+    const frame=(at:string)=>execFileSync('ffmpeg',['-v','error','-ss',at,'-i',path,'-vf','scale=2:2','-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-']);
+    assert.ok(frame('0.1')[0]>240&&frame('0.85')[2]>240,'the final export joins only the retained original sections');
+    assert.ok(Math.abs((await validateVideo(path,'video')).duration-1.5)<.06);
+    const fps=execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=r_frame_rate','-of','csv=p=0',path],{encoding:'utf8'});
+    assert.equal(fps.trim(),'60/1');
   }finally {
     if(previousPython===undefined)delete process.env.CUTS_PYTHON;else process.env.CUTS_PYTHON=previousPython;
   }

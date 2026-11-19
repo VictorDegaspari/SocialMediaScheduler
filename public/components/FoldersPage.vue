@@ -14,7 +14,7 @@ defineProps(['state', 'icon', 'date', 'pagination', 'scheduleApi', 'onScheduleCh
         <p class="subtitle">Seus cortes e pastas de vídeos em um só lugar.</p>
       </div>
       <div class="folders-page-actions">
-        <a class="button" href="#cuts">
+        <a class="button" href="#cuts/new">
           <ConnectionIcon name="plus" :icon="icon" />
           Gerar novos cortes
         </a>

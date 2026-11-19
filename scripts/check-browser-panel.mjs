@@ -19,6 +19,7 @@ fixture.cutFolders={channels:[{id:'browser:tiktok:'+profileId,name:'Perfil secun
 fixture.cuts=fixture.cutFolders;
 const media=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=90x160:d=4','-c:v','libx264','-pix_fmt','yuv420p','-movflags','frag_keyframe+empty_moov','-f','mp4','-'],{maxBuffer:1024*1024});
 const actions=[],errors=[];
+let exportStatus=null;
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
 const page=await browser.newPage({viewport:{width:1440,height:1100}});
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
@@ -27,11 +28,19 @@ await page.route('**/api/**',async route=>{
   if(path==='/api/state')return route.fulfill({json:fixture});
   if(path==='/api/integrations')return route.fulfill({json:[]});
   if(path==='/api/cuts/library')return route.fulfill({json:fixture.cutFolders});
+  if(path==='/api/cuts/'+cutId+'/export'&&request.method()==='GET'){
+    assert.equal(new URL(request.url()).searchParams.get('v'),'3');
+    return route.fulfill({json:{status:exportStatus}});
+  }
   if(path==='/api/browser/videos')return route.fulfill({json:{items:[{id:videoId,title:metadata.title,name:'original.mp4',version:'source-version-1',folder:'Minha pasta'}],pagination:{hasMore:false,nextCursor:null}}});
   if(path==='/api/native/deliveries/'+deliveryId)return route.fulfill({json:{id:deliveryId,engine:'browser',provider:'tiktok',status:'review',hasMedia:true,payload:{metadata,channelName:'Perfil secundário'}}});
   if(path.endsWith('/media'))return route.fulfill({body:media,contentType:'video/mp4'});
   assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');
   const body=request.postDataJSON();actions.push({path,body});
+  if(path==='/api/cuts/'+cutId+'/export'){
+    assert.deepEqual(body,{revision:3});
+    return route.fulfill({status:202,json:{status:'queued'}});
+  }
   if(path==='/api/browser/videos/'+videoId+'/prepare')return route.fulfill({json:{id:deliveryId}});
   if(path==='/api/cuts/'+cutId+'/publish'&&body.visibility!==undefined&&!['private','unlisted','public'].includes(body.visibility))return route.fulfill({status:400,json:{error:'Verifique os campos: visibility: Invalid option'}});
   if(path==='/api/native/deliveries/'+deliveryId+'/approve'||path==='/api/cuts/'+cutId+'/publish'){
@@ -198,9 +207,19 @@ try{
   await review.getByLabel('Título do vídeo').fill('Minha corrida revisada');assert.equal(await review.getByRole('checkbox',{name:'Conteúdo comercial ou parceria paga',exact:true}).isChecked(),false);await review.getByRole('checkbox',{name:'Promove minha marca',exact:true}).check();await review.getByRole('checkbox',{name:/Autorizo o envio deste vídeo/}).check();
   await review.getByRole('button',{name:'Autorizar e postar agora',exact:true}).click();await page.locator('#delivery-dialog').waitFor({state:'hidden'});
   assert.equal(actions.at(-1).path,'/api/native/deliveries/'+deliveryId+'/approve');assert.equal(actions.at(-1).body.publishNow,true);assert.equal(actions.at(-1).body.metadata.title,'Minha corrida revisada');assert.equal(actions.at(-1).body.metadata.tiktok.ownBrand,true);assert.equal(actions.at(-1).body.metadata.tiktok.commercialContent,false);assert.equal(await page.evaluate(()=>location.hash),'#browser');
+  fixture.cutFolders.jobs[0].clips[0].finalReady=false;
   await page.getByRole('button',{name:'Postar agora no TikTok',exact:true}).click();
-  await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(cutId);await picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click();
+  await picker.getByLabel('Perfil do TikTok').selectOption('browser:tiktok:'+profileId);await picker.getByLabel('Vídeo para revisar').selectOption(cutId);
+  await Promise.all([
+    page.waitForResponse(response=>response.url().endsWith('/cuts/'+cutId+'/export')&&response.request().method()==='POST'),
+    picker.getByRole('button',{name:'Conferir prévia e legenda',exact:true}).click(),
+  ]);
+  await picker.getByText('Gerando o MP4 em alta qualidade para revisão…').waitFor();
+  exportStatus='ready';
   await cutForm.getByRole('button',{name:'Autorizar e postar agora',exact:true}).waitFor();assert.equal(await cutForm.getByLabel('Perfil do TikTok').inputValue(),'browser:tiktok:'+profileId);
+  assert.equal(actions.at(-1).path,'/api/cuts/'+cutId+'/export');
+  assert.match(await cutForm.locator('video').getAttribute('src'),/final=1/);
+  fixture.cutFolders.jobs[0].clips[0].finalReady=true;
   await cutForm.getByRole('button',{name:'Cancelar',exact:true}).click();
   const now=new Date().toISOString();
   fixture.browser.active=null;

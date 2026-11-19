@@ -37,6 +37,7 @@ defineProps(['channels']);
       <button class="button small" type="button" data-immediate-action="next" disabled>Próximos vídeos</button>
     </div>
     <p class="error-banner" data-immediate-error hidden role="alert"></p>
+    <p class="tip" data-immediate-progress hidden role="status"></p>
     <p class="tip">Na próxima etapa, confira o vídeo e a legenda antes de autorizar a publicação.</p>
     <div class="dialog-footer">
       <button class="button" type="button" data-immediate-action="close">Cancelar</button>

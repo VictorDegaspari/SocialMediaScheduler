@@ -6,7 +6,7 @@ const format = computed(() => props.clip.framing_options?.format || 'shorts');
 </script>
 
 <template>
-  <video class="cuts-publish-preview" controls playsinline preload="metadata" :src="'/api/cuts/' + (encodeURIComponent(clip.id)) + '/media?v=' + (Number(clip.revision)||0)" aria-label="Prévia final do corte"></video>
+  <video class="cuts-publish-preview" controls playsinline preload="metadata" :src="'/api/cuts/' + (encodeURIComponent(clip.id)) + '/media?final=1&v=' + (Number(clip.revision)||0)" aria-label="Prévia final do corte"></video>
   <div class="notice">Confira o formato, o enquadramento e as legendas. O envio usa exatamente esta versão da prévia.</div>
   <div class="form-field">
     <label for="cut-platform">Onde postar?</label>

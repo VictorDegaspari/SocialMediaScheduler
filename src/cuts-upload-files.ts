@@ -18,7 +18,8 @@ const manifestsRoot=()=>join(dataDir,'cuts-publish-manifests');
 export async function stageCutUpload(input:{jobId:string;clipId:string;deliveryId:string;sha256:string;source:string}) {
   const manifest=manifestSchema.parse({version:1,jobId:input.jobId,clipId:input.clipId,deliveryId:input.deliveryId,sha256:input.sha256});
   const directory=join(manifestsRoot(),manifest.jobId);
-  if(resolve(input.source)!==resolve(cutsRoot(),manifest.jobId,manifest.clipId+'.mp4'))throw new AppError('A cópia de publicação precisa pertencer ao corte selecionado.');
+  const clipPath=resolve(cutsRoot(),manifest.jobId,manifest.clipId);
+  if(![clipPath+'.mp4',clipPath+'.master.mp4'].includes(resolve(input.source)))throw new AppError('A cópia de publicação precisa pertencer ao corte selecionado.');
   const filename=manifest.deliveryId+'.native.mp4',path=join(dataDir,filename);
   const manifestPath=join(directory,'publish.'+manifest.deliveryId+'.json');
   const temporary=join(directory,'publish.'+manifest.deliveryId+'.part');

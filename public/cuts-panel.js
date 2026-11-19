@@ -20,18 +20,22 @@ function stableJobs(root,jobs){
     const card=cards.get(job.id);
     // Keep the version being reviewed or played until the user is done with it.
     const inUse=card&&(editing?.jobId===job.id||[...card.querySelectorAll('video')].some(video=>!video.paused));
-    snapshots.set(job.id,(inUse&&previous?.get(job.id))||job);
+    const prior=inUse&&previous?.get(job.id);
+    snapshots.set(job.id,prior?{...prior,clips:prior.clips.map(clip=>{
+      const next=job.clips.find(candidate=>candidate.id===clip.id&&candidate.revision===clip.revision);
+      return next?{...clip,finalReady:next.finalReady,export_status:next.export_status,export_error:next.export_error}:clip;
+    })}:job);
   }
   jobSnapshots.set(root,snapshots);
   return [...snapshots.values()];
 }
 
-export function updateCuts(root,state,h){
+export function updateCuts(root,state,h,view='projects'){
   remember(state);
   const pending=root.querySelector('#cuts-create-form [type="submit"]')?.dataset.busy;
   drawWorkspace(root,'cuts',{
     jobs:stableJobs(root,visibleJobs()),dependencies:current.dependencies,pagination:paginationView(current.pagination,'cuts'),
-    icon:h.icon,date:h.date,safeLink,createDisabled:Boolean(pending)||!current.dependencies?.ready,
+    icon:h.icon,date:h.date,safeLink,view,createDisabled:Boolean(pending)||!current.dependencies?.ready,
   });
 }
 
@@ -44,7 +48,7 @@ async function openEditor(id,seek,format){
     const dialog=document.querySelector('#cuts-dialog'),form=document.querySelector('#cuts-dialog-form');
     document.querySelector('#cuts-dialog-title').textContent='Recuperar vídeo para ajustar';dialog.dataset.mode='edit';
     clearWorkspace(form);
-    drawWorkspace(form,'cutSource',{id});
+    drawWorkspace(form,'cutSource',{id,sourceQuality:job.source_quality});
     if(!dialog.open)dialog.showModal();
     try{
       let source=await services.api('/cuts/jobs/'+encodeURIComponent(job.id)+'/prepare-source',{});
@@ -131,8 +135,28 @@ function publishFormat(){
   form.querySelector('[type="submit"]').disabled=changed||!editing.canPublish||Boolean(editing.pending)||Boolean(editing.generating);
 }
 
+function openCutSourceRange({video,initialRange,save}){
+  const host=document.createElement('div');
+  document.body.append(host);
+  drawWorkspace(host,'cutSourceRange',{
+    video,initialRange,save,onClose(){clearWorkspace(host);host.remove();},
+  });
+}
+
 export function bindCuts({api,refresh,toast}){
   services={api,toast};
+  async function createProject(form,input){
+    await api('/cuts',input);
+    form.reset();
+    resetPagination('cuts');
+    if(form.isConnected&&location.hash==='#cuts/new'){
+      location.hash='#cuts';
+      window.scrollTo(0,0);
+      document.querySelector('#cuts-tab-projects')?.focus({preventScroll:true});
+    }
+    await refresh(true);
+    toast('Projeto na fila. Acompanhe a geração na aba Projetos.');
+  }
   const dialog=document.querySelector('#cuts-dialog');
   dialog.addEventListener('close',()=>{
     if(dialog.open)return;
@@ -162,7 +186,10 @@ export function bindCuts({api,refresh,toast}){
     try{
       const f=new FormData(form);
       if(form.id==='cuts-create-form'){
-        await api('/cuts',{url:f.get('url'),count:Number(f.get('count')),targetSeconds:Number(f.get('targetSeconds')),language:f.get('language')});form.reset();resetPagination('cuts');await refresh(true);toast('Projeto na fila. Acompanhe a geração dos cortes abaixo.');
+        const input={url:f.get('url'),count:Number(f.get('count')),targetSeconds:Number(f.get('targetSeconds')),language:f.get('language')};
+        if(event.submitter?.hasAttribute('data-cut-source-range')){
+          openCutSourceRange({video:{title:'',duration:null},save:sourceRange=>createProject(form,{...input,sourceRange})});
+        }else await createProject(form,input);
       }else if(session?.mode==='edit'){
         const body=session.editor.read();
         const result=await api(path(session.id),{...body,versionId:session.versionId},'PUT');if(editing===session&&dialog.open)dialog.close();await refresh(true);toast(result.createdVersion?'Nova versão criada. Aguarde a prévia para revisar e postar.':'Ajustes salvos. Aguarde a nova prévia antes de postar.');
@@ -178,6 +205,11 @@ export function bindCuts({api,refresh,toast}){
     try{
       if(action==='refresh')await refresh(true);
       else if(action==='edit'){const pending=editing?.mode==='preparing'&&editing.id===id?editing:{};await openEditor(id,pending.seek,pending.format);}
+      else if(action==='export'){
+        const {clip}=findClip(id);
+        await api(path(id)+'/export',{revision:clip.revision});await refresh(true);
+        toast('Gerando o MP4 final em alta qualidade.');
+      }
       else if(action==='publish'||action==='publish-tiktok')openPublish(id,action==='publish-tiktok'?'tiktok':button.dataset.platform||'youtube');
       else if(action==='edit-format'){
         if(editing?.mode!=='publish'||editing.pending)return;
@@ -202,6 +234,14 @@ export function bindCuts({api,refresh,toast}){
         if(await confirmDiscard({kind:'project',name:job.title,onConfirm:()=>api('/cuts/jobs/'+encodeURIComponent(id)+'/discard',{confirm:true})})){resetPagination('cuts');await refresh(true);toast('Projeto descartado. O histórico dos envios foi preservado.');}
       }
       else if(action==='retry-job'){await api('/cuts/jobs/'+encodeURIComponent(id)+'/retry',{});await refresh(true);toast('Nova geração solicitada.');}
+      else if(action==='retry-source-range'){
+        const job=visibleJobs().find(item=>item.id===id);if(!job)throw new Error('Este projeto não está mais disponível. Atualize o painel.');
+        openCutSourceRange({video:{title:job.title,duration:null},initialRange:job.source_range,async save(sourceRange){
+          await api('/cuts/jobs/'+encodeURIComponent(id)+'/retry',{sourceRange});
+          await refresh(true);
+          toast('Projeto na fila com o trecho escolhido.');
+        }});
+      }
     }catch(error){toast(error.message,true);}finally{button.disabled=false;}
   });
 }

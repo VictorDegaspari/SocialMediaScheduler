@@ -96,6 +96,7 @@ export async function initDb() {
     );
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS replay_data jsonb;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS source_range jsonb;
+    ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS source_quality text NOT NULL DEFAULT 'original';
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS pending_analysis jsonb;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS analysis_message text;
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS caption_style jsonb NOT NULL DEFAULT '{}';
@@ -105,6 +106,8 @@ export async function initDb() {
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS output_duration double precision;
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS render_warnings jsonb NOT NULL DEFAULT '[]';
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS edited_from_cut_id uuid REFERENCES cuts(id);
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS export_status text;
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS export_error text;
     ALTER TABLE cuts DROP CONSTRAINT IF EXISTS cuts_check;
     UPDATE cuts SET output_duration=end_seconds-start_seconds WHERE output_duration IS NULL;
     DO $$ BEGIN
@@ -190,6 +193,16 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS publication_requests_page ON publication_requests(created_at DESC,id DESC);
     CREATE INDEX IF NOT EXISTS manual_actions_open_page ON manual_actions(created_at DESC,id DESC) WHERE resolved_at IS NULL;
     CREATE INDEX IF NOT EXISTS browser_commands_page ON browser_commands(created_at DESC,id DESC);
+    -- Ask for a fresh confirmation only for immediate sends stranded by the former
+    -- daily scheduling check. The user may have published them in TikTok Studio.
+    UPDATE deliveries d SET status='review',approved_at=NULL,planned_at=NULL,retry_at=NULL,updated_at=now(),
+      error='Este envio ficou em espera. Confira se o vídeo já foi publicado manualmente antes de autorizar.'
+      WHERE d.engine='browser' AND d.status='pending' AND d.approved_at IS NOT NULL
+        AND d.request_id IS NULL AND d.session IS NULL AND d.upload_started_at IS NULL AND d.post_id IS NULL
+        AND d.payload->>'publishNow'='true' AND d.payload->>'manualPublication'='true'
+        AND d.error='Aguardando capacidade no limite diário desta conta.'
+        AND NOT EXISTS(SELECT 1 FROM browser_commands c WHERE c.delivery_id=d.id
+          AND (c.upload_started OR c.status IN ('pending','running','cancel_requested')));
     -- Remove the former implicit inheritance from TikTok. An explicit YouTube
     -- declaration and per-video JSON metadata remain authoritative.
     UPDATE watches SET pack_defaults=jsonb_set(pack_defaults,'{youtubeContainsSyntheticMedia}','false'::jsonb),

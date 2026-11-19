@@ -33,7 +33,7 @@ const video = {id: 'GHIJKLmn_45', title: 'Primeiro vídeo completo', duration: 3
 const newerVideo = {id: 'GHIJKLmn_46', title: 'Live longa encerrada', duration: 18000, kind: 'live'};
 const olderVideos = [
   {id: 'GHIJKLmn_47', title: 'Live recente encerrada', duration: 720, kind: 'live'},
-  {id: 'GHIJKLmn_48', title: 'Terceiro vídeo completo', duration: 900},
+  {id: 'GHIJKLmn_48', title: 'Gravação longa listada como vídeo', duration: 18900, kind: 'video'},
 ];
 const browser = await chromium.launch({executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox']});
 const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
@@ -98,8 +98,20 @@ try {
   await add.click();
   await shortsOnly.locator('summary').click();
   await shortsOnly.getByText('Nenhum vídeo ou live encerrada disponível.', {exact: true}).waitFor();
-  assert.equal(await page.getByRole('button', {name: 'Gerar corte', exact: true}).count(), 2);
-  assert.equal(await page.getByRole('button', {name: 'Escolher trecho', exact: true}).count(), 1);
+  assert.equal(await page.getByRole('button', {name: 'Gerar corte', exact: true}).count(), 1);
+  assert.equal(await page.getByRole('button', {name: 'Escolher trecho', exact: true}).count(), 2);
+  const recording = olderVideos[1];
+  const longVideoRow = channel.locator('.youtube-video-row').filter({hasText: recording.title});
+  await longVideoRow.getByRole('button', {name: 'Escolher trecho', exact: true}).click();
+  const recordingPicker = page.getByRole('dialog', {name: 'Escolher trecho do vídeo', exact: true});
+  await recordingPicker.getByLabel('Começo do trecho').fill('03:50:00');
+  await recordingPicker.getByLabel('Fim do trecho').fill('04:20:00');
+  await recordingPicker.getByRole('button', {name: 'Gerar cortes do trecho', exact: true}).click();
+  await recordingPicker.waitFor({state: 'detached'});
+  const recordingRequest = {method: 'POST', path: '/api/cuts', body: {
+    url: 'https://www.youtube.com/watch?v=' + recording.id, sourceRange: {start: 13800, end: 15600},
+  }};
+  assert.deepEqual(requests.filter(request => request.path === '/api/cuts'), [recordingRequest]);
   channels[0].needsRefresh = true;
   await page.reload();
   await page.getByText('YouTube temporariamente indisponível.', {exact: true}).waitFor();
@@ -125,7 +137,7 @@ try {
   await end.fill('02:41:00');
   await submit.click();
   assert.match(await picker.getByRole('alert').textContent(), /30 minutos/);
-  assert.equal(requests.filter(request => request.path === '/api/cuts').length, 0);
+  assert.deepEqual(requests.filter(request => request.path === '/api/cuts'), [recordingRequest]);
   await picker.getByRole('button', {name: 'Buscar momentos mais revistos', exact: true}).click();
   await picker.getByRole('button', {name: '02:10:00 a 02:40:00', exact: true}).click();
   assert.equal(await start.inputValue(), '02:10:00');
@@ -133,7 +145,7 @@ try {
   await submit.click();
   await picker.waitFor({state: 'detached'});
   await longLive.getByRole('link', {name: 'Ver projeto na fila', exact: true}).waitFor();
-  assert.deepEqual(requests.filter(request => request.path === '/api/cuts'), [{
+  assert.deepEqual(requests.filter(request => request.path === '/api/cuts'), [recordingRequest, {
     method: 'POST', path: '/api/cuts', body: {url: 'https://www.youtube.com/watch?v=' + newerVideo.id, sourceRange: {start: 7800, end: 9600}},
   }]);
   await page.getByRole('button', {name: 'Deixar de acompanhar Somente Shorts', exact: true}).click();

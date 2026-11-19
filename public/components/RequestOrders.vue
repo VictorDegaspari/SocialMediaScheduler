@@ -7,7 +7,7 @@ const finished = (status: string) => ['completed', 'cancelled'].includes(status)
 </script>
 
 <template>
-  <section v-if="publishing.actions.length || publishing.pagination?.actions" class="panel requests-attention">
+  <section v-if="publishing.actions.length" class="panel requests-attention">
     <div class="requests-section-head"><h2>Precisa de você</h2></div>
     <div v-for="action in publishing.actions" :key="action.id" class="notice requests-action">
       <strong>{{ action.profile_name }} · {{ requestPlatform(action.provider) }}</strong><p>{{ action.message }}</p>
@@ -20,7 +20,6 @@ const finished = (status: string) => ['completed', 'cancelled'].includes(status)
         <button v-else class="button small" data-request-action="resume" :data-id="action.request_id">Já resolvi; verificar novamente</button>
       </div>
     </div>
-    <p v-if="!publishing.actions.length" class="requests-note">Nenhuma pendência nesta página.</p>
     <CollectionPagination scope="actions" :page="pagination.actions" />
   </section>
   <section class="panel requests-orders">

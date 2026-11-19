@@ -24,7 +24,7 @@ const error = ref('');
 const lookupErrors = reactive(new Map<string, string>());
 const pendingVideos = reactive(new Set<string>());
 const queuedVideos = reactive(new Set<string>());
-const selectedLive = ref<ChannelVideo | null>(null);
+const selectedVideo = ref<ChannelVideo | null>(null);
 let active = true;
 let refreshTimer: ReturnType<typeof setInterval>;
 onBeforeUnmount(() => {
@@ -39,6 +39,10 @@ const message = (cause: unknown) => cause instanceof Error ? cause.message : 'N�
 function formatDuration(seconds: number) {
   const parts = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, Math.floor(seconds) % 60];
   return (parts[0] ? parts : parts.slice(1)).map(part => String(part).padStart(2, '0')).join(':');
+}
+
+function requiresRange(video: ChannelVideo) {
+  return video.kind === 'live' || (video.duration ?? 0) > MAX_CUT_SOURCE_SECONDS;
 }
 
 function saveChannel(channel: FollowedYoutubeChannel) {
@@ -153,12 +157,12 @@ async function generateCut(id: string) {
   }
 }
 
-async function saveLiveRange(range: CutSourceRange) {
-  if (selectedLive.value) await queueCut(selectedLive.value.id, range);
+async function saveRange(range: CutSourceRange) {
+  if (selectedVideo.value) await queueCut(selectedVideo.value.id, range);
 }
 
-function findLiveRanges() {
-  const video = selectedLive.value!;
+function findRanges() {
+  const video = selectedVideo.value!;
   return props.api<{ranges: CutSourceRange[]; status: string}>('/cuts/replay-windows', {
     url: videoUrl(video.id), duration: video.duration,
   });
@@ -203,16 +207,13 @@ function findLiveRanges() {
               <a :href="videoUrl(video.id)" target="_blank" rel="noopener noreferrer">{{ video.title }}</a>
               <small v-if="video.duration"> · {{ formatDuration(video.duration) }}</small>
               <span v-if="video.kind === 'live'" class="badge gray youtube-live-badge">Live encerrada</span>
-              <small v-if="video.kind !== 'live' && video.duration && video.duration > MAX_CUT_SOURCE_SECONDS" class="youtube-cut-limit">
-                O Gerador de cortes aceita fontes de até 2 horas.
-              </small>
             </div>
             <a v-if="queuedVideos.has(video.id)" class="button" href="#cuts">Ver projeto na fila</a>
-            <button v-if="video.kind === 'live'" class="button primary" type="button"
-              :disabled="busy || pendingVideos.has(video.id)" @click="selectedLive = video">Escolher trecho</button>
-            <button v-else-if="!queuedVideos.has(video.id)" class="button primary" type="button"
-              :disabled="busy || pendingVideos.has(video.id) || (video.duration ?? 0) > MAX_CUT_SOURCE_SECONDS"
+            <button v-if="!requiresRange(video) && !queuedVideos.has(video.id)" class="button primary" type="button"
+              :disabled="busy || pendingVideos.has(video.id)"
               @click="generateCut(video.id)">Gerar corte</button>
+            <button v-if="requiresRange(video) || video.duration === null" class="button" :class="{primary: requiresRange(video)}" type="button"
+              :disabled="busy || pendingVideos.has(video.id)" @click="selectedVideo = video">Escolher trecho</button>
           </li>
         </ol>
         <p v-else class="youtube-channel-empty">Nenhum vídeo ou live encerrada disponível.</p>
@@ -222,6 +223,6 @@ function findLiveRanges() {
       </details>
     </li>
   </ul>
-  <LiveCutRangeDialog v-if="selectedLive" :video="selectedLive" :save="saveLiveRange"
-    :find-ranges="findLiveRanges" @close="selectedLive = null" />
+  <LiveCutRangeDialog v-if="selectedVideo" :video="selectedVideo" :save="saveRange"
+    :find-ranges="findRanges" @close="selectedVideo = null" />
 </template>

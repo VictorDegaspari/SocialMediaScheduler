@@ -86,6 +86,15 @@ test('um canal sem aba Vídeos continua exibindo suas lives encerradas', async (
   ]});
 });
 
+test('reconhece uma live encerrada também na aba Vídeos', async () => {
+  const archived = entry('GHIJKLmn_46', {duration: 18000, timestamp: 6000, live_status: 'was_live'});
+  const result = await lookupYoutubeChannel(id, async url => {
+    if (url.endsWith('/streams')) throw {stderr: 'This channel does not have a streams tab'};
+    return {id, entries: [archived]};
+  });
+  assert.deepEqual(result.videos, [{id: archived.id, title: archived.title, duration: 18000, kind: 'live'}]);
+});
+
 test('canais que só têm Shorts podem ser acompanhados com a lista de vídeos vazia', async () => {
   const seen: string[] = [];
   const result = await lookupYoutubeChannel('@canal', async url => {

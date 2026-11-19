@@ -13,6 +13,7 @@ import DiscardConfirmation from './DiscardConfirmation.vue';
 import FoldersPage from './FoldersPage.vue';
 import HistoryPage from './HistoryPage.vue';
 import ImmediateVideoDialog from './ImmediateVideoDialog.vue';
+import LiveCutRangeDialog from './LiveCutRangeDialog.vue';
 import OverviewPage from './OverviewPage.vue';
 import WatchFormFields from './WatchFormFields.vue';
 import WorkspaceSelectOptions from './WorkspaceSelectOptions.vue';
@@ -26,6 +27,7 @@ const views = {
   cutRemovals: CutRemovedRanges,
   cutReplay: CutReplayGraph,
   cutSource: CutSourcePreparation,
+  cutSourceRange: LiveCutRangeDialog,
   cuts: CutsPage,
   deliveryReview: DeliveryReviewFields,
   discardConfirmation: DiscardConfirmation,

@@ -67,6 +67,12 @@ function next(config:Config){return nextRun({cadence:config.cadence,interval_min
 function online(agent:any){return !!agent && new Date(agent.last_seen).getTime()>Date.now()-LEASE_SECONDS*1000;}
 async function busy(db:PoolClient){return !!(await db.query('SELECT id FROM browser_commands WHERE status=ANY($1::text[]) LIMIT 1',[ACTIVE])).rowCount;}
 async function calendar(db:PoolClient,profileId='default'):Promise<Reservation[]> {return accountCalendar('browser:tiktok:'+profileId,db);}
+async function immediateWaitReason(db:PoolClient,policy:Config['nativeSchedule'],profileId:string) {
+  const cooldown=await getSetting<string>('uploadCooldown:browser:tiktok:'+profileId);
+  if(cooldown&&Date.parse(cooldown)>Date.now())return 'Aguardando o prazo de nova tentativa após um limite informado pelo TikTok.';
+  if(!uploadBudgetAvailable(policy,await calendar(db,profileId)))return 'Aguardando uma vaga no limite de uploads em 24 horas configurado no app.';
+  return null;
+}
 async function insertCommand(db:PoolClient,kind:'login'|'upload',origin:'manual'|'schedule',config:Config){
   let plannedAt:Date|null=null;
   if(kind==='upload'&&config.mode==='native_schedule') {
@@ -268,11 +274,13 @@ export class BrowserBridge {
       if(!profile||profile.externalBusy||(job.kind==='upload'&&!profile.profileSaved))return {job:null,cancel:false};
       if(job.kind==='upload'&&!job.request_id&&!job.config.requestManaged&&(await db.query('SELECT id FROM browser_settings WHERE blocked_until>now()')).rowCount)return {job:null,cancel:false};
       if(job.kind==='upload'&&job.config.publishNow) {
-        const policy=(await configuration(db)).nativeSchedule,reservations=await accountCalendar('browser:tiktok:'+profileId,db,job.delivery_id);
-        const cooldown=await getSetting<string>('uploadCooldown:browser:tiktok:'+profileId);
-        if((cooldown&&Date.parse(cooldown)>Date.now())||!uploadBudgetAvailable(policy,reservations))return {job:null,cancel:false};
-        if(!reservedCapacityAllowed(new Date(),{cadence:'interval',interval_minutes:1,times:['08:00'],timezone:'America/Sao_Paulo'},{...policy,maxScheduled:Number.MAX_SAFE_INTEGER,externalScheduled:0},[...reservations,{plannedAt:new Date()}]))return {job:null,cancel:false};
-        if(job.delivery_id)await db.query('UPDATE deliveries SET planned_at=now() WHERE id=$1',[job.delivery_id]);
+        const reason=await immediateWaitReason(db,(await configuration(db)).nativeSchedule,profileId);
+        if(reason){
+          await db.query('UPDATE browser_commands SET message=$2 WHERE id=$1 AND message IS DISTINCT FROM $2',[job.id,reason]);
+          if(job.delivery_id)await db.query("UPDATE deliveries SET error=$2 WHERE id=$1 AND status='pending' AND error IS DISTINCT FROM $2",[job.delivery_id,reason]);
+          return {job:null,cancel:false};
+        }
+        if(job.delivery_id)await db.query('UPDATE deliveries SET planned_at=now(),error=NULL WHERE id=$1',[job.delivery_id]);
       }
       if(job.kind==='upload'&&job.config.mode==='native_schedule'&&!job.request_id) {
         const current=await configuration(db);
@@ -298,13 +306,10 @@ export class BrowserBridge {
       if(profile.externalBusy||await busy(db)){await waiting('Aguardando a conclusão da tarefa ou janela aberta no Chrome.');return;}
       // Keep quota-blocked media in the delivery queue instead of holding the
       // single desktop agent and preventing login/uploads for other profiles.
-      if(!uploadBudgetAvailable(config.nativeSchedule,await accountCalendar('browser:tiktok:'+profileId,db))){await waiting('Aguardando capacidade no limite de uploads desta conta.');return;}
       if(config.publishNow){
-        const cooldown=await getSetting<string>('uploadCooldown:browser:tiktok:'+profileId),reservations=await accountCalendar('browser:tiktok:'+profileId,db,delivery.id);
-        if(cooldown&&Date.parse(cooldown)>Date.now()){await waiting('Aguardando o prazo de nova tentativa informado pelo TikTok.');return;}
-        if(!reservedCapacityAllowed(new Date(),{cadence:'interval',interval_minutes:1,times:['08:00'],timezone:'America/Sao_Paulo'},
-          {...config.nativeSchedule,maxScheduled:Number.MAX_SAFE_INTEGER,externalScheduled:0},[...reservations,{plannedAt:new Date()}])){await waiting('Aguardando capacidade no limite diário desta conta.');return;}
-      }
+        const reason=await immediateWaitReason(db,config.nativeSchedule,profileId);
+        if(reason){await waiting(reason);return;}
+      }else if(!uploadBudgetAvailable(config.nativeSchedule,await calendar(db,profileId)))return;
       const media={metadata:delivery.payload.metadata,assetSha256:delivery.payload.assetSha256,hash:delivery.original_hash,name:delivery.name,sourceId:delivery.file_id};
       if(config.publishNow){
         const {rows:[current]}=await db.query('SELECT status,approved_at,payload,integration_id FROM deliveries WHERE id=$1 FOR UPDATE',[delivery.id]);

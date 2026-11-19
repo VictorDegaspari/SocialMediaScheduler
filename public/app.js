@@ -60,7 +60,8 @@ function refresh(force=false){
 function updateSourceFields(){const type=document.querySelector('#source-type').value,local=type==='local',pack=type==='gta6_pack';document.querySelector('#drive-source').hidden=local||pack;document.querySelector('#local-source').hidden=!local;document.querySelector('#pack-source').hidden=!pack;document.querySelector('#folder-url').disabled=local||pack;document.querySelector('#folder-url').required=!local&&!pack;document.querySelector('#local-path').disabled=!local;document.querySelector('#local-path').required=local;if(pack&&!editingId)document.querySelector('#watch-form [name="importExisting"]').checked=true;}
 function render(){
   if(!state)return;
-  page=location.hash.slice(1)||'overview';if(!['overview','watches','connections','history','browser','requests','cuts','youtube-channels'].includes(page))page='overview';
+  const cutsView=location.hash==='#cuts/new'?'create':'projects';
+  page=cutsView==='create'?'cuts':location.hash.slice(1)||'overview';if(!['overview','watches','connections','history','browser','requests','cuts','youtube-channels'].includes(page))page='overview';
   document.querySelectorAll('[data-page]').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
   document.querySelector('#breadcrumb').textContent={overview:'Visão geral',watches:'Minhas pastas',connections:'Conexões',history:'Histórico',browser:'TikTok navegador',requests:'Pedidos e contas',cuts:'Gerador de cortes','youtube-channels':'Canais do YouTube'}[page];
   const viewProps={state,icon,date};
@@ -73,7 +74,7 @@ function render(){
     updateCutLibrary(state,viewProps);
     return;
   }
-  if(page==='cuts'&&main.querySelector('#cuts-panel')){updateCuts(main,state,viewProps);return;}
+  if(page==='cuts'&&main.querySelector('#cuts-panel')){updateCuts(main,state,viewProps,cutsView);return;}
   if(page==='requests'&&main.querySelector('#requests-panel')){updateRequests(state,{esc,badge,date});return;}
   if(page==='connections'&&main.querySelector('#connections-panel')){updateConnections(state,channels,{icon});return;}
   if(page==='youtube-channels'&&youtubeChannels)return;
@@ -95,7 +96,7 @@ function render(){
     updateCutLibrary(state,viewProps);
   }else if(page==='history')drawHistory();
   else if(page==='browser')drawWorkspace(main,'browser',{...viewProps,pagination:paginationView(state.browser?.pagination,'browser')});
-  else if(page==='cuts')updateCuts(main,state,viewProps);
+  else if(page==='cuts')updateCuts(main,state,viewProps,cutsView);
   else if(page==='connections'){
     main.innerHTML=renderConnections(state,channels,{icon});
     updateConnections(state,channels,{icon});

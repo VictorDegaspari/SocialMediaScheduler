@@ -1,9 +1,35 @@
 <script setup>
+import {useTemplateRef, watch} from 'vue';
 import ConnectionIcon from './ConnectionIcon.js';
 import CollectionPagination from './CollectionPagination.vue';
 import CutJobCard from './CutJobCard.vue';
 import CutsDependencies from './CutsDependencies.vue';
-defineProps(["jobs","dependencies","pagination","icon","date","safeLink","createDisabled"]);
+const props = defineProps(['jobs','dependencies','pagination','icon','date','safeLink','createDisabled','view']);
+const tabs = [
+  {id: 'projects', label: 'Projetos', href: '#cuts'},
+  {id: 'create', label: 'Criar novos cortes', href: '#cuts/new'},
+];
+const projects = useTemplateRef('projects');
+watch(() => props.view, view => {
+  if (view === 'create') projects.value?.querySelectorAll('video').forEach(video => video.pause());
+});
+
+function navigateTabs(event) {
+  const tab = event.currentTarget;
+  const links = [...tab.parentElement.querySelectorAll('[role="tab"]')];
+  let target;
+  switch (event.key) {
+    case 'ArrowLeft':
+    case 'ArrowRight': target = links.find(link => link !== tab); break;
+    case 'Home': target = links[0]; break;
+    case 'End': target = links.at(-1); break;
+    case ' ': target = tab; break;
+    default: return;
+  }
+  event.preventDefault();
+  target.focus({preventScroll: true});
+  target.click();
+}
 </script>
 
 <template>
@@ -12,14 +38,19 @@ defineProps(["jobs","dependencies","pagination","icon","date","safeLink","create
       <div>
         <span class="eyebrow">CORTES PARA VÍDEOS E SHORTS</span>
         <h1>Gerador de cortes</h1>
-        <p class="subtitle">Cole o link, receba os melhores trechos sugeridos e revise antes de postar.</p>
+        <p class="subtitle">Acompanhe a geração e revise os cortes antes de postar.</p>
       </div>
       <button class="button" data-cuts-action="refresh">
         <ConnectionIcon name="refresh" :icon="icon" />
         Atualizar
       </button>
     </div>
-    <div class="cuts-intro">
+    <div class="cuts-page-tabs" role="tablist" aria-label="Gerador de cortes">
+      <a v-for="tab in tabs" :id="'cuts-tab-' + tab.id" :key="tab.id" :href="tab.href" role="tab"
+        :aria-controls="'cuts-view-' + tab.id" :aria-selected="view === tab.id" :tabindex="view === tab.id ? 0 : -1"
+        @keydown="navigateTabs">{{ tab.label }}</a>
+    </div>
+    <div v-show="view === 'create'" id="cuts-view-create" class="cuts-intro" role="tabpanel" aria-labelledby="cuts-tab-create">
       <section class="panel cuts-create">
         <div class="connection-title">
           <div class="folder-icon">
@@ -65,7 +96,9 @@ defineProps(["jobs","dependencies","pagination","icon","date","safeLink","create
               <ConnectionIcon name="play" :icon="icon" />
               Gerar cortes
             </button>
+            <button class="button" type="submit" data-cut-source-range :disabled="createDisabled">Escolher trecho</button>
           </div>
+          <p class="tip">Em gravações longas, use Escolher trecho para baixar e analisar apenas o intervalo escolhido.</p>
         </form>
         <div id="cuts-dependencies">
           <CutsDependencies :dependencies="dependencies" />
@@ -93,25 +126,21 @@ defineProps(["jobs","dependencies","pagination","icon","date","safeLink","create
         <p class="tip">Os arquivos são mantidos após postar. Use “Baixar MP4” para reutilizar no TikTok ou YouTube e exclua manualmente quando terminar. O histórico é preservado.</p>
       </aside>
     </div>
-    <div class="section-head cuts-results-head">
-      <div>
-        <h2>Seus projetos</h2>
-        <p>Prévias, ajustes e andamento dos envios.</p>
+    <section v-show="view === 'projects'" id="cuts-view-projects" ref="projects" role="tabpanel" aria-labelledby="cuts-tab-projects">
+      <div id="cuts-jobs">
+        <template v-if="jobs.length">
+          <CutJobCard v-for="job in jobs" :key="job.id" :job="job" :icon="icon" :date="date" :safe-link="safeLink" />
+        </template>
+        <template v-else>
+          <div class="panel empty-state cuts-empty">
+            <h2>Nenhum projeto de cortes</h2>
+            <p>Cole um link do YouTube na aba Criar novos cortes para receber sugestões com legendas.</p>
+          </div>
+        </template>
       </div>
-    </div>
-    <div id="cuts-jobs">
-      <template v-if="jobs.length">
-        <CutJobCard v-for="job in jobs" :key="job.id" :job="job" :icon="icon" :date="date" :safe-link="safeLink" />
-      </template>
-      <template v-else>
-        <div class="panel empty-state cuts-empty">
-          <h3>Seu próximo Short começa com um link</h3>
-          <p>Cole um vídeo do YouTube para receber sugestões de cortes com legendas e uma prévia pronta para revisar.</p>
-        </div>
-      </template>
-    </div>
-    <div id="cuts-pagination">
-      <CollectionPagination :page="pagination" scope="cuts" />
-    </div>
+      <div id="cuts-pagination">
+        <CollectionPagination :page="pagination" scope="cuts" />
+      </div>
+    </section>
   </div>
 </template>
