@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createCanvas} from '@napi-rs/canvas';
 import {cutOverlaysSchema,validateOverlayTimes} from '../src/cuts-overlays.js';
-import {overlayVisible,overlayImageBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
+import {overlayVisible,overlayImageBox,overlayBlurSize,overlayRedactionBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
 
 test('overlay contracts reject unsafe styling, duplicate identity and invalid timing',()=>{
   const text={id:randomUUID(),type:'text',text:'Título com acentos e % literal'};
@@ -24,6 +24,23 @@ test('image positioning preserves aspect ratio and keeps tall images inside eith
     const box=overlayImageBox({x:1,y:1,width:.8},output,{width:100,height:1000});
     assert(box.x>=0&&box.y>=0&&box.x+box.width<=output.width&&box.y+box.height<=output.height);
     assert(Math.abs(box.width/box.height-.1)<.002);
+  }
+});
+test('redactions require valid dimensions and stay inside the frame on chroma-aligned boundaries',()=>{
+  const redaction={id:randomUUID(),type:'redaction',effect:'blur',x:1,y:1,width:.37,height:.12,start:1,end:2};
+  const [parsed]=cutOverlaysSchema.parse([redaction]);assert.equal(parsed.type,'redaction');
+  for(const fields of [{width:.01},{height:0},{height:1.1},{effect:'transparent'},{height:Infinity}]){
+    assert.throws(()=>cutOverlaysSchema.parse([{...redaction,...fields}]));
+  }
+  assert.throws(()=>validateOverlayTimes([parsed],1.8));
+  for(const output of [{width:1080,height:1920},{width:1920,height:1080}]){
+    const box=overlayRedactionBox(redaction,output);
+    assert.equal(box.x+box.width,output.width);
+    assert.equal(box.y+box.height,output.height);
+    assert(Object.values(box).every(value=>value%2===0));
+    const sample=overlayBlurSize(box);
+    assert.equal(Math.max(sample.width,sample.height),8);
+    assert(Math.min(sample.width,sample.height)>=2);
   }
 });
 test('text aligns inside its box and justifies only between words on wrapped lines',()=>{

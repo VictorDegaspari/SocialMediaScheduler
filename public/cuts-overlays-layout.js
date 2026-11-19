@@ -86,3 +86,21 @@ export function overlayImageBox(overlay,output,image){
   const width=Math.max(1,Math.round(image.width*scale)),height=Math.max(1,Math.round(image.height*scale));
   return {width,height,x:Math.round((output.width-width)*clamp(overlay.x)),y:Math.round((output.height-height)*clamp(overlay.y))};
 }
+
+const evenPixels=value=>Math.round(value/2)*2;
+
+export function overlayRedactionBox(overlay,output){
+  const width=Math.max(2,evenPixels(output.width*overlay.width));
+  const height=Math.max(2,evenPixels(output.height*overlay.height));
+  return {
+    width,height,
+    x:evenPixels((output.width-width)*clamp(overlay.x)),
+    y:evenPixels((output.height-height)*clamp(overlay.y))
+  };
+}
+
+// Averaging into a small image removes fine detail before the region is enlarged.
+export function overlayBlurSize({width,height}){
+  const scale=8/Math.max(width,height);
+  return {width:Math.max(2,evenPixels(width*scale)),height:Math.max(2,evenPixels(height*scale))};
+}

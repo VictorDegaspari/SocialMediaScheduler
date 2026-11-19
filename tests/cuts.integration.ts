@@ -97,7 +97,7 @@ test('publishing a cut to TikTok requires its browser token before creating medi
     assert.equal((await pool.query('SELECT id FROM deliveries')).rowCount,0);assert.equal((await currentClip()).status,'review');
   }finally{if(previous===undefined)delete process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN;else process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN=previous;}
 });
-test('text and image overlays persist, remain scoped to their job and survive new versions',async()=>{
+test('text, images and redactions persist, remain scoped to their job and survive new versions',async()=>{
   const jobId=await create();await service.tick();let clip=await currentClip();
   const png=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=lime:s=32x16','-frames:v','1','-threads','1','-c:v','png','-f','image2pipe','-']);
   const upload=await originalFetch(base+'/api/cuts/jobs/'+jobId+'/images',{method:'POST',headers:{'Content-Type':'image/png'},body:png});
@@ -105,7 +105,8 @@ test('text and image overlays persist, remain scoped to their job and survive ne
   const downloaded=await originalFetch(base+image.url);assert.equal(downloaded.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),png);
   const invalid=await originalFetch(base+'/api/cuts/jobs/'+jobId+'/images',{method:'POST',headers:{'Content-Type':'image/png'},body:Buffer.from('not an image')});assert.equal(invalid.status,400);
   const overlays=[{id:randomUUID(),type:'text',text:'Texto fixo',start:0,end:null,x:.4,y:.2,width:.8,fontSize:64,color:'#FFFFFF',background:'box'},
-    {id:randomUUID(),type:'image',imageId:image.id,start:.5,end:2,x:.6,y:.7,width:.25}];
+    {id:randomUUID(),type:'image',imageId:image.id,start:.5,end:2,x:.6,y:.7,width:.25},
+    {id:randomUUID(),type:'redaction',effect:'blur',start:2.5,end:3.5,x:.6,y:.4,width:.25,height:.15}];
   const saved=await call('/'+clip.id,{title:clip.title,start:5,end:13,overlays,revision:clip.revision},'PUT');assert.equal(saved.status,202,await saved.clone().text());
   await service.tick();clip=await currentClip();assert.deepEqual(clip.overlays,overlays);assert.deepEqual(renderInputs.at(-1).overlays,overlays);
   assert.deepEqual((await new CutsService(media).state()).jobs[0].clips[0].overlays,overlays,'a restarted service reads the persisted overlays');

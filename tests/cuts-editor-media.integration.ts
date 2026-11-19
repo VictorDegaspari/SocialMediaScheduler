@@ -81,6 +81,26 @@ test('export respects text alignment and multiplies watermark opacity by the ori
   assert(full>165&&full<225,'100% opacity keeps the alpha from the file');
   assert(sample(1)<20,'0% makes the watermark invisible');
 });
+
+test('redactions cover only the chosen rectangle and follow the edited timeline after an exclusion',async()=>{
+  const region={type:'redaction',x:0,y:.5,width:.35,height:.2};
+  const overlays=cutOverlaysSchema.parse([
+    {...region,id:randomUUID(),effect:'blur',start:2.4,end:2.9},
+    {...region,id:randomUUID(),effect:'bar',start:3,end:3.6}
+  ]);
+  const {path}=await render({start:0,end:6,captions:[{start:.2,end:1,text:'Teste'}],framing:'fit',
+    captionStyle:style({enabled:false}),excludedRanges:[{start:2,end:4}],overlays});
+  const sample=(time:number,x:number,y=640)=>frame(path,time,`crop=2:2:${x}:${y},scale=1:1`);
+  const original=sample(2.2,130),blurred=sample(2.6,130),outside=sample(2.6,310);
+  assert(original[0]>180&&original[1]>180&&original[2]<60,'the yellow side of the source edge is intact before the effect');
+  assert(blurred[2]>85&&blurred[1]<original[1]-40,'the blur blends the yellow and blue sides inside the rectangle');
+  assert(outside[2]>210&&outside[0]<40,'the neighboring blue video remains intact');
+  for(const x of [130,180])assert(sample(3.2,x).every(value=>value<18),'the bar covers the original pixels completely');
+  assert(sample(3.2,310)[2]>210&&sample(3.2,130,478)[1]>180,'the bar stays within its width and height');
+  assert(sample(3.8,130)[1]>180,'the image returns after the timed effects');
+  assert(Math.abs(frequency(path,2.4)-1320)<20,'only the picture is altered');
+});
+
 function yellowCenter(bytes:Buffer) {
   let count=0,total=0;
   for(let i=0;i<bytes.length;i+=3)if(yellow(bytes[i],bytes[i+1],bytes[i+2])){count++;total+=(i/3)%720;}

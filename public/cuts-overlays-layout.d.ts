@@ -8,3 +8,5 @@ export function overlayTextBox(overlay:Placement,output:Output,layout:TextLayout
 type PaintContext=Pick<CanvasRenderingContext2D,'font'|'textBaseline'|'textAlign'|'lineWidth'|'lineJoin'|'fillStyle'|'strokeStyle'|'fillRect'|'fillText'|'strokeText'>;
 export function drawOverlayText(ctx:PaintContext,overlay:{color:string;background:'none'|'box'},layout:TextLayout,x:number,y:number):void;
 export function overlayImageBox(overlay:Placement,output:Output,image:Output):Output&{x:number;y:number};
+export function overlayRedactionBox(overlay:Placement&{height:number},output:Output):Output&{x:number;y:number};
+export function overlayBlurSize(box:Output):Output;

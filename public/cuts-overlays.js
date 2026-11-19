@@ -1,7 +1,8 @@
 import {mountOverlayView} from './build/cuts-overlays-view.js';
-import {drawOverlayText,overlayVisible,overlayImageBox,overlayTextBox,overlayTextLayout} from './cuts-overlays-layout.js';
+import {drawOverlayText,overlayBlurSize,overlayVisible,overlayImageBox,overlayRedactionBox,overlayTextBox,overlayTextLayout} from './cuts-overlays-layout.js';
+import {roundSeconds} from './cuts-time.js';
 
-export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDuration,seek,onChange,onAdd,uploadImage}){
+export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDuration,getTime,seek,onChange,onAdd,uploadImage}){
   const root=form.querySelector('#cut-overlays');
   const layers=structuredClone(overlays),images=new Map();let selected=layers[0]?.id||null,pending=0,drag=null,preventClick=false;
   const view=mountOverlayView(root,layers,selected,getDuration());
@@ -20,15 +21,21 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
   }
   function refresh(){render();onChange();}
   function add(layer){
-    if(layers.length>=20)throw new Error('Use até 20 textos e imagens por vídeo.');
+    if(layers.length>=20)throw new Error('Use até 20 elementos por vídeo.');
     layers.push({id:crypto.randomUUID(),start:0,end:null,x:.5,y:.1,...layer});
     selected=layers.at(-1).id;
     feedback('');
     render();
     onAdd();
   }
+  function addRedaction(){
+    const duration=roundSeconds(Math.min(getDuration(),180)),time=getTime();
+    if(!Number.isFinite(time)||duration<=0)throw new Error('Escolha um trecho válido antes de adicionar a censura.');
+    const start=time>=duration-.001?roundSeconds(Math.max(0,duration-3)):Math.floor(time*1000+1e-7)/1000;
+    add({type:'redaction',effect:'bar',x:.5,y:.5,width:.4,height:.18,start,end:roundSeconds(Math.min(duration,start+3))});
+  }
   async function upload(file,watermark=false){
-    if(layers.length+pending>=20){feedback('Use até 20 textos e imagens por vídeo.');return;}
+    if(layers.length+pending>=20){feedback('Use até 20 elementos por vídeo.');return;}
     if(file.size>20*1024*1024){feedback('Escolha uma imagem de até 20 MB.');return;}
     pending++;feedback('Enviando imagem…');
     if(root.hidden)root.dispatchEvent(new CustomEvent('cut-editor-reveal',{bubbles:true}));
@@ -50,6 +57,7 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
       if(action==='add-text')add({type:'text',text:'Seu texto',fontSize:64,color:'#FFFFFF',background:'none',alignment:'left',width:.8});
       if(action==='add-image')root.querySelector('#cut-overlay-file').click();
       if(action==='add-watermark')root.querySelector('#cut-watermark-file').click();
+      if(action==='add-redaction')addRedaction();
       if(action==='select'){selected=button.dataset.id;refresh();}
       if(action==='remove'&&o){layers.splice(layers.indexOf(o),1);selected=layers.at(-1)?.id||null;refresh();}
       if(action==='front'&&o){layers.splice(layers.indexOf(o),1);layers.push(o);refresh();}
@@ -73,17 +81,40 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     const field=event.target.dataset.overlayField,o=current();if(!field||!o)return;
     if(field==='always'){
       o.start=0;o.end=event.target.checked?null:Math.min(3,getDuration());
-    }else if(['text','color','background','alignment'].includes(field))o[field]=event.target.value;
-    else o[field]=Number(event.target.value)/(['x','y','width','opacity'].includes(field)?100:1);
+    }else if(['text','color','background','alignment','effect'].includes(field))o[field]=event.target.value;
+    else o[field]=Number(event.target.value)/(['x','y','width','height','opacity'].includes(field)?100:1);
     render();onChange();
   },{signal});
   const boxes=new Map();
   const textLayouts=new WeakMap();
+  const blurRegion=document.createElement('canvas');
+  const blurContext=blurRegion.getContext('2d');
+  function paintRedaction(ctx,box,effect){
+    const {x,y,width,height}=box;
+    if(effect==='bar'){
+      ctx.fillStyle='#000';ctx.fillRect(x,y,width,height);
+      return;
+    }
+    const sample=overlayBlurSize(box);
+    if(blurRegion.width!==sample.width||blurRegion.height!==sample.height){
+      blurRegion.width=sample.width;blurRegion.height=sample.height;
+    }
+    blurContext.imageSmoothingQuality='high';
+    blurContext.drawImage(canvas,x,y,width,height,0,0,sample.width,sample.height);
+    ctx.save();
+    ctx.imageSmoothingQuality='low';
+    ctx.drawImage(blurRegion,x,y,width,height);
+    ctx.restore();
+  }
   function paint(ctx,time,duration){
     boxes.clear();const output={width:canvas.width,height:canvas.height};ctx.save();
     for(const o of layers){
       if(!Number.isFinite(time)||!overlayVisible(o,time,duration))continue;
-      if(o.type==='image'){
+      if(o.type==='redaction'){
+        const box=overlayRedactionBox(o,output);
+        paintRedaction(ctx,box,o.effect);
+        boxes.set(o.id,box);
+      }else if(o.type==='image'){
         const item=imageFor(o.imageId);if(!item.ready)continue;
         const box=overlayImageBox(o,output,{width:item.image.naturalWidth,height:item.image.naturalHeight});
         ctx.save();ctx.globalAlpha=o.opacity??1;
@@ -124,7 +155,7 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     if(pending)throw new Error('Aguarde o envio das imagens antes de salvar.');
     for(const o of layers){
       if(o.type==='text'&&!o.text.trim())throw new Error('Escreva um texto ou remova o elemento vazio.');
-      if(!Number.isFinite(o.start)||o.start<0||o.start>=duration||(o.end!==null&&(!Number.isFinite(o.end)||o.end<=o.start||o.end>duration+.001)))throw new Error('Ajuste os tempos dos textos e imagens à duração final do vídeo.');
+      if(!Number.isFinite(o.start)||o.start<0||o.start>=duration||(o.end!==null&&(!Number.isFinite(o.end)||o.end<=o.start||o.end>duration+.001)))throw new Error('Ajuste os tempos dos elementos à duração final do vídeo.');
     }
     return structuredClone(layers);
   }};

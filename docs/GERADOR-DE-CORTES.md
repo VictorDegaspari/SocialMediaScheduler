@@ -53,6 +53,8 @@ Em **Ajustar → Elementos**, use **Adicionar texto**, **Adicionar imagem** ou c
 
 Em **Adicionar marca-d’água**, selecione o arquivo da logo do canal. A logo começa no canto superior direito e aparece durante todo o corte. Em **Posição e tamanho**, ajuste a opacidade de 0% a 100%. A transparência do arquivo é preservada, inclusive quando o controle está em 100%.
 
+Use **Adicionar censura** para cobrir uma área da imagem com **Tarja preta** ou **Borrão**. Ajuste a largura e a altura e arraste o retângulo na prévia. Em **Duração**, informe quando aparece e some, em segundos do corte final. A área fica na posição definida durante o intervalo e o efeito é aplicado na exportação.
+
 Mantenha **Durante todo o vídeo** marcado para um elemento fixo. Desmarque para definir **Aparece em** e **Some em**, em segundos do vídeo final, já descontando os trechos removidos. **Ver na prévia** busca o começo do elemento; **Trazer para frente** muda a sobreposição. Salve e confira o MP4 gerado antes de postar. Os elementos permanecem editáveis ao reabrir e acompanham novas versões, preservando a versão anterior.
 
 ### Remover trechos internos

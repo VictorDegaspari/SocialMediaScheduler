@@ -9,7 +9,7 @@ import {chromium} from 'playwright-core';
 
 const dir=await mkdtemp(join(tmpdir(),'watcher-overlay-ui-')),root=resolve('public');
 const videoPath=join(dir,'source.mp4');
-execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:s=320x180:r=25:d=8','-f','lavfi','-i','sine=frequency=440:duration=8','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-threads','1','-shortest',videoPath]);
+execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:s=320x180:r=25:d=8,drawbox=x=154:y=76:w=12:h=28:color=white:t=fill','-f','lavfi','-i','sine=frequency=440:duration=8','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-threads','1','-shortest',videoPath]);
 const video=await readFile(videoPath),png=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=lime:s=80x40','-frames:v','1','-threads','1','-c:v','png','-f','image2pipe','-']);
 const clip={id:'22222222-2222-4222-8222-222222222222',title:'Teste de elementos',revision:1,start_seconds:1,end_seconds:7,captions:[{start:1,end:3,text:'Legenda antes'},{start:4,end:7,text:'Legenda depois'}],excluded_ranges:[{start:3,end:4}],caption_style:{enabled:false},framing:'fit',overlays:[]};
 const job={id:'11111111-1111-4111-8111-111111111111',duration:8,replay_data:{status:'unavailable',points:[]}};
@@ -152,7 +152,26 @@ try{
   assert(await logoGreen()>100&&await textInk()>100&&await green()>1000,'watermark, text and existing image appear together after jumping over an exclusion');
   assert.equal(await page.locator('#cut-phone-seek').inputValue(),'2');
 
+  await page.getByRole('button',{name:'Adicionar censura',exact:true}).click();
+  assert(await previewInView(),'adding a redaction shows the selected region on a narrow screen');
+  await revealEditorControl(page,'#cut-overlay-start');
+  const start=page.getByLabel('Aparece em (segundos)'),end=page.getByLabel('Some em (segundos)');
+  assert.equal(await start.inputValue(),'2','the default starts at the current position in the edited video');
+  assert.equal(await end.inputValue(),'5');
+  await start.fill('2.5');await end.fill('3.5');
+  const centerPixel=()=>canvas.evaluate(element=>[...element.getContext('2d').getImageData(element.width/2,element.height/2,1,1).data.slice(0,3)]);
+  await seek(2.3);assert((await centerPixel()).every(value=>value>230),'the source detail is visible before the interval');
+  await seek(2.5);assert((await centerPixel()).every(value=>value<15),'the opaque bar starts at the selected instant');
+  await revealEditorControl(page,'#cut-overlay-effect');
+  await range('#cut-overlay-height',24);
+  await page.getByLabel('Efeito de censura').selectOption('blur');
+  const blurred=await centerPixel();
+  assert(blurred[0]>180&&blurred[1]<200,'blur blends the narrow white stripe into the red around it');
+  await seek(3.5);assert((await centerPixel()).every(value=>value>230),'the effect is off at the interval end');
+  const redaction=await page.evaluate(()=>window.editor.read().overlays.at(-1));
+  assert.deepEqual(redaction,{id:redaction.id,type:'redaction',effect:'blur',width:.4,height:.24,x:.5,y:.5,start:2.5,end:3.5});
+
   const count=uploads;await page.evaluate(()=>{window.editor.destroy();document.querySelector('#cuts-dialog').close();});await page.keyboard.press('Control+V');assert.equal(uploads,count,'closed editors do not capture clipboard images');
-  assert.deepEqual(errors,[]);console.log('Textos e imagens: opacidade, duração, arraste, reabertura e elementos visíveis na prévia móvel nos limites do corte.');
+  assert.deepEqual(errors,[]);console.log('Elementos: imagem, texto, marca-d’água e censura temporizada validados na prévia.');
 }catch(error){console.error({uploads,errors,status:await page.locator('#cut-overlay-status').textContent()});throw error;}
 finally{releaseUpload?.();await browser.close();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}

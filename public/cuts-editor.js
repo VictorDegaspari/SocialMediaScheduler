@@ -2,14 +2,13 @@ import {clearWorkspace,drawWorkspace} from './build/workspace-view.js';
 import {bindEditorTabs} from './cuts-editor-tabs.js';
 import {createOverlayEditor} from './cuts-overlays.js';
 import {createSplitEditor,paintSplitPreview} from './cuts-split.js';
-import {formatSourceTimecode,formatTimecode,parseTimecode} from './cuts-time.js';
+import {formatSourceTimecode,formatTimecode,parseTimecode,roundSeconds} from './cuts-time.js';
 import {previewTimeToSource,sourceTimeToPreview} from './cuts-playback.js';
 import {projectCaptionRows,mergeCaptionRows} from './cuts-captions.js';
 import {replayTimeAt,selectionFromReplay} from './cuts-replay.js';
 const defaults={fontSize:42,color:'#FFFFFF',highlightColor:'#FFE600',outlineColor:'#101010',background:'none',position:'bottom',animation:'none'};
 export const cutFormats=[['shorts','Shorts · vertical (9:16)'],['video','Vídeo · horizontal (16:9)']];
 const layoutDefaults={format:'shorts',mode:'fit',focusX:.5,focusY:.5,zoom:1};
-const seconds=value=>Number(Number(value).toFixed(3));
 const clock=value=>formatTimecode(value,{precision:2});
 
 
@@ -49,7 +48,7 @@ export function createCutEditor({clip,job,api}){
   const originalFields=new Set([get('start'),get('end'),form.querySelector('#cut-remove-start'),form.querySelector('#cut-remove-end')]);
   function readFieldTime(field){
     const value=parseTimecode(field.value);
-    return sourceRange&&originalFields.has(field)?seconds(value-sourceRange.start):value;
+    return sourceRange&&originalFields.has(field)?roundSeconds(value-sourceRange.start):value;
   }
   const readTime=name=>readFieldTime(get(name));
   const playerTime=()=>video.readyState>=1&&Number.isFinite(video.currentTime)?video.currentTime:state.seek||0;
@@ -64,7 +63,7 @@ export function createCutEditor({clip,job,api}){
   const splitEditor=createSplitEditor({form,video,layout:framing.split,onChange:refreshPlan,signal,isFrameReady:()=>!state.framePending&&!video.seeking&&video.readyState>=2});
   const readLayout=()=>({format:get('format').value,mode:get('framingMode').value,focusX:Number(get('focusX').value)/100,focusY:Number(get('focusY').value)/100,zoom:Number(get('zoom').value),
     ...(get('framingMode').value==='split'||splitEditor.used?{split:splitEditor.read()}:{})});
-  const overlayEditor=createOverlayEditor({form,canvas,overlays:clip.overlays||[],jobId:job.id,signal,getDuration:()=>state.duration,onChange:paint,onAdd:previewAddedOverlay,seek:time=>{
+  const overlayEditor=createOverlayEditor({form,canvas,overlays:clip.overlays||[],jobId:job.id,signal,getDuration:()=>state.duration,getTime:()=>sourceTimeToPreview(state.parts,playerTime()).time,onChange:paint,onAdd:previewAddedOverlay,seek:time=>{
     seekPreview(time);
     revealOverlayPreview();
   }});
@@ -186,7 +185,7 @@ export function createCutEditor({clip,job,api}){
   function drawFit(sourceWidth,sourceHeight){const scale=Math.min(canvas.width/sourceWidth,canvas.height/sourceHeight);ctx.drawImage(video,(canvas.width-sourceWidth*scale)/2,(canvas.height-sourceHeight*scale)/2,sourceWidth*scale,sourceHeight*scale);}
   function updatePhoneControls(time){
     const position=sourceTimeToPreview(state.parts,time),valid=Number.isFinite(position.time),range=form.querySelector('#cut-phone-seek'),play=form.querySelector('#cut-phone-play');
-    range.max=String(seconds(state.duration));range.value=valid?String(seconds(position.time)):'0';range.disabled=!state.parts.length;
+    range.max=String(roundSeconds(state.duration));range.value=valid?String(roundSeconds(position.time)):'0';range.disabled=!state.parts.length;
     range.setAttribute('aria-valuetext',`${valid?formatTimecode(position.time):'00:00'} de ${formatTimecode(state.duration)}`);
     form.querySelector('#cut-source-time').textContent=sourceTime(time);
     form.querySelector('#cut-preview-time').textContent=valid&&position.included?`${clock(position.time)} / ${clock(state.duration)}`:'Fora do corte atual';
@@ -227,7 +226,7 @@ export function createCutEditor({clip,job,api}){
         if(layout.mode==='blur'){const scale=Math.max(outWidth/width,outHeight/height)*Math.max(1,layout.zoom),visibleWidth=outWidth/scale,visibleHeight=outHeight/scale;ctx.filter='blur(20px)';ctx.drawImage(video,(width-visibleWidth)*layout.focusX,(height-visibleHeight)*layout.focusY,visibleWidth,visibleHeight,0,0,outWidth,outHeight);ctx.filter='none';}
         drawFit(width,height);
       }
-      canvas.dataset.sourceTime=String(seconds(time));
+      canvas.dataset.sourceTime=String(roundSeconds(time));
     }
     // At the end marker, keep the overlays from just inside the final frame's interval.
     const overlayTime=position.included?Math.min(position.time,state.duration-.000001):NaN;
@@ -365,7 +364,7 @@ export function createCutEditor({clip,job,api}){
   form.addEventListener('click',async event=>{
     const button=event.target.closest('[data-cut-editor-action]');
     if(!button)return;
-    event.preventDefault();const action=button.dataset.cutEditorAction,time=seconds(playerTime());
+    event.preventDefault();const action=button.dataset.cutEditorAction,time=roundSeconds(playerTime());
     try{
       if(action==='play-preview')await togglePreview();
       else if(action==='retry-transcript')await loadTranscript();
@@ -374,7 +373,7 @@ export function createCutEditor({clip,job,api}){
       else if(action==='set-start'||action==='set-end'){setTimeField(get(action==='set-start'?'start':'end'),time);refreshPlan();}
       else if(action==='step-time'){
         const field=get(button.dataset.field),current=readFieldTime(field);if(!Number.isFinite(current))throw new Error(timeHint);
-        const next=Math.max(0,Math.min(Number(job.duration)||7200,seconds(current+Number(button.dataset.step))));setTimeField(field,next);refreshPlan();seekSource(next);
+        const next=Math.max(0,Math.min(Number(job.duration)||7200,roundSeconds(current+Number(button.dataset.step))));setTimeField(field,next);refreshPlan();seekSource(next);
       }
       else if(action==='mark-remove-start'||action==='mark-remove-end')setTimeField(form.querySelector(action==='mark-remove-start'?'#cut-remove-start':'#cut-remove-end'),time);
       else if(action==='add-removal'){

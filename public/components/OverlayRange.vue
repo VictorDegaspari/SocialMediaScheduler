@@ -1,6 +1,6 @@
 <script setup lang="ts">
 defineProps<{
-  field: 'fontSize' | 'width' | 'x' | 'y' | 'opacity';
+  field: 'fontSize' | 'width' | 'height' | 'x' | 'y' | 'opacity';
   label: string;
   min: number;
   max: number;

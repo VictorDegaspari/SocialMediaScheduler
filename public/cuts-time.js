@@ -1,3 +1,6 @@
+/** @param {number} value */
+export const roundSeconds=value=>Number(value.toFixed(3));
+
 /**
  * Show a position as minutes:seconds, preserving millisecond precision when
  * present. Round first so a value near a minute never displays as 00:60.

@@ -12,6 +12,7 @@ const props = defineProps<{
 const current = computed(() => props.layers.find(layer => layer.id === props.selected));
 function name(layer: CutOverlay) {
   if (layer.type === 'text') return layer.text.trim().slice(0, 55) || 'Texto sem conteúdo';
+  if (layer.type === 'redaction') return layer.effect === 'bar' ? 'Tarja preta' : 'Borrão';
   return layer.watermark ? 'Marca-d’água' : 'Imagem';
 }
 const tabs = computed(() => [
@@ -31,24 +32,25 @@ function tabChanged(event: Event) {
 
 <template>
   <div class="cuts-tool-heading">
-    <div><h3 id="cut-overlays-heading">3. Textos e imagens</h3><p>Adicione títulos, logos ou imagens sobre o vídeo.</p></div>
+    <div><h3 id="cut-overlays-heading">3. Elementos</h3><p>Adicione textos, imagens e áreas de censura ao corte.</p></div>
   </div>
   <div class="cuts-overlay-add">
     <button class="button small" type="button" data-cut-overlay-action="add-text">Adicionar texto</button>
     <button class="button small" type="button" data-cut-overlay-action="add-image">Adicionar imagem</button>
     <button class="button small" type="button" data-cut-overlay-action="add-watermark">Adicionar marca-d’água</button>
+    <button class="button small" type="button" data-cut-overlay-action="add-redaction">Adicionar censura</button>
     <input id="cut-overlay-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
     <input id="cut-watermark-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
   </div>
   <p class="tip">Para colar uma imagem copiada, use Ctrl+V com o editor aberto. PNG, JPEG ou WebP, até 20 MB.</p>
   <p id="cut-overlay-status" class="cuts-overlay-status" role="status">{{ message }}</p>
-  <div id="cut-overlay-list" class="cuts-overlay-list" aria-label="Textos e imagens do vídeo">
+  <div id="cut-overlay-list" class="cuts-overlay-list" aria-label="Elementos do vídeo">
     <button v-for="(layer, index) in layers" :key="layer.id" class="cuts-overlay-item" type="button" data-cut-overlay-action="select" :data-id="layer.id" :aria-pressed="layer.id === selected">
-      <span class="cuts-overlay-kind">{{ layer.type === 'text' ? 'T' : '▧' }}</span>
+      <span class="cuts-overlay-kind" aria-hidden="true">{{ layer.type === 'text' ? 'T' : layer.type === 'redaction' ? '▰' : '▧' }}</span>
       <span>{{ name(layer) }}<small>{{ layer.end === null ? 'Durante todo o vídeo' : `${layer.start} s → ${layer.end} s` }}</small></span>
       <span class="cuts-overlay-order">{{ index + 1 }}</span>
     </button>
-    <p v-if="!layers.length" class="cuts-overlay-empty">Nenhum texto ou imagem adicionado.</p>
+    <p v-if="!layers.length" class="cuts-overlay-empty">Nenhum elemento adicionado.</p>
   </div>
   <div id="cut-overlay-controls">
     <div v-if="current" :key="current.id" class="cuts-overlay-settings" @cut-editor-tab-change="tabChanged">
@@ -81,7 +83,15 @@ function tabChanged(event: Event) {
         <OverlayRange field="fontSize" label="Tamanho do texto" :min="24" :max="160" :value="current.fontSize" />
       </div>
       <div id="cut-overlay-position" role="tabpanel" aria-labelledby="cut-overlay-position-tab" tabindex="0" data-editor-panel="overlay" :hidden="active !== 'cut-overlay-position'">
-      <OverlayRange field="width" :label="current.type === 'image' ? 'Tamanho da imagem' : 'Largura do texto'" :min="5" :max="100" :value="Math.round(current.width * 100)" />
+      <div v-if="current.type === 'redaction'" class="form-field">
+        <label for="cut-overlay-effect">Efeito de censura</label>
+        <select id="cut-overlay-effect" data-overlay-field="effect" :value="current.effect">
+          <option value="bar">Tarja preta</option>
+          <option value="blur">Borrão</option>
+        </select>
+      </div>
+      <OverlayRange field="width" :label="current.type === 'redaction' ? 'Largura da área' : current.type === 'image' ? 'Tamanho da imagem' : 'Largura do texto'" :min="current.type === 'redaction' ? 2 : 5" :max="100" :value="Math.round(current.width * 100)" />
+      <OverlayRange v-if="current.type === 'redaction'" field="height" label="Altura da área" :min="2" :max="100" :value="Math.round(current.height * 100)" />
       <OverlayRange v-if="current.type === 'image'" field="opacity" label="Opacidade" :min="0" :max="100" :value="Math.round((current.opacity ?? 1) * 100)" />
       <div class="field-row">
         <OverlayRange field="x" label="Posição horizontal" :min="0" :max="100" :value="Math.round(current.x * 100)" />

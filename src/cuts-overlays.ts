@@ -6,17 +6,18 @@ import {join} from 'node:path';
 import {createCanvas} from '@napi-rs/canvas';
 import {z} from 'zod';
 import {AppError} from './config.js';
-import {drawOverlayText,overlayImageBox,overlayTextBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
+import {drawOverlayText,overlayBlurSize,overlayImageBox,overlayRedactionBox,overlayTextBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
 
 const placement={id:z.string().uuid(),start:z.number().finite().min(0).max(180).default(0),end:z.number().finite().positive().max(180).nullable().default(null),x:z.number().finite().min(0).max(1).default(.5),y:z.number().finite().min(0).max(1).default(.1),width:z.number().finite().min(.05).max(1).default(.8)};
 export const cutOverlaySchema=z.discriminatedUnion('type',[
   z.object({...placement,type:z.literal('text'),text:z.string().trim().min(1).max(1000).refine(t=>!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(t),'O texto contém caracteres inválidos.'),fontSize:z.number().finite().min(24).max(160).default(64),color:z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#FFFFFF'),background:z.enum(['none','box']).default('none'),alignment:z.enum(['left','center','right','justify']).optional()}),
-  z.object({...placement,type:z.literal('image'),imageId:z.string().uuid(),opacity:z.number().finite().min(0).max(1).optional(),watermark:z.boolean().optional()})
+  z.object({...placement,type:z.literal('image'),imageId:z.string().uuid(),opacity:z.number().finite().min(0).max(1).optional(),watermark:z.boolean().optional()}),
+  z.object({...placement,type:z.literal('redaction'),effect:z.enum(['bar','blur']),width:z.number().finite().min(.02).max(1),height:z.number().finite().min(.02).max(1)})
 ]);
 export const cutOverlaysSchema=z.array(cutOverlaySchema).max(20).refine(items=>new Set(items.map(i=>i.id)).size===items.length,'Cada elemento precisa ter um identificador diferente.');
 export type CutOverlay=z.infer<typeof cutOverlaySchema>;
 export function validateOverlayTimes(overlays:CutOverlay[],duration:number){
-  if(overlays.some(o=>o.start>=duration||(o.end!==null&&(o.end<=o.start||o.end>duration+.001))))throw new AppError('Ajuste os tempos dos textos e imagens à duração final do vídeo.');
+  if(overlays.some(o=>o.start>=duration||(o.end!==null&&(o.end<=o.start||o.end>duration+.001))))throw new AppError('Ajuste os tempos dos elementos à duração final do vídeo.');
 }
 const imageMeta=z.object({width:z.number().int().positive(),height:z.number().int().positive(),mime:z.enum(['image/png','image/jpeg','image/webp'])});
 const execute=promisify(execFile);
@@ -51,7 +52,20 @@ export async function cutOverlayFilters(dir:string,clipId:string,overlays:CutOve
   let base='overlaybase',imageIndex=inputCount;
   try{
     for(const [index,o] of overlays.entries()){
-      const next='overlay'+index,enable=`gte(t,${o.start})*lt(t,${o.end??duration})`;
+      const next='overlay'+index,enable=`enable='gte(t,${o.start})*lt(t,${o.end??duration})'`;
+      if(o.type==='redaction'){
+        const {x,y,width,height}=overlayRedactionBox(o,output);
+        if(o.effect==='bar'){
+          graph.push(`[${base}]drawbox=x=${x}:y=${y}:w=${width}:h=${height}:color=black:t=fill:${enable}[${next}]`);
+        }else{
+          const {width:sampleWidth,height:sampleHeight}=overlayBlurSize({width,height});
+          graph.push(`[${base}]split[redactionbase${index}][redactionregion${index}]`);
+          graph.push(`[redactionregion${index}]crop=${width}:${height}:${x}:${y},scale=${sampleWidth}:${sampleHeight}:flags=area,scale=${width}:${height}:flags=bilinear[redactionblur${index}]`);
+          graph.push(`[redactionbase${index}][redactionblur${index}]overlay=x=${x}:y=${y}:${enable}[${next}]`);
+        }
+        base=next;
+        continue;
+      }
       let position:{x:number;y:number},input:string,transform:string;
       if(o.type==='image'){
         const image=await overlayImage(dir,o.imageId),box=overlayImageBox(o,output,image);
@@ -72,7 +86,7 @@ export async function cutOverlayFilters(dir:string,clipId:string,overlays:CutOve
       }
       args.push('-threads','1','-i',input);
       graph.push(`[${imageIndex++}:v:0]${transform}[overlayimage${index}]`);
-      graph.push(`[${base}][overlayimage${index}]overlay=x=${position.x}:y=${position.y}:eof_action=repeat:enable='${enable}'[${next}]`);
+      graph.push(`[${base}][overlayimage${index}]overlay=x=${position.x}:y=${position.y}:eof_action=repeat:${enable}[${next}]`);
       base=next;
     }
     return {args,graph,label:base,temporary};
