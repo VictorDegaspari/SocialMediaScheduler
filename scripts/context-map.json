@@ -2,6 +2,7 @@
   "cuts": {
     "code": [
       "public/components/CutsPage.vue",
+      "public/components/CutImportButton.vue",
       "public/components/CutJobCard.vue",
       "public/components/CutClipCard.vue",
       "public/components/CutClipActions.vue",
@@ -12,6 +13,7 @@
       "public/components/CutSourcePreparation.vue",
       "public/components/DiscardConfirmation.vue",
       "src/cuts.ts",
+      "src/cut-projects.ts",
       "src/cuts-media.ts",
       "src/cuts-source-limits.ts",
       "src/cuts-source-range.ts",

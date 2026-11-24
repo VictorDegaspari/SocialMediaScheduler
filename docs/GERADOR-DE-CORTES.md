@@ -1,6 +1,8 @@
-# Gerador de cortes do YouTube
+# Gerador de cortes
 
 **Projetos** abre com a lista de cortes e prévias. Use **Criar novos cortes** para colar um link e voltar à lista quando o projeto entrar na fila.
+
+Para editar um MP4 pronto, clique em **Importar corte pronto** no Gerador de cortes ou em **Minhas pastas → Cortes do aplicativo**. O editor abre o vídeo inteiro, com as legendas automáticas desativadas. Em **Elementos**, você pode adicionar a marca-d’água. Use **Salvar e gerar prévia** para revisar o resultado. O aplicativo guarda o MP4 original e reconhece o mesmo arquivo em uma nova importação.
 
 A aba **Gerador de cortes** recebe um link do YouTube, baixa uma cópia leve com vídeo de até 480p quando disponível e usa o áudio para preparar a transcrição. Revise a prévia e clique em **Gerar MP4 final** quando decidir qual corte quer aproveitar. O gerador baixa na melhor qualidade disponível de vídeo e áudio apenas os trechos que ficaram na montagem e apaga esses arquivos temporários ao terminar. O MP4 final preserva os ajustes da prévia e a taxa de quadros da origem. Uma fonte 4K gera 2160 × 3840 para Shorts ou 3840 × 2160 para vídeo horizontal.
 
@@ -61,7 +63,7 @@ Mantenha **Durante todo o vídeo** marcado para um elemento fixo. Desmarque para
 
 ### Remover trechos internos
 
-Marque início/fim no player ou informe os tempos do vídeo original para excluir uma parte. A lista aceita até 20 remoções sem sobreposição e permite desfazer cada uma. A duração mostrada corresponde à soma das partes mantidas: o resultado deve ter de 0,5 a 180 segundos. O intervalo na origem pode ser maior quando as remoções deixam o resultado dentro desse limite.
+Marque início/fim no player ou informe os tempos do vídeo original para excluir uma parte. A lista aceita até 20 remoções sem sobreposição e permite desfazer cada uma. A duração mostrada soma as partes mantidas. As sugestões aceitam de 0,5 a 180 segundos. Se um corte pronto já tiver mais de 3 minutos, o editor permite manter sua duração original, inclusive ao adicionar uma marca-d’água com **Durante todo o vídeo**.
 
 Os campos de tempo usam **minutos:segundos**, como `09:11`. Para ajuste fino, informe `09:11,720` (a vírgula ou o ponto são aceitos). Pause o player e use **Marcar início aqui / Marcar fim aqui**, ou ajuste pelos botões **−1 s / +1 s**. Os campos das legendas e das remoções usam o mesmo formato, preservando os milissegundos.
 
@@ -97,7 +99,7 @@ Instale também FFmpeg com libass, FFprobe e a fonte DejaVu Sans. `CUTS_WHISPER_
 - Vídeo integral com até 2 horas. **Escolher trecho** em **Criar novos cortes** ou **Canais do YouTube** permite baixar até 30 minutos da origem, mesmo em gravações longas. Também é possível escolher um trecho ao retomar um projeto que falhou antes de baixar a fonte. A transcrição, a análise e a recuperação usam o trecho escolhido. Em **Canais do YouTube**, **Buscar momentos mais revistos** sugere intervalos quando há mapa de replay.
 - O espaço livre no volume de mídia é verificado durante o download e a renderização, com uma reserva para o serviço. Na exportação, o download escolhe o melhor vídeo e o melhor áudio disponíveis. O MP4 temporário mantém os fluxos de origem até a renderização.
 - A exportação prioriza qualidade: H.264 com CRF 16 e preset `slow`, redimensionamento Lanczos e áudio AAC de 320 kb/s. A taxa de quadros segue a origem, inclusive 60 fps e taxas fracionárias como 59,94; 30 fps só é usado quando a origem não informa uma taxa válida. Renderizar pode demorar mais e gerar arquivos maiores. O envio usa os mesmos bytes do MP4 revisado.
-- Trecho final com no máximo 3 minutos. **Manter imagem inteira** adiciona barras para preservar o conteúdo; **Preencher vertical** recorta as laterais no centro.
+- **Manter imagem inteira** adiciona barras para preservar o conteúdo. **Preencher vertical** recorta as laterais no centro.
 - Os campos das legendas usam o tempo da montagem. Os limites do corte e das remoções mostram os tempos do vídeo ou da live original. A API mantém as legendas no relógio do arquivo baixado, e o editor converte os tempos sem perder o alinhamento das palavras. Na junção, o fim de uma legenda pertence ao trecho anterior e o início ao seguinte.
 - Subprocessos têm tempo máximo e são executados com argumentos separados, sem shell. Controles ASS recebidos no texto são tratados como caracteres visíveis, impedindo comandos de estilo injetados.
 - A origem e os cortes ficam disponíveis até a exclusão manual, inclusive após postar. Use **Baixar MP4** para reutilizar o corte em outras plataformas e **Excluir arquivo** para removê-lo depois. Arquivos de render temporários são removidos após sucesso ou falha; um ajuste que falhe preserva o último preview completo.

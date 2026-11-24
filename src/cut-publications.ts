@@ -26,7 +26,7 @@ export async function cutDestinations(){
 }
 
 /** The caller holds the cuts job lock until the delivery and upload copy commit. */
-export async function publishCut(db:PoolClient,job:{id:string;title:string|null;url:string},clip:any,source:string|null,input:z.infer<typeof cutPublishSchema>){
+export async function publishCut(db:PoolClient,job:{id:string;title:string|null;url:string|null},clip:any,source:string|null,input:z.infer<typeof cutPublishSchema>){
   if(!clip)throw new AppError('Corte não encontrado.',404);
   if(clip.revision!==input.revision)throw new AppError('A prévia mudou. Confira a versão atual antes de postar.',409);
   const channel=(await cutDestinations()).find(channel=>channel.id===input.channelId&&!channel.disabled);
@@ -48,7 +48,7 @@ export async function publishCut(db:PoolClient,job:{id:string;title:string|null;
   if(youtubeTagLength(metadata.youtube.tags)>500)throw new AppError('Reduza as tags do YouTube para até 500 caracteres.');
   if(tiktok){try{tiktokCaption(metadata);}catch{throw new AppError('A legenda do TikTok excede 2.200 caracteres.');}}
   await db.query(`INSERT INTO watches(id,name,folder_id,folder_url,source_type,enabled,initialized,managed_by_cuts,next_scan_at,next_upload_at)
-    VALUES($1,$2,$3,$4,'local',true,true,true,'9999-12-31','9999-12-31') ON CONFLICT(id) DO NOTHING`,[job.id,'Cortes · '+(job.title||'YouTube').slice(0,80),'cuts:'+job.id,job.url]);
+    VALUES($1,$2,$3,$4,'local',true,true,true,'9999-12-31','9999-12-31') ON CONFLICT(id) DO NOTHING`,[job.id,'Cortes · '+(job.title||'YouTube').slice(0,80),'cuts:'+job.id,job.url??('/api/cuts/jobs/'+job.id+'/source')]);
   await db.query(`INSERT INTO videos(id,watch_id,file_id,name,parent_id,status,sha256,metadata,size)
     VALUES($1::uuid,$2::uuid,$1::text,$3,$2::text,'sent',$4,$5,$6) ON CONFLICT(id) DO NOTHING`,[clip.id,job.id,input.title+'.mp4',hash,JSON.stringify(metadata),(await stat(source)).size]);
   const {rows:[video]}=await db.query('SELECT sha256 FROM videos WHERE id=$1',[clip.id]);

@@ -27,6 +27,26 @@ function pixels(bytes:Buffer,match:(r:number,g:number,b:number)=>boolean) {
 }
 const white=(r:number,g:number,b:number)=>r>120&&g>120&&b>120;
 const yellow=(r:number,g:number,b:number)=>r>150&&g>150&&b<100;
+test('a marca-d’água permanece no primeiro e no último segundo de um vídeo pronto de 4min32s',async()=>{
+  const full=await mkdtemp(join(dir,'full-'));
+  const original=join(full,'source.mp4'),duration=272;
+  execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=black:s=90x160:r=2','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t',String(duration),'-threads','1','-c:v','libx264','-c:a','aac',original]);
+  const png=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=lime:s=32x32','-frames:v','1','-c:v','png','-threads','1','-f','image2pipe','-']);
+  const image=await saveOverlayImage(full,png);
+  const overlays=cutOverlaysSchema.parse([{type:'image',id:randomUUID(),imageId:image.id,watermark:true}]);
+  const {path}=await renderCut(full,randomUUID(),{start:0,end:duration,maxOutputSeconds:duration,captions:[],captionStyle:style({enabled:false}),framing:'fit',overlays},{preview:true});
+  assert.equal((await validateVideo(path,'shorts',duration+.5)).duration,duration);
+  for(const at of [1,271])assert(pixels(frame(path,at,'scale=90:160'),(r,g,b)=>g>160&&r<60&&b<60)>100);
+});
+
+test('um corte importado sem áudio aceita edição e continua sem faixa sonora',async()=>{
+  const silent=await mkdtemp(join(dir,'silent-'));
+  execFileSync('ffmpeg',['-v','error','-i',source,'-t','2','-map','0:v:0','-c:v','copy',join(silent,'source.mp4')]);
+  const {path}=await renderCut(silent,randomUUID(),{...basic,captions:[],captionStyle:style({enabled:false}),excludedRanges:[{start:.5,end:1}]},{preview:true});
+  const info=JSON.parse(execFileSync('ffprobe',['-v','error','-of','json','-show_entries','stream=codec_type:format=duration',path],{encoding:'utf8'}));
+  assert.deepEqual(info.streams.map((s:{codec_type:string})=>s.codec_type),['video']);assert.ok(Math.abs(Number(info.format.duration)-1.5)<.05);
+});
+
 test('text and transparent images are encoded together and timed on the final edited timeline',async()=>{
   const bytes=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=lime:s=80x40,format=rgba,colorchannelmixer=aa=0.8','-frames:v','1','-threads','1','-c:v','png','-f','image2pipe','-']);
   const image=await saveOverlayImage(dir,bytes),sourceHash=await sha256(source);

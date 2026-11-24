@@ -30,6 +30,10 @@ async function freeDiskBytes(dir:string){
   return bavail*bsize;
 }
 
+export async function availableCutBytes(dir:string){
+  return Math.max(0,await freeDiskBytes(dir)-DISK_RESERVE_BYTES);
+}
+
 // Run without a shell; terminate the process group, including FFmpeg children,
 // when downloads, transcription or renders exceed their resource budget.
 async function command(binary:string,args:string[],options:{cwd?:string;timeout:number;maxOutput?:number;diskError?:string}) {
@@ -112,7 +116,7 @@ export async function downloadCutSource(url:string,dir:string,requestedRange?:Cu
     if(!range){
       const selected:{filesize?:number}[]=metadata.requested_formats??[metadata];
       const knownBytes=selected.reduce((sum,stream)=>sum+(Number.isSafeInteger(stream.filesize)&&stream.filesize!>0?stream.filesize!:0),0);
-      if(knownBytes>await freeDiskBytes(dir)-DISK_RESERVE_BYTES)throw new AppError(downloadDiskError);
+      if(knownBytes>await availableCutBytes(dir))throw new AppError(downloadDiskError);
     }
     // An MP4 edit list hides the keyframe preroll without re-encoding the source streams.
     const sectionArgs=range?['--download-sections',`*${range.start}-${range.end}`,
@@ -321,15 +325,14 @@ function sourceFrameRate(stream:{avg_frame_rate?:string;r_frame_rate?:string}) {
 
 export type RenderCutInput={
   start:number;end:number;captions:Cue[];framing:'fit'|'crop'|'blur';
-  captionStyle?:CaptionStyle;framingOptions?:FramingOptions;excludedRanges?:TimeRange[];overlays?:CutOverlay[];
+  captionStyle?:CaptionStyle;framingOptions?:FramingOptions;excludedRanges?:TimeRange[];overlays?:CutOverlay[];maxOutputSeconds?:number;
 };
 export type RenderCutOptions={preview:true}|{sourceParts:{path:string;seek:number}[]};
 export async function renderCut(dir:string,clipId:string,input:RenderCutInput,options?:RenderCutOptions):Promise<{path:string;warnings:string[]}> {
   if(!/^[a-fA-F0-9-]{16,80}$/.test(clipId))throw new AppError('Identificador de corte inválido.');
   const {start,end,captions}=input;
-  if(!['fit','crop','blur'].includes(input.framing)||!Array.isArray(captions)||captions.length>50000)throw new AppError('Escolha um trecho válido de até 3 minutos.');
-  if(end-start>180&&!input.excludedRanges?.length)throw new AppError('Escolha um trecho válido de até 3 minutos.');
-  const parts=cutTimeline(start,end,input.excludedRanges),duration=parts.at(-1)!.outputEnd;
+  if(!['fit','crop','blur'].includes(input.framing)||!Array.isArray(captions)||captions.length>50000)throw new AppError('Confira o enquadramento e as legendas do corte.');
+  const parts=cutTimeline(start,end,input.excludedRanges,input.maxOutputSeconds),duration=parts.at(-1)!.outputEnd;
   const style=captionStyleSchema.parse(input.captionStyle||{});
   const framing=framingOptionsSchema.parse(input.framingOptions||{mode:input.framing});
   let previous=-1;
@@ -338,7 +341,7 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput,op
     previous=cue.start;
   }
   const relative=timelineCaptions(captions,parts);
-  if(!relative.length)throw new AppError('O trecho precisa conter fala e legendas. Ajuste o início ou o fim.');
+  if(style.enabled&&!relative.length)throw new AppError('O trecho precisa conter fala e legendas. Ajuste o início ou o fim.');
   const preview=!!options&&'preview' in options;
   const sourceParts=options&&'sourceParts' in options?options.sourceParts:undefined;
   if(sourceParts&&sourceParts.length!==parts.length)throw new AppError('Faltam trechos da fonte para gerar o MP4 final.');
@@ -350,7 +353,8 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput,op
     const sourceVideo=probe.streams?.find((s:{codec_type:string})=>s.codec_type==='video');
     const rotation=Math.abs(Number(sourceVideo?.side_data_list?.find((d:{rotation?:number})=>d.rotation!==undefined)?.rotation||sourceVideo?.tags?.rotate||0))%180;
     const width=rotation===90?sourceVideo?.height:sourceVideo?.width,height=rotation===90?sourceVideo?.width:sourceVideo?.height;
-    if(!width||!height||!probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio')||(!sourceParts&&end>Number(probe.format?.duration)+0.05))throw new AppError('O intervalo escolhido ultrapassa o vídeo ou a origem não contém imagem e áudio.');
+    const hasAudio=probe.streams?.some((s:{codec_type:string})=>s.codec_type==='audio');
+    if(!width||!height||(!sourceParts&&end>Number(probe.format?.duration)+0.05))throw new AppError('Confira a imagem e a duração do vídeo de origem.');
     // Full HD is the export floor; higher-resolution sources retain their shorter edge.
     // Multiples of 9 and 16 keep the canvas exact and both dimensions even.
     const unit=preview?Math.max(2,Math.floor(Math.min(width,height,480)/18)*2):Math.max(120,Math.ceil(Math.min(width,height)/18)*2);
@@ -375,17 +379,17 @@ export async function renderCut(dir:string,clipId:string,input:RenderCutInput,op
       // Framesync filters reset EOF timing. Finalize after composition so a
       // fractional frame rate keeps the last frame and the exact part duration.
       graph.push(`[v${i}]trim=end_frame=${frames},settb=AVTB,setpts=N*${length/frames}/TB[timedv${i}]`);
-      graph.push(`[${i}:a:0]atrim=duration=${length},asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad=pad_dur=0.1,atrim=end_sample=${Math.round(length*48000)},asetpts=N/SR/TB[a${i}]`);
-      labels.push(`[timedv${i}][a${i}]`);
+      if(hasAudio)graph.push(`[${i}:a:0]atrim=duration=${length},asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad=pad_dur=0.1,atrim=end_sample=${Math.round(length*48000)},asetpts=N/SR/TB[a${i}]`);
+      labels.push(`[timedv${i}]`+(hasAudio?`[a${i}]`:''));
     }
-    graph.push(`${labels.join('')}concat=n=${parts.length}:v=1:a=1[editedv][editeda]`);
+    graph.push(`${labels.join('')}concat=n=${parts.length}:v=1:a=${hasAudio?1:0}[editedv]${hasAudio?'[editeda]':''}`);
     graph.push(`[editedv]fps=${rate}[overlaybase]`);
     const layers=await cutOverlayFilters(dir,clipId,cutOverlaysSchema.parse(input.overlays||[]),output,duration,parts.length);
     overlayFiles=layers.temporary;args.push(...layers.args);graph.push(...layers.graph);
     graph.push(`[${layers.label}]${style.enabled?`ass=${assName}`:'null'}[outv]`);
-    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]','-map','[editeda]','-t',String(duration),'-c:v','libx264','-preset',preview?'veryfast':'slow','-crf',preview?'24':'16','-pix_fmt','yuv420p','-r',rate,'-threads',String(renderThreads),'-c:a','aac','-b:a',preview?'128k':'320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
+    args.push('-filter_complex_threads','1','-filter_complex',graph.join(';'),'-map','[outv]',...(hasAudio?['-map','[editeda]']:[]),'-t',String(duration),'-c:v','libx264','-preset',preview?'veryfast':'slow','-crf',preview?'24':'16','-pix_fmt','yuv420p','-r',rate,'-threads',String(renderThreads),'-c:a','aac','-b:a',preview?'128k':'320k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partialName);
     await command('ffmpeg',args,{cwd:dir,timeout:60*60_000,diskError:renderDiskError});
-    const actual=await validateVideo(join(dir,partialName),framing.format);
+    const actual=await validateVideo(join(dir,partialName),framing.format,duration+0.5);
     if(Math.abs(actual.duration-duration)>0.5)throw new AppError('A duração renderizada não corresponde aos trechos mantidos. Confira os tempos do corte.');
     await rename(join(dir,partialName),path);
     return {path,warnings};

@@ -70,6 +70,12 @@ await page.route('**/api/**',async route=>{
     if(range){const start=Number(range[1]),end=range[2]?Math.min(Number(range[2]),media.length-1):media.length-1;return route.fulfill({status:206,body:media.subarray(start,end+1),headers:{'Content-Type':'video/mp4','Accept-Ranges':'bytes','Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':String(end-start+1)}});}
     return route.fulfill({body:media,contentType:'video/mp4',headers:{'Accept-Ranges':'bytes'}});
   }
+  if(path==='/api/cuts/import'){
+    assert.equal(request.method(),'POST');assert.equal(request.headers()['x-watcher-request'],'1');
+    assert.equal(url.searchParams.get('title'),'Corte pronto 😄');
+    assert.deepEqual(request.postDataBuffer(),media);
+    return route.fulfill({json:{id:jobId,clipId,reused:true}});
+  }
   if(path==='/api/cuts/jobs/'+jobId+'/source-status'){
     if(recoveryMode==='fail')return route.fulfill({json:{ready:false,status:'failed',error:'Falha de recuperação simulada.'}});
     const ready=recoveryMode==='ready';if(ready)job.hasSource=true;
@@ -109,6 +115,12 @@ await page.route('**/api/**',async route=>{
 try{
   await page.goto(base+'/#cuts');
   await page.getByRole('heading',{name:'Gerador de cortes',exact:true}).waitFor();
+  const picker=page.waitForEvent('filechooser');
+  await page.getByRole('button',{name:'Importar corte pronto',exact:true}).click();
+  await (await picker).setFiles({name:'Corte pronto 😄.mp4',mimeType:'video/mp4',buffer:media});
+  await page.getByRole('heading',{name:'Editar corte',exact:true}).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('#cuts-dialog').waitFor({state:'hidden'});
   Object.assign(clip,{finalReady:false,export_status:null});
   await page.getByRole('button',{name:'Atualizar',exact:true}).click();
   const exportButton=page.getByRole('button',{name:'Gerar MP4 final',exact:true});

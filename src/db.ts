@@ -70,7 +70,7 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS deliveries_status ON deliveries(status);
     CREATE INDEX IF NOT EXISTS events_date ON events(created_at DESC);
     CREATE TABLE IF NOT EXISTS cut_jobs (
-      id uuid PRIMARY KEY,url text NOT NULL,status text NOT NULL DEFAULT 'queued',
+      id uuid PRIMARY KEY,url text,status text NOT NULL DEFAULT 'queued',
       title text,duration double precision,language text NOT NULL DEFAULT 'pt',
       clip_count int NOT NULL CHECK(clip_count BETWEEN 1 AND 5),
       target_seconds int NOT NULL CHECK(target_seconds BETWEEN 20 AND 180),
@@ -94,6 +94,8 @@ export async function initDb() {
       created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
       CONSTRAINT cuts_source_bounds CHECK(start_seconds>=0 AND end_seconds>start_seconds AND end_seconds<=7200.001)
     );
+    ALTER TABLE cut_jobs ALTER COLUMN url DROP NOT NULL;
+    ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS upload_sha256 text;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS replay_data jsonb;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS source_range jsonb;
     ALTER TABLE cut_jobs ADD COLUMN IF NOT EXISTS source_quality text NOT NULL DEFAULT 'original';
@@ -109,13 +111,19 @@ export async function initDb() {
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS export_status text;
     ALTER TABLE cuts ADD COLUMN IF NOT EXISTS export_error text;
     ALTER TABLE cuts DROP CONSTRAINT IF EXISTS cuts_check;
+    ALTER TABLE cuts ADD COLUMN IF NOT EXISTS max_output_seconds double precision NOT NULL DEFAULT 180
+      CHECK(max_output_seconds BETWEEN 180 AND 7200.001);
+    ALTER TABLE cuts DROP CONSTRAINT IF EXISTS cuts_output_duration;
+    -- Retain the editing range of full-length MP4s already in the library.
+    UPDATE cuts SET max_output_seconds=coalesce(output_duration,end_seconds-start_seconds)
+      WHERE coalesce(output_duration,end_seconds-start_seconds)>max_output_seconds+0.001;
     UPDATE cuts SET output_duration=end_seconds-start_seconds WHERE output_duration IS NULL;
     DO $$ BEGIN
       IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='cuts'::regclass AND conname='cuts_source_bounds') THEN
         ALTER TABLE cuts ADD CONSTRAINT cuts_source_bounds CHECK(start_seconds>=0 AND end_seconds>start_seconds AND end_seconds<=7200.001);
       END IF;
-      IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='cuts'::regclass AND conname='cuts_output_duration') THEN
-        ALTER TABLE cuts ADD CONSTRAINT cuts_output_duration CHECK(output_duration IS NULL OR output_duration>0 AND output_duration<=180.001);
+      IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='cuts'::regclass AND conname='cuts_output_within_limit') THEN
+        ALTER TABLE cuts ADD CONSTRAINT cuts_output_within_limit CHECK(output_duration IS NULL OR output_duration>0 AND output_duration<=max_output_seconds+0.001);
       END IF;
     END $$;
     CREATE INDEX IF NOT EXISTS cut_jobs_queue ON cut_jobs(status,created_at);

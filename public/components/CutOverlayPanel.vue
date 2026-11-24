@@ -104,11 +104,11 @@ function tabChanged(event: Event) {
       <div class="field-row cuts-overlay-times">
         <div class="form-field">
           <label for="cut-overlay-start">Aparece em (segundos)</label>
-          <input id="cut-overlay-start" data-overlay-field="start" type="number" min="0" max="180" step="0.001" :value="current.start" :disabled="current.end === null">
+          <input id="cut-overlay-start" data-overlay-field="start" type="number" min="0" :max="duration" step="0.001" :value="current.start" :disabled="current.end === null">
         </div>
         <div class="form-field">
           <label for="cut-overlay-end">Some em (segundos)</label>
-          <input id="cut-overlay-end" data-overlay-field="end" type="number" min="0" max="180" step="0.001" :value="current.end ?? Math.min(3, duration)" :disabled="current.end === null">
+          <input id="cut-overlay-end" data-overlay-field="end" type="number" min="0" :max="duration" step="0.001" :value="current.end ?? Math.min(3, duration)" :disabled="current.end === null">
         </div>
       </div>
       <p class="tip">Os segundos contam a partir do início do vídeo final, descontando os trechos removidos.</p>

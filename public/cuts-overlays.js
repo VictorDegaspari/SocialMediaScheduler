@@ -29,7 +29,7 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
     onAdd();
   }
   function addRedaction(){
-    const duration=roundSeconds(Math.min(getDuration(),180)),time=getTime();
+    const duration=roundSeconds(getDuration()),time=getTime();
     if(!Number.isFinite(time)||duration<=0)throw new Error('Escolha um trecho válido antes de adicionar a censura.');
     const start=time>=duration-.001?roundSeconds(Math.max(0,duration-3)):Math.floor(time*1000+1e-7)/1000;
     add({type:'redaction',effect:'bar',x:.5,y:.5,width:.4,height:.18,start,end:roundSeconds(Math.min(duration,start+3))});
@@ -151,7 +151,7 @@ export function createOverlayEditor({form,canvas,overlays=[],jobId,signal,getDur
   canvas.addEventListener('click',event=>{if(preventClick){preventClick=false;event.preventDefault();event.stopImmediatePropagation();}},{capture:true,signal});
   for(const o of layers)if(o.type==='image')imageFor(o.imageId);
   render();
-  return {paint,read(duration){
+  return {paint,render,read(duration){
     if(pending)throw new Error('Aguarde o envio das imagens antes de salvar.');
     for(const o of layers){
       if(o.type==='text'&&!o.text.trim())throw new Error('Escreva um texto ou remova o elemento vazio.');

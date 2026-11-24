@@ -35,8 +35,28 @@ export function updateCuts(root,state,h,view='projects'){
   const pending=root.querySelector('#cuts-create-form [type="submit"]')?.dataset.busy;
   drawWorkspace(root,'cuts',{
     jobs:stableJobs(root,visibleJobs()),dependencies:current.dependencies,pagination:paginationView(current.pagination,'cuts'),
-    icon:h.icon,date:h.date,safeLink,view,createDisabled:Boolean(pending)||!current.dependencies?.ready,
+    icon:h.icon,date:h.date,safeLink,importFile,view,createDisabled:Boolean(pending)||!current.dependencies?.ready,
   });
+}
+
+async function importFile(file){
+  const title=file.name.replace(/\.mp4$/i,'').trim().slice(0,100)||'Corte importado';
+  const view=location.hash;
+  const response=await fetch('/api/cuts/import?'+new URLSearchParams({title}),{
+    method:'POST',headers:{'Content-Type':'video/mp4','X-Watcher-Request':'1'},body:file,
+  });
+  const result=await response.json();
+  if(!response.ok)throw new Error(result.error||'Não foi possível importar o MP4.');
+  resetPagination('cuts');resetPagination('cutFolders');
+  const targetView=view==='#cuts/new'?'#cuts':view;
+  if(location.hash===view&&targetView!==view)location.hash=targetView;
+  const updated=await services.refresh(true);
+  if(!updated||location.hash!==targetView||editing){
+    services.toast('O corte está disponível no Gerador de cortes.');return;
+  }
+  const {clip}=findClip(result.clipId);
+  if(['review','failed','posted','publishing'].includes(clip.status))await openEditor(clip.id);
+  else services.toast('O corte está em processamento. Acompanhe a prévia no projeto.');
 }
 
 function findClip(id){for(const job of current.jobs||[]){const clip=(job.clips||[]).find(c=>c.id===id);if(clip)return {job,clip};}throw new Error('Este corte não está mais disponível. Atualize o painel.');}
@@ -118,7 +138,7 @@ export function updateCutLibrary(state,h){
   if(!root)return;
   const scope=state.cutFolders?'cutFolders':'cuts';
   drawWorkspace(root,'cutLibrary',{
-    groups:stableJobs(root,libraryJobs()),pagination:paginationView(current.pagination,scope),scope,icon:h.icon,safeLink,
+    groups:stableJobs(root,libraryJobs()),pagination:paginationView(current.pagination,scope),scope,icon:h.icon,safeLink,importFile,
   });
 }
 
@@ -144,7 +164,7 @@ function openCutSourceRange({video,initialRange,save}){
 }
 
 export function bindCuts({api,refresh,toast}){
-  services={api,toast};
+  services={api,toast,refresh};
   async function createProject(form,input){
     await api('/cuts',input);
     form.reset();

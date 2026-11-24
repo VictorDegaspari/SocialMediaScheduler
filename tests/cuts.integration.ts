@@ -78,6 +78,65 @@ beforeEach(async()=>{
 });
 after(async()=>{globalThis.fetch=originalFetch;await service.stop();await new Promise<void>(r=>server.close(()=>r()));await redis.quit();await pool.end();await rm(temp,{recursive:true,force:true});});
 
+test('importar MP4 abre um corte editável e duas importações simultâneas reutilizam a mesma fonte',async()=>{
+  const bytes=await readFile(horizontalFixture),title='Corte pronto 😄';
+  const upload=(body:Buffer)=>originalFetch(base+'/api/cuts/import?'+new URLSearchParams({title}),{method:'POST',headers:{'Content-Type':'video/mp4'},body});
+  assert.equal((await upload(Buffer.from('arquivo inválido'))).status,400);
+  const replies=await Promise.all([upload(bytes),upload(bytes)]);
+  assert.deepEqual(replies.map(r=>r.status).sort(),[200,201]);
+  const [first,second]=await Promise.all(replies.map(r=>r.json()));
+  assert.equal(first.clipId,second.clipId);assert.equal(first.id,second.id);
+  assert.equal((await pool.query('SELECT id FROM cut_jobs')).rowCount,1);
+  const clip=await currentClip();
+  assert.equal(clip.title,title);assert.equal(clip.framing_options.format,'video');assert.equal(clip.caption_style.enabled,false);
+  assert.equal(clip.start_seconds,0);assert.equal(clip.hasMedia,true);assert.deepEqual(clip.publications,[]);
+  assert.deepEqual(await readFile(join(cutDirectory(first.id),'source.mp4')),bytes);
+  assert.deepEqual(Buffer.from(await (await call('/'+clip.id+'/media?final=1')).arrayBuffer()),bytes);
+  const edited=await call('/'+clip.id,{title:'Ajustado',start:0,end:clip.end_seconds,revision:1,captions:[]},'PUT');
+  assert.equal(edited.status,202);await service.tick();
+  assert.equal((await currentClip()).revision,2);assert.equal(downloads,0);
+  assert.deepEqual(await readFile(join(cutDirectory(first.id),'source.mp4')),bytes);
+  await rm(join(cutDirectory(first.id),'source.mp4'));
+  assert.equal((await call('/jobs/'+first.id+'/prepare-source',{})).status,409);
+  assert.equal((await upload(bytes)).status,200);assert.deepEqual(await readFile(join(cutDirectory(first.id),'source.mp4')),bytes);
+  assert.equal((await call('/jobs/'+first.id+'/analyze',{})).status,409);
+  assert.equal((await pool.query('SELECT id FROM deliveries')).rowCount,0);
+});
+
+test('recuperação remove só importações interrompidas, preservando transferências ativas',async()=>{
+  const id=randomUUID(),db=await pool.connect(),key='drive-watcher:cuts:'+id;
+  try{
+    await db.query('SELECT pg_advisory_lock(hashtextextended($1,0))',[key]);
+    await db.query("INSERT INTO cut_jobs(id,url,status,clip_count,target_seconds) VALUES($1,NULL,'importing',1,60)",[id]);
+    await mkdir(cutDirectory(id),{recursive:true});await copyFile(fixture,join(cutDirectory(id),'source.mp4'));
+    await service.tick();await stat(join(cutDirectory(id),'source.mp4'));assert.equal((await state()).jobs.length,0);
+  }finally{await db.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]);db.release();}
+  await service.tick();assert.equal((await pool.query('SELECT id FROM cut_jobs WHERE id=$1',[id])).rowCount,0);
+  await assert.rejects(stat(cutDirectory(id)),{code:'ENOENT'});
+});
+
+test('um MP4 pronto mantém sua duração ao salvar e reabrir uma marca-d’água sem legendas',async()=>{
+  const jobId=await create();await service.tick();
+  const clip=await currentClip(),duration=272.162;
+  await pool.query("UPDATE cut_jobs SET duration=$2,transcript='[]' WHERE id=$1",[jobId,duration]);
+  await pool.query("UPDATE cuts SET start_seconds=0,end_seconds=$2,output_duration=NULL,captions='[]',caption_style=$3 WHERE id=$1",[clip.id,duration,{enabled:false}]);
+  await pool.query('ALTER TABLE cuts ADD CONSTRAINT cuts_output_duration CHECK(output_duration<=180.001)');
+  await initDb();
+  const bytes=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=red:s=8x8','-frames:v','1','-threads','1','-f','image2pipe','-c:v','png','-']);
+  const image=await originalFetch(base+'/api/cuts/jobs/'+jobId+'/images',{method:'POST',headers:{'Content-Type':'image/png'},body:bytes});
+  assert.equal(image.status,201);
+  const watermark={type:'image',id:randomUUID(),imageId:(await image.json()).id,start:0,end:null,x:.9,y:.1,width:.2,watermark:true};
+  const edit={title:clip.title,start:0,end:duration,overlays:[watermark],captions:[]};
+  for(const end of [duration,120,duration]){
+    const saved=await call('/'+clip.id,{...edit,end},'PUT');assert.equal(saved.status,202,await saved.clone().text());
+    await service.tick();
+    const current=await currentClip();
+    assert.equal(current.output_duration,end);assert.equal(current.max_output_seconds,duration);
+    assert.deepEqual(current.overlays,[watermark]);assert.equal(current.status,'review');assert.deepEqual(current.publications,[]);
+    assert.equal(renderInputs.at(-1).maxOutputSeconds,duration);
+  }
+});
+
 test('exports only retained live sections in original quality and publishes the reviewed final bytes',async()=>{
   const sourceRange={start:8400,end:8460};
   const response=await call('',{url:'https://youtu.be/abcdefghijk',sourceRange});

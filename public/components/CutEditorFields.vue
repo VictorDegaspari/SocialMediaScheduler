@@ -71,7 +71,7 @@ const panelAttributes = (group, id, active = false) => ({id, role: 'tabpanel', '
           </div>
           <strong id="cut-final-duration" class="cuts-duration-pill"></strong>
         </div>
-        <CutEditorTabs group="timing" label="Ajustes do trecho" :items="[['cut-timing-limits','Início e fim'],['cut-timing-removals','Remover trechos'],['cut-timing-replay','Replay']]" :primary="false" />
+        <CutEditorTabs group="timing" label="Ajustes do trecho" :items="[['cut-timing-limits','Início e fim'],['cut-timing-removals','Remover trechos'],...(job.imported ? [] : [['cut-timing-replay','Replay']])]" :primary="false" />
         <video id="cut-source-player" controls playsinline preload="metadata" aria-label="Vídeo original para selecionar os trechos" :src="'/api/cuts/jobs/' + (encodeURIComponent(job.id)) + '/source'"></video>
         <div class="cuts-source-readout">
           No vídeo original:

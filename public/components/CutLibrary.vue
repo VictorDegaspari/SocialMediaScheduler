@@ -1,7 +1,8 @@
 <script setup>
 import CollectionPagination from './CollectionPagination.vue';
+import CutImportButton from './CutImportButton.vue';
 import CutClipCard from './CutClipCard.vue';
-defineProps(["groups","pagination","scope","icon","safeLink"]);
+defineProps(["groups","pagination","scope","icon","safeLink","importFile"]);
 </script>
 
 <template>
@@ -11,6 +12,7 @@ defineProps(["groups","pagination","scope","icon","safeLink"]);
         <h2>Cortes do aplicativo</h2>
         <p>Assista, ajuste ou escolha onde publicar.</p>
       </div>
+      <CutImportButton :import-file="importFile" />
     </div>
     <div id="cut-library-jobs">
       <template v-if="groups.length">

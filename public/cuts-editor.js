@@ -12,7 +12,7 @@ const layoutDefaults={format:'shorts',mode:'fit',focusX:.5,focusY:.5,zoom:1};
 const clock=value=>formatTimecode(value,{precision:2});
 
 
-function retainedParts(start,end,gaps){
+function retainedParts(start,end,gaps,maxOutputSeconds){
   if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Escolha um início e um fim válidos no vídeo original.');
   const parts=[];let cursor=start,output=0;
   for(const gap of [...gaps].sort((a,b)=>a.start-b.start)){
@@ -21,13 +21,14 @@ function retainedParts(start,end,gaps){
     cursor=gap.end;
   }
   if(cursor<end){parts.push({start:cursor,end,outputStart:output});output+=end-cursor;}
-  if(output<.5||output>180.001)throw new Error('A duração final deve ser entre 0,5 e 180 segundos. Remova mais trechos ou ajuste os limites.');
+  if(output<.5||output>maxOutputSeconds+.001)throw new Error(`A duração final deve ser entre 0,5 e ${maxOutputSeconds} segundos. Ajuste os limites do corte.`);
   return {parts,duration:output};
 }
 
 /** Media and caption edits use the file clock. A live range offsets only the original clock shown to users. */
 export function createCutEditor({clip,job,api}){
   const form=document.querySelector('#cuts-dialog-form'),controller=new AbortController(),signal=controller.signal;
+  const maxOutputSeconds=clip.max_output_seconds??180;
   const style={...defaults,...clip.caption_style},framing={...layoutDefaults,mode:clip.framing||'fit',...clip.framing_options};
   const state={gaps:structuredClone(clip.excluded_ranges||[]),original:null,originalLoading:false,originalError:null,parts:[],duration:0,frame:0,alive:true,seek:Number(clip.start_seconds),dragging:false,replayPointer:null,cueCache:structuredClone(clip.captions||[]),captionBase:structuredClone(clip.captions||[]),captionRows:[],captionParts:[],captionPlan:null,captionError:null,edgesApplied:false,nextCue:0,captionsDirty:false,previewPlaying:false,framePending:true,seekVersion:0,videoFrame:null};
   clearWorkspace(form);
@@ -153,14 +154,15 @@ export function createCutEditor({clip,job,api}){
     if(!Number.isFinite(selected))return;
     const start=readTime('start'),end=readTime('end'),duration=Number(job.duration)||7200;
     const requested=length?Math.min(duration,selected+length):end;
-    const next=selectionFromReplay(length?selected:start,requested,selected,duration,state.gaps);
+    const next=selectionFromReplay(length?selected:start,requested,selected,duration,state.gaps,maxOutputSeconds);
     video.pause();state.previewPlaying=false;
     setTimeField(get('start'),next.start);setTimeField(get('end'),next.end);state.gaps=next.excludedRanges;
     renderGaps();seekSource(next.start);updateReplayMarker();
   }
   function refreshPlan(){
+    const previousDuration=state.duration;
     try{
-      const result=retainedParts(readTime('start'),readTime('end'),state.gaps),plan=JSON.stringify(result.parts);
+      const result=retainedParts(readTime('start'),readTime('end'),state.gaps,maxOutputSeconds),plan=JSON.stringify(result.parts);
       if(readTime('end')>(Number(job.duration)||7200))throw new Error('O fim do corte deve estar dentro do vídeo original.');
       const committed=cacheCues();
       if(!committed&&plan!==state.captionPlan&&!get('originalCaptions').checked)throw state.captionError;
@@ -169,7 +171,8 @@ export function createCutEditor({clip,job,api}){
       if(plan!==state.captionPlan||edges)renderCaptionRows(result.parts);
       form.querySelector('#cut-final-duration').textContent=`${clock(result.duration)} de vídeo`;
       message.textContent=state.captionError?.message||projectCaptionRows(currentCues(),state.parts).conflicts[0]?.message||'';
-    }catch(error){state.parts=[];form.querySelector('#cut-final-duration').textContent='Revise os tempos';message.textContent=error.message;}
+    }catch(error){state.parts=[];state.duration=0;form.querySelector('#cut-final-duration').textContent='Revise os tempos';message.textContent=error.message;}
+    if(previousDuration!==state.duration)overlayEditor.render();
     form.querySelector('#cut-crop-controls').hidden=get('framingMode').value!=='crop';
     splitEditor.refresh(get('framingMode').value==='split');
     form.querySelector('#cut-karaoke-note').hidden=get('animation').value!=='karaoke';
@@ -292,7 +295,7 @@ export function createCutEditor({clip,job,api}){
     revealOverlayPreview();
   }
   async function togglePreview(){
-    retainedParts(readTime('start'),readTime('end'),state.gaps);
+    retainedParts(readTime('start'),readTime('end'),state.gaps,maxOutputSeconds);
     if(!video.paused){video.pause();return;}
     const position=sourceTimeToPreview(state.parts,playerTime());state.previewPlaying=true;
     if(!position.included||position.time>=state.duration)seekPreview(0);
@@ -379,7 +382,7 @@ export function createCutEditor({clip,job,api}){
       else if(action==='add-removal'){
         if(state.gaps.length>=20)throw new Error('Remova no máximo 20 trechos por vídeo.');
         const gap={start:readFieldTime(form.querySelector('#cut-remove-start')),end:readFieldTime(form.querySelector('#cut-remove-end'))},gaps=[...state.gaps,gap].sort((a,b)=>a.start-b.start);
-        retainedParts(readTime('start'),readTime('end'),gaps);state.gaps=gaps;renderGaps();
+        retainedParts(readTime('start'),readTime('end'),gaps,maxOutputSeconds);state.gaps=gaps;renderGaps();
       }else if(action==='restore-range'){state.gaps.splice(Number(button.dataset.index),1);renderGaps();}
       else if(action==='reset-focus'){get('focusX').value=50;get('focusY').value=50;get('zoom').value=1;refreshPlan();}
       else if(action==='preset'){
@@ -405,7 +408,7 @@ export function createCutEditor({clip,job,api}){
     selectReplayStart,
     read(){
       if(get('framingMode').value==='split')splitEditor.commit();
-      const start=readTime('start'),end=readTime('end'),parts=retainedParts(start,end,state.gaps).parts;
+      const start=readTime('start'),end=readTime('end'),parts=retainedParts(start,end,state.gaps,maxOutputSeconds).parts;
       if(end>(Number(job.duration)||7200))throw new Error('O fim do corte deve estar dentro do vídeo original.');
       const extendsWindow=start<Number(clip.start_seconds)||end>Number(clip.end_seconds);
       if(extendsWindow){
@@ -423,7 +426,7 @@ export function createCutEditor({clip,job,api}){
           const words=cue.words?.filter(w=>w.start>=start&&w.end<=end);
           if(!cue.words?.length)throw new Error('Um limite corta uma legenda corrigida. Ajuste os tempos e o texto dessa linha ou escolha a transcrição original.');
           return words?.length?[{start:words[0].start,end:words.at(-1).end,text:words.map(w=>w.text).join(' '),words}]:[];
-        });if(!body.captions.length)throw new Error('Adicione uma linha de legenda ou use a transcrição original.');for(const cue of body.captions)if(cue.end<=cue.start||cue.start<start||cue.end>end||!cue.text)throw new Error('Cada legenda precisa ter texto e tempos válidos dentro do intervalo do corte.');}
+        });if(body.captionStyle.enabled&&!body.captions.length)throw new Error('Adicione uma linha de legenda ou use a transcrição original.');for(const cue of body.captions)if(cue.end<=cue.start||cue.start<start||cue.end>end||!cue.text)throw new Error('Cada legenda precisa ter texto e tempos válidos dentro do intervalo do corte.');}
       return body;
     },
     destroy(){state.alive=false;video.pause();cancelAnimationFrame(state.frame);if(state.videoFrame!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(state.videoFrame);observer.disconnect();splitEditor.destroy();controller.abort();clearWorkspace(cues);clearWorkspace(removals);clearWorkspace(replay);}

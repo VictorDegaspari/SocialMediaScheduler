@@ -41,7 +41,7 @@ export type TimeRange=z.infer<typeof timeRangeSchema>;
 export type TimelinePart=TimeRange&{outputStart:number;outputEnd:number};
 
 /** Original timestamps remain the edit format; only the renderer maps to output. */
-export function cutTimeline(start:number,end:number,excludedRanges:TimeRange[]=[]):TimelinePart[] {
+export function cutTimeline(start:number,end:number,excludedRanges:TimeRange[]=[],maxOutputSeconds=180):TimelinePart[] {
   if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>7200||excludedRanges.length>20)
     throw new AppError('Escolha um intervalo válido e no máximo 20 trechos para remover.');
   const gaps=excludedRanges.map(r=>timeRangeSchema.parse(r)).sort((a,b)=>a.start-b.start);
@@ -58,7 +58,7 @@ export function cutTimeline(start:number,end:number,excludedRanges:TimeRange[]=[
   }
   if(cursor<end)parts.push({start:cursor,end,outputStart:output,outputEnd:output+end-cursor});
   const duration=parts.at(-1)?.outputEnd||0;
-  if(duration<0.5||duration>180.001)throw new AppError('O vídeo final precisa ter entre 0,5 e 180 segundos depois das remoções.');
+  if(duration<0.5||duration>maxOutputSeconds+.001)throw new AppError(`Escolha um trecho com duração final entre 0,5 e ${maxOutputSeconds} segundos.`);
   return parts;
 }
 

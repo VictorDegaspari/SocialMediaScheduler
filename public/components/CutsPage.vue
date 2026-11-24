@@ -2,9 +2,10 @@
 import {useTemplateRef, watch} from 'vue';
 import ConnectionIcon from './ConnectionIcon.js';
 import CollectionPagination from './CollectionPagination.vue';
+import CutImportButton from './CutImportButton.vue';
 import CutJobCard from './CutJobCard.vue';
 import CutsDependencies from './CutsDependencies.vue';
-const props = defineProps(['jobs','dependencies','pagination','icon','date','safeLink','createDisabled','view']);
+const props = defineProps(['jobs','dependencies','pagination','icon','date','safeLink','createDisabled','view','importFile']);
 const tabs = [
   {id: 'projects', label: 'Projetos', href: '#cuts'},
   {id: 'create', label: 'Criar novos cortes', href: '#cuts/new'},
@@ -40,10 +41,13 @@ function navigateTabs(event) {
         <h1>Gerador de cortes</h1>
         <p class="subtitle">Acompanhe a geração e revise os cortes antes de postar.</p>
       </div>
-      <button class="button" data-cuts-action="refresh">
-        <ConnectionIcon name="refresh" :icon="icon" />
-        Atualizar
-      </button>
+      <div class="form-actions">
+        <CutImportButton :import-file="importFile" />
+        <button class="button" data-cuts-action="refresh">
+          <ConnectionIcon name="refresh" :icon="icon" />
+          Atualizar
+        </button>
+      </div>
     </div>
     <div class="cuts-page-tabs" role="tablist" aria-label="Gerador de cortes">
       <a v-for="tab in tabs" :id="'cuts-tab-' + tab.id" :key="tab.id" :href="tab.href" role="tab"
@@ -134,7 +138,7 @@ function navigateTabs(event) {
         <template v-else>
           <div class="panel empty-state cuts-empty">
             <h2>Nenhum projeto de cortes</h2>
-            <p>Cole um link do YouTube na aba Criar novos cortes para receber sugestões com legendas.</p>
+            <p>Importe um MP4 para editar um corte pronto ou use Criar novos cortes para selecionar trechos de um vídeo do YouTube.</p>
           </div>
         </template>
       </div>

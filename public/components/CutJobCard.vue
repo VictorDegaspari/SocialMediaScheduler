@@ -15,7 +15,8 @@ const jobLabels = {queued:'Na fila',downloading:'Baixando vídeo',transcribing:'
     <div class="cuts-job-head">
       <div>
         <h2>{{ job.title||'Vídeo do YouTube' }}</h2>
-        <a class="cuts-source" :href="safeLink(job.url)" target="_blank" rel="noreferrer">{{ job.url }}</a>
+        <a v-if="job.url" class="cuts-source" :href="safeLink(job.url)" target="_blank" rel="noreferrer">{{ job.url }}</a>
+        <small v-else>MP4 importado</small>
         <small v-if="job.source_range">{{ date(job.created_at, true) }} · Trecho da origem: {{ formatSourceTimecode(0, job.source_range) }} a {{ formatTimecode(job.source_range.end, {hours: true}) }}</small>
         <small v-else>{{ date(job.created_at,true) }}{{ job.duration?` · Vídeo original: ${stamp(job.duration)}`:'' }}</small>
       </div>
@@ -33,7 +34,7 @@ const jobLabels = {queued:'Na fila',downloading:'Baixando vídeo',transcribing:'
         <span>{{ jobLabels[job.status] }}… O processamento continua com esta página fechada.</span>
       </div>
     </template>
-    <template v-if="job.duration&&!['discarded','completed'].includes(job.status)">
+    <template v-if="!job.imported&&job.duration&&!['discarded','completed'].includes(job.status)">
       <div class="cuts-replay">
         <template v-if="clips.some(c=>c.status==='review')">
           <button class="cuts-replay-open" type="button" data-cuts-action="inspect-replay" :data-id="job.id" aria-label="Inspecionar momentos mais revistos deste vídeo">

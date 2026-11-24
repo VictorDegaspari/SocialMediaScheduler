@@ -16,6 +16,10 @@ const job={id:'11111111-1111-4111-8111-111111111111',duration:8,replay_data:{sta
 const html='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/cuts-editor.css"><body><dialog id="cuts-dialog" class="cuts-dialog" data-mode="edit"><div class="dialog-head"><h2>Editar corte</h2></div><form id="cuts-dialog-form"></form></dialog><script type="module" src="/fixture.js"></script></body></html>';
 const js=`import {createCutEditor} from '/cuts-editor.js';
 const clip=${JSON.stringify(clip)},job=${JSON.stringify(job)};
+if(location.search==='?full'){
+  job.duration=272.162;
+  Object.assign(clip,{start_seconds:0,end_seconds:job.duration,max_output_seconds:job.duration,excluded_ranges:[],captions:[]});
+}
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 window.reopen=overlays=>{window.editor?.destroy();window.editor=createCutEditor({clip:{...clip,overlays},job,esc,api:async()=>({captions:clip.captions})});};
 window.reopen([]);document.querySelector('#cuts-dialog').showModal();
@@ -172,6 +176,14 @@ try{
   assert.deepEqual(redaction,{id:redaction.id,type:'redaction',effect:'blur',width:.4,height:.24,x:.5,y:.5,start:2.5,end:3.5});
 
   const count=uploads;await page.evaluate(()=>{window.editor.destroy();document.querySelector('#cuts-dialog').close();});await page.keyboard.press('Control+V');assert.equal(uploads,count,'closed editors do not capture clipboard images');
+  await page.goto(base+'/?full');
+  await page.locator('#cut-watermark-file').setInputFiles({name:'marca.png',mimeType:'image/png',buffer:png});
+  await page.getByText('Marca-d’água adicionada. Ajuste a posição e a opacidade.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Salvar e gerar prévia',exact:true}).click();
+  await page.waitForFunction(()=>window.saved);
+  const full=await page.evaluate(()=>window.saved);
+  assert.equal(full.end,272.162);assert.deepEqual(full.captions,[]);assert.equal(full.overlays[0].watermark,true);
+  assert.equal(full.overlays[0].start,0);assert.equal(full.overlays[0].end,null);
   assert.deepEqual(errors,[]);console.log('Elementos: imagem, texto, marca-d’água e censura temporizada validados na prévia.');
 }catch(error){console.error({uploads,errors,status:await page.locator('#cut-overlay-status').textContent()});throw error;}
 finally{releaseUpload?.();await browser.close();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}

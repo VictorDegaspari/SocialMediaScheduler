@@ -5,10 +5,11 @@ import {readFile,writeFile,rename,rm,stat,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createCanvas} from '@napi-rs/canvas';
 import {z} from 'zod';
+import {MAX_CUT_SOURCE_SECONDS} from './cuts-source-limits.js';
 import {AppError} from './config.js';
 import {drawOverlayText,overlayBlurSize,overlayImageBox,overlayRedactionBox,overlayTextBox,overlayTextLayout} from '../public/cuts-overlays-layout.js';
 
-const placement={id:z.string().uuid(),start:z.number().finite().min(0).max(180).default(0),end:z.number().finite().positive().max(180).nullable().default(null),x:z.number().finite().min(0).max(1).default(.5),y:z.number().finite().min(0).max(1).default(.1),width:z.number().finite().min(.05).max(1).default(.8)};
+const placement={id:z.string().uuid(),start:z.number().finite().min(0).max(MAX_CUT_SOURCE_SECONDS).default(0),end:z.number().finite().positive().max(MAX_CUT_SOURCE_SECONDS).nullable().default(null),x:z.number().finite().min(0).max(1).default(.5),y:z.number().finite().min(0).max(1).default(.1),width:z.number().finite().min(.05).max(1).default(.8)};
 export const cutOverlaySchema=z.discriminatedUnion('type',[
   z.object({...placement,type:z.literal('text'),text:z.string().trim().min(1).max(1000).refine(t=>!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(t),'O texto contém caracteres inválidos.'),fontSize:z.number().finite().min(24).max(160).default(64),color:z.string().regex(/^#[a-fA-F0-9]{6}$/).default('#FFFFFF'),background:z.enum(['none','box']).default('none'),alignment:z.enum(['left','center','right','justify']).optional()}),
   z.object({...placement,type:z.literal('image'),imageId:z.string().uuid(),opacity:z.number().finite().min(0).max(1).optional(),watermark:z.boolean().optional()}),

@@ -33,17 +33,17 @@ export async function sha256(path:string):Promise<string> {
   return hash.digest('hex');
 }
 
-export async function validateVideo(path:string,format:CutFormat|'any'='shorts') {
+export async function validateVideo(path:string,format:CutFormat|'any'='shorts',maxSeconds=180) {
   let stdout:string;
   try {
     // The enclosing list exists in FFmpeg 4.4 (Ubuntu 22.04) and newer releases.
-    ({stdout}=await promisify(execFile)('ffprobe',['-v','error','-show_entries','format=duration,format_name:stream=codec_type,width,height:stream_tags=rotate:stream_side_data_list','-of','json',path],{timeout:30_000,maxBuffer:65536}));
+    ({stdout}=await promisify(execFile)('ffprobe',['-v','error','-f','mov','-protocol_whitelist','file','-show_entries','format=duration,format_name:stream=codec_type,width,height:stream_tags=rotate:stream_side_data_list','-of','json',path],{timeout:30_000,maxBuffer:65536}));
   } catch { throw new AppError('Não foi possível ler o vídeo. Verifique se o MP4 está completo e reproduz corretamente.'); }
   const info=JSON.parse(stdout);
   const stream=info.streams?.find((s:{codec_type:string})=>s.codec_type==='video');
   if(!stream || !String(info.format?.format_name).includes('mp4')) throw new AppError('Arquivo não é um vídeo MP4 válido.');
   const duration=Number(info.format?.duration);
-  if(!Number.isFinite(duration) || duration<=0 || duration>180) throw new AppError('Envie vídeos com até 3 minutos para este fluxo.');
+  if(!Number.isFinite(duration) || duration<=0 || duration>maxSeconds) throw new AppError(`Envie vídeos com até ${maxSeconds} segundos para este fluxo.`);
   const rotation=Math.abs(Number(stream.side_data_list?.find((d:{rotation?:number})=>d.rotation!==undefined)?.rotation || stream.tags?.rotate || 0)) % 180;
   const width=rotation===90?stream.height:stream.width;
   const height=rotation===90?stream.width:stream.height;
