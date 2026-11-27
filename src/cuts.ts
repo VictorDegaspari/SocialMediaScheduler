@@ -3,16 +3,18 @@ import {cutDirectory,cutJobLock,importReadyCut,recoverCutImports,requireCutProje
 export {cutDirectory} from './cut-projects.js';
 import {cutEditorial} from './editorial.js';
 import {isDeepStrictEqual} from 'node:util';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Router,raw } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { AppError, errorMessage, logger } from './config.js';
 import { pool } from './db.js';
+import { stripVideoMetadata } from './media.js';
 import { publisherEngine } from './native-auth.js';
 import { cutDestinations,cutPublishSchema,publishCut } from './cut-publications.js';
-import { cutParallelism, cutsDependencies, downloadCutSource, transcribeCutSource, selectHighlights, renderCut, type Cue, type CutSourceQuality, type RenderCutInput } from './cuts-media.js';
+import { cutParallelism, cutsDependencies, downloadCutSource, prepareImportedCutPreview, transcribeCutSource, selectHighlights, renderCut, type Cue, type CutSourceQuality, type RenderCutInput } from './cuts-media.js';
 import type {CutSourceRange} from './cuts-source-limits.js';
 import {cutSourceRangeSchema, suggestSourceRanges} from './cuts-source-range.js';
 import { sweepCutUploadFiles } from './cuts-upload-files.js';
@@ -105,6 +107,19 @@ async function finalCutFile(quality:CutSourceQuality,clip:Clip) {
   if(quality==='original')return join(dir,clip.id+'.mp4');
   const path=join(dir,clip.id+'.master.mp4');
   return clip.export_status==='ready'&&await exists(path)?path:null;
+}
+
+const pendingSourcePreviews=new Map<string,Promise<void>>();
+async function importedCutPreview(jobId:string){
+  const dir=cutDirectory(jobId),source=join(dir,'source.mp4'),preview=join(dir,'source.preview.mp4');
+  if(await exists(preview))return preview;
+  let pending=pendingSourcePreviews.get(jobId);
+  if(!pending){
+    pending=prepareImportedCutPreview(dir,source,preview).finally(()=>pendingSourcePreviews.delete(jobId));
+    pendingSourcePreviews.set(jobId,pending);
+  }
+  await pending;
+  return preview;
 }
 
 function renderInput(clip:Clip):RenderCutInput {
@@ -436,10 +451,11 @@ cutsRoutes.get('/api/cuts',async(req,res)=>{res.json(await service.state(parsePa
 cutsRoutes.get('/api/cuts/library',async(req,res)=>{res.json(await service.state(parsePagination(req.query,{scope:'cutFolders',defaultLimit:10})));});
 cutsRoutes.get('/api/cuts/jobs/:id/source',async(req,res)=>{
   const id=uuid.parse(req.params.id);
-  const {rows:[job]}=await pool.query("SELECT id FROM cut_jobs WHERE id=$1 AND status NOT IN ('discarded','importing')",[id]);
+  const {rows:[job]}=await pool.query("SELECT upload_sha256 FROM cut_jobs WHERE id=$1 AND status NOT IN ('discarded','importing')",[id]);
   const path=join(cutDirectory(id),'source.mp4');
   if(!job||!await exists(path))throw new AppError('O vídeo original não está mais disponível neste projeto.',404);
-  res.type('video/mp4');res.sendFile(path);
+  const playback=job.upload_sha256?await importedCutPreview(id):path;
+  if(!res.destroyed)res.type('video/mp4').sendFile(playback);
 });
 cutsRoutes.get('/api/cuts/jobs/:id/transcript',async(req,res)=>{
   const {rows:[job]}=await pool.query('SELECT transcript,duration,replay_data FROM cut_jobs WHERE id=$1',[uuid.parse(req.params.id)]);
@@ -502,21 +518,40 @@ cutsRoutes.post('/api/cuts',async(req,res)=>{
 
 cutsRoutes.get('/api/cuts/:id/media',async(req,res)=>{
   const id=uuid.parse(req.params.id);
-  const {rows:[clip]}=await pool.query<Clip&{source_quality:CutSourceQuality}>(
-    'SELECT c.*,j.source_quality FROM cuts c JOIN cut_jobs j ON j.id=c.job_id WHERE c.id=$1',[id]);
+  const {rows:[clip]}=await pool.query<Clip&{source_quality:CutSourceQuality;imported:boolean}>(
+    'SELECT c.*,j.source_quality,j.upload_sha256 IS NOT NULL AS imported FROM cuts c JOIN cut_jobs j ON j.id=c.job_id WHERE c.id=$1',[id]);
   if(!clip?.local_file||!playableStatuses.includes(clip.status))throw new AppError('O arquivo não está disponível. Ele pode ter sido excluído manualmente.',404);
   if(req.query.download==='1'||req.query.final==='1'){
     if(req.query.v!==undefined&&String(clip.revision)!==req.query.v)throw new AppError('O corte mudou. Atualize a página para baixar a versão atual.',409);
     const final=await finalCutFile(clip.source_quality,clip);
     if(!final)throw new AppError('Gere o MP4 final para baixar em alta qualidade.',409);
     if(!await exists(final))throw new AppError('O arquivo deste corte não está disponível.',404);
-    if(req.query.download==='1')res.download(final,clip.title+'.mp4');
-    else res.type('video/mp4').sendFile(final);
+    if(req.query.download==='1'){
+      const dir=await mkdtemp(join(tmpdir(),'watcher-cut-download-'));
+      try {
+        const download=join(dir,'cut.mp4');
+        await stripVideoMetadata(final,download,'any',Infinity);
+        if(res.destroyed)return;
+        await new Promise<void>((resolve,reject)=>{
+          res.download(download,clip.title+'.mp4',error=>{
+            if(error&&res.headersSent)res.destroy();
+            if(error&&!res.destroyed)reject(error);
+            else resolve();
+          });
+        });
+      } finally {
+        await rm(dir,{recursive:true,force:true}).catch(error=>{
+          logger.warn({event:'cut_download_cleanup_failed',message:errorMessage(error)},'Não foi possível remover a cópia temporária do download.');
+        });
+      }
+    }else res.type('video/mp4').sendFile(final);
     return;
   }
   const path=join(cutDirectory(clip.job_id),id+'.mp4');
   if(!await exists(path))throw new AppError('O arquivo da prévia não está disponível.',404);
-  res.type('video/mp4');res.sendFile(path);
+  const originalImport=clip.imported&&clip.revision===1&&!clip.edited_from_cut_id&&await exists(join(cutDirectory(clip.job_id),'source.mp4'));
+  const playback=originalImport?await importedCutPreview(clip.job_id):path;
+  if(!res.destroyed)res.type('video/mp4').sendFile(playback);
 });
 
 cutsRoutes.get('/api/cuts/:id/export',async(req,res)=>{

@@ -2,7 +2,7 @@ import { after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
@@ -19,7 +19,7 @@ execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=green:s=64
 const horizontalFixture=join(temp,'video.mp4');
 execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=green:s=128x72:d=1','-f','lavfi','-i','sine=frequency=400:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',horizontalFixture]);
 const finalFixture=join(temp,'final.mp4');
-execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=blue:s=96x144:r=60:d=1','-f','lavfi','-i','sine=frequency=660:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',finalFixture]);
+execFileSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','color=c=blue:s=96x144:r=60:d=1','-f','lavfi','-i','sine=frequency=660:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest','-metadata','comment=Private note',finalFixture]);
 const { pool,redis,initDb,setSetting }=await import('../src/db.js');
 const { AppError }=await import('../src/config.js');
 const { CutsService,createCutsRoutes,cutDirectory,youtubeVideoUrl,clipCaptions,validateCutEdit }=await import('../src/cuts.js');
@@ -103,6 +103,27 @@ test('importar MP4 abre um corte editável e duas importações simultâneas reu
   assert.equal((await pool.query('SELECT id FROM deliveries')).rowCount,0);
 });
 
+test('uma importação HEVC oferece prévia H.264 no editor e na biblioteca e mantém o arquivo final original',async()=>{
+  const hevc=join(temp,'import-hevc.mp4');
+  execFileSync('ffmpeg',['-loglevel','error','-i',fixture,'-c:v','libx265',
+    '-x265-params','pools=1:frame-threads=1:log-level=error','-tag:v','hvc1','-c:a','copy',hevc]);
+  const bytes=await readFile(hevc);
+  const imported=await originalFetch(base+'/api/cuts/import?title=HEVC',{method:'POST',headers:{'Content-Type':'video/mp4'},body:bytes});
+  assert.equal(imported.status,201,imported.ok?undefined:await imported.text());
+  const {id,clipId}=await imported.json(),dir=cutDirectory(id);
+  const [source,card]=await Promise.all([call('/jobs/'+id+'/source'),call('/'+clipId+'/media?v=1')]);
+  assert.equal(source.status,200);
+  assert.equal(card.status,200);
+  const preview=join(dir,'source.preview.mp4');
+  assert.deepEqual(Buffer.from(await source.arrayBuffer()),await readFile(preview));
+  assert.deepEqual(Buffer.from(await card.arrayBuffer()),await readFile(preview));
+  const video=execFileSync('ffprobe',['-v','error','-select_streams','v:0','-show_entries','stream=codec_name,width,height','-of','csv=p=0',preview],{encoding:'utf8'});
+  assert.equal(video.trim(),'h264,64,96');
+  const final=await call('/'+clipId+'/media?final=1&v=1');
+  assert.deepEqual(Buffer.from(await final.arrayBuffer()),bytes);
+  assert.deepEqual(await readFile(join(dir,'source.mp4')),bytes);
+});
+
 test('recuperação remove só importações interrompidas, preservando transferências ativas',async()=>{
   const id=randomUUID(),db=await pool.connect(),key='drive-watcher:cuts:'+id;
   try{
@@ -175,7 +196,21 @@ test('exports only retained live sections in original quality and publishes the 
   const read=async(query:string)=>Buffer.from(await (await call(path+'/media'+query)).arrayBuffer());
   assert.deepEqual(await read(''),await readFile(fixture));
   assert.deepEqual(await read('?final=1&v='+clip.revision),await readFile(finalFixture));
-  assert.deepEqual(await read('?download=1'),await readFile(finalFixture));
+  const attachment=await call(path+'/media?download=1&v='+clip.revision);
+  assert.equal(attachment.status,200,attachment.ok?undefined:await attachment.text());
+  assert.match(attachment.headers.get('content-disposition')||'',/^attachment;/);
+  const downloaded=join(temp,'downloaded.mp4');
+  await writeFile(downloaded,Buffer.from(await attachment.arrayBuffer()));
+  const probe=(file:string)=>JSON.parse(execFileSync('ffprobe',[
+    '-v','error','-show_entries','format_tags=comment,encoder:stream=codec_name,width,height,r_frame_rate:packet=stream_index,data_hash',
+    '-show_data_hash','sha256','-of','json',file
+  ],{encoding:'utf8'}));
+  const original=probe(finalFixture),clean=probe(downloaded);
+  assert.equal(original.format.tags.comment,'Private note');
+  assert.deepEqual(clean.format.tags??{},{});
+  assert.deepEqual(clean.streams,original.streams);
+  assert.deepEqual(clean.packets,original.packets);
+  assert.deepEqual(await read('?final=1'),await readFile(finalFixture));
   assert.equal((await call(path,{...edit,title:'Nova revisão',revision:clip.revision},'PUT')).status,202);
   await service.tick();clip=await currentClip();
   assert.equal(clip.finalReady,false);
@@ -549,7 +584,7 @@ for(const format of ['shorts','video'] as const)test('uploader confirma '+format
   assert.equal((await stat(source)).isFile(),true);
   assert.deepEqual(await readFile(preview),before);assert.deepEqual(await readFile(master),before);
   const download=await call('/'+clip.id+'/media');assert.equal(download.status,200);assert.deepEqual(Buffer.from(await download.arrayBuffer()),before);
-  const attachment=await call('/'+clip.id+'/media?download=1');assert.equal(attachment.status,200);assert.match(attachment.headers.get('content-disposition')||'',/^attachment;/);assert.deepEqual(Buffer.from(await attachment.arrayBuffer()),before);
+  const attachment=await call('/'+clip.id+'/media?download=1');assert.equal(attachment.status,200);assert.match(attachment.headers.get('content-disposition')||'',/^attachment;/);await attachment.arrayBuffer();
   const partial=await originalFetch(base+'/api/cuts/'+clip.id+'/media',{headers:{Range:'bytes=0-63'}});assert.equal(partial.status,206);assert.equal((await partial.arrayBuffer()).byteLength,64);
   await assert.rejects(stat(join(process.env.DATA_DIR!,deliveryId+'.native.mp4')));
   assert.equal((await pool.query('SELECT local_file FROM deliveries WHERE id=$1',[deliveryId])).rows[0].local_file,null);

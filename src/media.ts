@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { AppError } from './config.js';
 import type { CutFormat } from './cuts-edit.js';
 
-export async function stripVideoMetadata(input:string,output:string):Promise<void> {
+export async function stripVideoMetadata(input:string,output:string,format:CutFormat|'any'='shorts',maxSeconds=180):Promise<void> {
   if(resolve(input)===resolve(output)) throw new AppError('A limpeza precisa de uma cópia separada do vídeo.');
   try {
     await promisify(execFile)('ffmpeg',[
@@ -20,7 +20,7 @@ export async function stripVideoMetadata(input:string,output:string):Promise<voi
     ],{timeout:120_000,maxBuffer:65536});
     // Stream copy preserves the encoded audio/video and the display rotation.
     // MP4 structural fields remain; this is not an AI-detection bypass.
-    await validateVideo(output);
+    await validateVideo(output,format,maxSeconds);
   } catch {
     await rm(output,{force:true}).catch(()=>{});
     throw new AppError('Não foi possível remover os metadados do vídeo. O arquivo original não foi enviado.');

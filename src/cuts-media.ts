@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { availableParallelism } from 'node:os';
 import { AppError, dataDir } from './config.js';
@@ -72,6 +72,38 @@ async function command(binary:string,args:string[],options:{cwd?:string;timeout:
     child.on('error',error=>{cleanup();fail(reason||error);});
     child.on('close',code=>{cleanup();if(reason)fail(reason);else if(code!==0)fail(new Error(`Media processor exited ${code}`));else done(stdout);});
   });
+}
+
+export async function prepareImportedCutPreview(dir:string,source:string,preview:string){
+  const temporary=await mkdtemp(join(dir,'.source-preview-'));
+  const partial=join(temporary,'preview.mp4');
+  try {
+    const input=['-f','mov','-protocol_whitelist','file'];
+    const {streams}:{streams:{codec_type:string;codec_name:string;pix_fmt?:string;profile?:string;disposition?:{attached_pic?:number}}[]}=JSON.parse(await command('ffprobe',['-v','error',...input,
+      '-show_entries','stream=codec_type,codec_name,pix_fmt,profile:stream_disposition=attached_pic',
+      '-of','json',source],{cwd:dir,timeout:30_000}));
+    const video=streams.find(stream=>stream.codec_type==='video'&&!stream.disposition?.attached_pic);
+    const audio=streams.filter(stream=>stream.codec_type==='audio');
+    if(video?.codec_name==='h264'&&(video.pix_fmt==='yuv420p'||video.pix_fmt==='yuvj420p')&&
+      audio.every(stream=>stream.codec_name==='aac'&&stream.profile==='LC')){
+      await link(source,partial);
+      await rename(partial,preview);
+      return;
+    }
+    await command('ffmpeg',['-nostdin','-hide_banner','-loglevel','error','-y',...input,'-i',source,
+      '-map','0:V:0','-map','0:a:0?','-filter_threads','1',
+      '-vf',"scale=w='min(960,iw)':h='min(960,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+      '-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-threads',String(renderThreads),
+      '-c:a','aac','-ac','2','-b:a','128k','-map_metadata','-1','-map_chapters','-1','-movflags','+faststart',partial
+    ],{cwd:dir,timeout:60*60_000,diskError:renderDiskError});
+    await validateVideo(partial,'any',Infinity);
+    await rename(partial,preview);
+  } catch(error) {
+    if(error instanceof AppError)throw error;
+    throw new AppError('Não foi possível preparar a prévia deste MP4 para o navegador.');
+  } finally {
+    await rm(temporary,{recursive:true,force:true});
+  }
 }
 
 export async function cutsDependencies():Promise<{ready:boolean;details:string[]}> {
