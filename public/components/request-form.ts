@@ -24,7 +24,7 @@ function applyValue(field: Field, initial: InitialValue, draft?: Draft) {
   }
 }
 
-// Requests preserve every native form value until that specific form is saved/reset.
+// Preserve native form values until that specific form is saved or reset.
 // Capture selects before Vue changes their options, then restore only available choices.
 export const vRequestValue: ObjectDirective<Field, InitialValue> = {
   mounted(field, binding) {applyValue(field, binding.value);},

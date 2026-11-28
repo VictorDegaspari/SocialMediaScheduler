@@ -2,9 +2,9 @@ import {createCutEditor,cutFormats} from './cuts-editor.js';
 import {replayTimeAt} from './cuts-replay.js';
 import {confirmDiscard} from './confirm-dialog.js';
 import {paginationView,resetPagination} from './pagination.js';
-import {updateCutDestination,readTiktokFields} from './cut-publish.js';
+import {cutDestinationOptions,readTiktokFields} from './cut-publish.js';
 import {mountCutEditorialView,readCommaSeparated} from './build/editorial-view.js';
-import {clearWorkspace,drawWorkspace} from './build/workspace-view.js';
+import {clearWorkspace,drawWorkspace,mountWorkspaceModal} from './build/workspace-view.js';
 const jobLabels={queued:'Na fila',downloading:'Baixando vídeo',transcribing:'Transcrevendo áudio',selecting:'Selecionando momentos',rendering:'Gerando prévias',review:'Pronto para revisar',failed:'Precisa de atenção',discarded:'Descartado',completed:'Concluído'};
 let current={jobs:[],channels:[],dependencies:{ready:false,details:[]}},editing=null,services;
 const jobSnapshots=new WeakMap();
@@ -35,7 +35,7 @@ export function updateCuts(root,state,h,view='projects'){
   const pending=root.querySelector('#cuts-create-form [type="submit"]')?.dataset.busy;
   drawWorkspace(root,'cuts',{
     jobs:stableJobs(root,visibleJobs()),dependencies:current.dependencies,pagination:paginationView(current.pagination,'cuts'),
-    icon:h.icon,date:h.date,safeLink,importFile,view,createDisabled:Boolean(pending)||!current.dependencies?.ready,
+    date:h.date,safeLink,importFile,view,createDisabled:Boolean(pending)||!current.dependencies?.ready,
   });
 }
 
@@ -95,15 +95,23 @@ async function openEditor(id,seek,format){
   if(format)editing.editor.reveal('#cut-format');
   if(seek!==undefined){editing.editor.selectReplayStart(seek);editing.editor.reveal('.cuts-replay-details');}
 }
+function drawCutPublication(form,session,platform,clip){
+  const selected=form.elements.namedItem('channelId')?.value;
+  const destinations=cutDestinationOptions(clip,current.channels||[],platform);
+  drawWorkspace(form,'cutPublish',{clip:session.clip,platform,cutFormats,destinations});
+  form.elements.namedItem('channelId').value=destinations.some(option=>option.value===selected)?selected:'';
+  session.canPublish=destinations.some(option=>!option.disabled);
+}
+
 function openPublish(id,platform='youtube'){
   const {clip,job}=findClip(id),format=clip.framing_options?.format||'shorts';
   destroyReview();
-  const session=editing={mode:'publish',id,jobId:job.id,revision:clip.revision,format};
+  const session=editing={mode:'publish',id,jobId:job.id,revision:clip.revision,format,clip};
   const dialog=document.querySelector('#cuts-dialog'),form=document.querySelector('#cuts-dialog-form');
   document.querySelector('#cuts-dialog-title').textContent='Postar corte';
   delete dialog.dataset.mode;
   clearWorkspace(form);
-  drawWorkspace(form,'cutPublish',{clip,platform,cutFormats});
+  drawCutPublication(form,session,platform,clip);
   session.editorial=mountCutEditorialView(form.querySelector('[data-cut-editorial]'),{
     clipId:id,title:clip.title,shorts:format==='shorts',suggestions:clip.publicationText,platform,api:services.api,
     canGenerate:()=>editing===session&&dialog.open&&!session.pending,
@@ -112,17 +120,13 @@ function openPublish(id,platform='youtube'){
     onFeedback(message){feedback(form,message);},
     onError(message){services.toast(message,true);},
   });
-  session.canPublish=updateCutDestination(form,clip,current.channels||[]);
   publishFormat();
   dialog.showModal();
 }
 
 function destroyReview(){
   editing?.editor?.destroy();
-  if(editing?.editorial){
-    editing.editorial.destroy();
-    clearWorkspace(document.querySelector('#cut-channel'));
-  }
+  editing?.editorial?.destroy();
 }
 
 export function openCutPublication({clip,job},channels,channelId){
@@ -132,13 +136,13 @@ export function openCutPublication({clip,job},channels,channelId){
 }
 
 function libraryJobs(){return visibleJobs().map(job=>({...job,clips:(job.clips||[]).filter(clip=>clip.hasMedia&&clip.status!=='discarded')})).filter(job=>job.clips.length);}
-export function updateCutLibrary(state,h){
+export function updateCutLibrary(state){
   remember({...state,cuts:state.cutFolders||state.cuts});
   const root=document.querySelector('#cut-library-host');
   if(!root)return;
   const scope=state.cutFolders?'cutFolders':'cuts';
   drawWorkspace(root,'cutLibrary',{
-    groups:stableJobs(root,libraryJobs()),pagination:paginationView(current.pagination,scope),scope,icon:h.icon,safeLink,importFile,
+    groups:stableJobs(root,libraryJobs()),pagination:paginationView(current.pagination,scope),scope,safeLink,importFile,
   });
 }
 
@@ -156,10 +160,8 @@ function publishFormat(){
 }
 
 function openCutSourceRange({video,initialRange,save}){
-  const host=document.createElement('div');
-  document.body.append(host);
-  drawWorkspace(host,'cutSourceRange',{
-    video,initialRange,save,onClose(){clearWorkspace(host);host.remove();},
+  const modal=mountWorkspaceModal('cutSourceRange',{
+    video,initialRange,save,onClose(){modal.destroy();},
   });
 }
 
@@ -191,7 +193,7 @@ export function bindCuts({api,refresh,toast}){
     if(editing?.mode!=='publish')return;
     if(event.target.name==='platform'){
       const form=document.querySelector('#cuts-dialog-form');
-      editing.canPublish=updateCutDestination(form,findClip(editing.id).clip,current.channels||[]);
+      drawCutPublication(form,editing,event.target.value,findClip(editing.id).clip);
       editing.editorial.setPlatform(event.target.value);
       form.elements.namedItem('confirm').checked=false;
     }

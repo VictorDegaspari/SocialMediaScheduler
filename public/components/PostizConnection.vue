@@ -2,17 +2,17 @@
 import ConnectionTitle from './ConnectionTitle.vue';
 import ConnectionIcon from './ConnectionIcon.js';
 import {vConnectionValue} from './connection-form.js';
-import type {PostizConnection, ConnectionChannel, IconRenderer} from './connection-types.js';
+import type {PostizConnection, ConnectionChannel} from './connection-types.js';
 
-defineProps<{connection: PostizConnection; channels: ConnectionChannel[]; icon: IconRenderer}>();
+defineProps<{connection: PostizConnection; channels: ConnectionChannel[]}>();
 </script>
 
 <template>
   <section class="panel connection-card connection-service" aria-label="Conexão Postiz">
-    <ConnectionTitle name="Postiz" icon-name="link" :status="connection.configured ? 'Configurado' : 'Não conectado'" :tone="connection.configured ? '' : 'gray'" :icon="icon" />
+    <ConnectionTitle name="Postiz" icon-name="link" :status="connection.configured ? 'Configurado' : 'Não conectado'" :tone="connection.configured ? '' : 'gray'" />
     <p class="connections-description">Publique usando os canais conectados no Postiz.</p>
     <div id="channels-list" class="channel-list">
-      <span v-for="channel in channels" :key="channel.id" class="channel-chip platform-chip" :data-platform="channel.identifier === 'youtube' ? 'youtube' : 'tiktok'"><ConnectionIcon :name="channel.identifier === 'youtube' ? 'youtube' : 'tiktok'" :icon="icon" /> {{ channel.name }}{{ channel.disabled ? ' · desabilitado' : '' }}</span>
+      <span v-for="channel in channels" :key="channel.id" class="channel-chip platform-chip" :data-platform="channel.identifier === 'youtube' ? 'youtube' : 'tiktok'"><ConnectionIcon :name="channel.identifier === 'youtube' ? 'youtube' : 'tiktok'" /> {{ channel.name }}{{ channel.disabled ? ' · desabilitado' : '' }}</span>
       <p v-if="!channels.length" class="connections-help">Nenhum canal carregado.</p>
     </div>
     <div class="connections-actions">

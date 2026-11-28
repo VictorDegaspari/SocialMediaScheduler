@@ -84,6 +84,18 @@ export async function initDb() {
     );
     ALTER TABLE followed_youtube_channels ADD COLUMN IF NOT EXISTS recent_videos jsonb;
     ALTER TABLE followed_youtube_channels ADD COLUMN IF NOT EXISTS includes_live_replays boolean NOT NULL DEFAULT false;
+    CREATE TABLE IF NOT EXISTS channel_videos (
+      id uuid PRIMARY KEY,source_key text UNIQUE NOT NULL,url text NOT NULL,title text,
+      status text NOT NULL DEFAULT 'download_queued' CHECK (status IN
+        ('download_queued','downloading','download_failed','ready','dub_queued','dubbing','dub_failed','dubbed')),
+      duration double precision,error text,dub_version smallint,
+      created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE channel_videos ADD COLUMN IF NOT EXISTS dub_version smallint;
+    UPDATE channel_videos SET dub_version=1 WHERE status='dubbed' AND dub_version IS NULL;
+    CREATE INDEX IF NOT EXISTS channel_videos_library ON channel_videos(created_at DESC,id DESC);
+    CREATE INDEX IF NOT EXISTS channel_videos_queue ON channel_videos(updated_at,id)
+      WHERE status IN ('download_queued','downloading','dub_queued','dubbing');
     CREATE TABLE IF NOT EXISTS cuts (
       id uuid PRIMARY KEY,job_id uuid NOT NULL REFERENCES cut_jobs(id),
       title text NOT NULL,start_seconds double precision NOT NULL,end_seconds double precision NOT NULL,

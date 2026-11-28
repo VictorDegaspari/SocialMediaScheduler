@@ -6,11 +6,11 @@ import WorkspaceHeading from './WorkspaceHeading.vue';
 import WorkspaceActivity from './WorkspaceActivity.vue';
 import DeliveryActions from './DeliveryActions.vue';
 import RetryDetails from './RetryDetails.vue';
-defineProps(['state', 'icon', 'date', 'safeUrl', 'statusLabels', 'pagination']);
+defineProps(['state', 'date', 'safeUrl', 'statusLabels', 'pagination']);
 </script>
 
 <template>
-  <WorkspaceHeading title="Histórico de conteúdo" subtitle="Acompanhe cada destino, corrija falhas e cancele vídeos da fila." eyebrow="ACOMPANHAMENTO" :action="false" :icon="icon" />
+  <WorkspaceHeading title="Histórico de conteúdo" subtitle="Acompanhe cada destino, corrija falhas e cancele vídeos da fila." eyebrow="ACOMPANHAMENTO" :action="false" />
   <section class="panel">
     <template v-if="state.videos.length">
       <div class="table-wrap">
@@ -41,7 +41,7 @@ defineProps(['state', 'icon', 'date', 'safeUrl', 'statusLabels', 'pagination']);
                   <template v-for="d in v.deliveries" :key="d.id">
                     <div>
                       <span class="badge delivery-platform" :class="{amber: ['failed', 'unknown'].includes(d.status)}" :data-platform="d.provider === 'youtube' ? 'youtube' : 'tiktok'">
-                        <ConnectionIcon :name="d.provider === 'youtube' ? 'youtube' : 'tiktok'" :icon="icon" />
+                        <ConnectionIcon :name="d.provider === 'youtube' ? 'youtube' : 'tiktok'" />
                         {{ (d.provider === 'youtube' ? 'YouTube' : 'TikTok') + ' · ' + (statusLabels[d.status] || d.status) }}
                       </span>
                       <template v-if="d.channelName">
@@ -53,7 +53,7 @@ defineProps(['state', 'icon', 'date', 'safeUrl', 'statusLabels', 'pagination']);
                       </template>
                       <template v-if="d.url">
                         <a :href="safeUrl(d.url)" target="_blank" rel="noreferrer" aria-label="Abrir publicação">
-                          <ConnectionIcon name="external" :icon="icon" />
+                          <ConnectionIcon name="external" />
                         </a>
                       </template>
                       <template v-if="d.status==='unknown'&&d.engine==='postiz'">
@@ -80,13 +80,13 @@ defineProps(['state', 'icon', 'date', 'safeUrl', 'statusLabels', 'pagination']);
     <template v-else>
       <div class="empty-state">
         <div class="empty-symbol">
-          <ConnectionIcon name="upload" :icon="icon" />
+          <ConnectionIcon name="upload" />
         </div>
         <h3>Seu conteúdo vai aparecer aqui</h3>
         <p>Cadastre uma pasta local ou conecte o Google Drive para encontrar seus vídeos.</p>
         <a class="button small" href="#watches">
           Ir para minhas pastas
-          <ConnectionIcon name="arrow" :icon="icon" />
+          <ConnectionIcon name="arrow" />
         </a>
       </div>
     </template>
@@ -96,12 +96,12 @@ defineProps(['state', 'icon', 'date', 'safeUrl', 'statusLabels', 'pagination']);
     <div class="section-head">
       <h2>Registro de atividades</h2>
       <button class="button small" data-action="refresh">
-        <ConnectionIcon name="refresh" :icon="icon" />
+        <ConnectionIcon name="refresh" />
         Atualizar
       </button>
     </div>
     <div class="panel">
-      <WorkspaceActivity :events="state.events" :icon="icon" :date="date" />
+      <WorkspaceActivity :events="state.events" :date="date" />
       <CollectionPagination :page="pagination.events" scope="events" />
     </div>
   </section>

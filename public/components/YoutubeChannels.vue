@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import {onBeforeUnmount, onMounted, reactive, ref} from 'vue';
+import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref} from 'vue';
 import {MAX_CUT_SOURCE_SECONDS, type CutSourceRange} from '../../src/cuts-source-limits.js';
 import type {ChannelVideo} from '../../src/youtube-channel-lookup.js';
 import type {FollowedYoutubeChannel} from '../../src/youtube-channels.js';
 import LiveCutRangeDialog from './LiveCutRangeDialog.vue';
+import TiktokChannelVideos from './TiktokChannelVideos.vue';
+import WorkspaceProgress from './WorkspaceProgress.vue';
 
 const props = defineProps<{
   api: <T>(path: string, body?: unknown, method?: 'POST' | 'DELETE') => Promise<T>;
@@ -17,8 +19,21 @@ const options = {dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_
 const checkedDate = new Intl.DateTimeFormat('pt-BR', options);
 const channels = ref<FollowedYoutubeChannel[]>([]);
 const input = ref('');
+const views = [
+  {id: 'trends', label: 'TikTok'},
+  {id: 'library', label: 'Vídeos salvos'},
+  {id: 'youtube', label: 'YouTube'},
+] as const;
+const view = ref<typeof views[number]['id']>('trends');
+const navigation = ref<HTMLElement>();
 const loading = ref(true);
-const busy = ref(false);
+const operation = ref<'refresh' | 'follow' | 'unfollow'>();
+const busy = computed(() => !!operation.value);
+const progressMessages = {
+  refresh: 'Atualizando vídeos e lives do YouTube…',
+  follow: 'Buscando canal e vídeos recentes…',
+  unfollow: 'Removendo canal da lista…',
+};
 const loaded = ref(false);
 const error = ref('');
 const lookupErrors = reactive(new Map<string, string>());
@@ -35,6 +50,13 @@ onBeforeUnmount(() => {
 const videoUrl = (id: string) => 'https://www.youtube.com/watch?v=' + encodeURIComponent(id);
 const channelUrl = (id: string) => 'https://www.youtube.com/channel/' + encodeURIComponent(id);
 const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Não foi possível concluir a operação.';
+
+async function showSavedVideo() {
+  if (view.value !== 'trends') return;
+  view.value = 'library';
+  await nextTick();
+  navigation.value?.querySelector<HTMLButtonElement>('[aria-controls="channel-library"]')?.focus();
+}
 
 function formatDuration(seconds: number) {
   const parts = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, Math.floor(seconds) % 60];
@@ -54,7 +76,7 @@ function saveChannel(channel: FollowedYoutubeChannel) {
 
 async function refreshChannels(items = channels.value) {
   if (busy.value || !items.length) return;
-  busy.value = true;
+  operation.value = 'refresh';
   error.value = '';
   try {
     for (let index = 0; active && index < items.length; index += 3) {
@@ -68,7 +90,7 @@ async function refreshChannels(items = channels.value) {
       }));
     }
   } finally {
-    busy.value = false;
+    operation.value = undefined;
   }
 }
 
@@ -102,7 +124,7 @@ onMounted(() => {
 
 async function follow() {
   if (!loaded.value || busy.value || !input.value.trim()) return;
-  busy.value = true;
+  operation.value = 'follow';
   error.value = '';
   try {
     const saved = await props.api<FollowedYoutubeChannel>(path, {channel: input.value});
@@ -113,13 +135,13 @@ async function follow() {
   } catch (cause) {
     if (active) error.value = message(cause);
   } finally {
-    busy.value = false;
+    operation.value = undefined;
   }
 }
 
 async function unfollow(id: string) {
   if (busy.value) return;
-  busy.value = true;
+  operation.value = 'unfollow';
   error.value = '';
   try {
     await props.api(path + '/' + id, {}, 'DELETE');
@@ -130,7 +152,7 @@ async function unfollow(id: string) {
   } catch (cause) {
     if (active) error.value = message(cause);
   } finally {
-    busy.value = false;
+    operation.value = undefined;
   }
 }
 
@@ -170,12 +192,23 @@ function findRanges() {
 </script>
 
 <template>
+  <div class="page-head channels-heading">
+    <h1>Canais</h1>
+  </div>
+
+  <div ref="navigation" class="channel-navigation" role="group" aria-label="Seções de canais">
+    <button v-for="item in views" :key="item.id" class="button small" type="button"
+      :aria-pressed="view === item.id" :aria-controls="'channel-' + item.id" @click="view = item.id">{{ item.label }}</button>
+  </div>
+
+  <TiktokChannelVideos :api="props.api" :toast="props.toast" :view="view" @saved="showSavedVideo" />
+
+  <section v-show="view === 'youtube'" id="channel-youtube" aria-labelledby="youtube-channels-title" class="channel-follow-section">
   <div class="page-head">
     <div>
-      <h1>Canais do YouTube</h1>
-      <p class="subtitle">Abra os detalhes para ver os três itens públicos mais recentes, entre vídeos e lives encerradas.</p>
+      <h2 id="youtube-channels-title">Canais do YouTube</h2>
     </div>
-    <button class="button" type="button" :disabled="loading || busy || (loaded && !channels.length)"
+    <button class="button small" type="button" :disabled="loading || busy || (loaded && !channels.length)"
       @click="loaded ? refreshChannels() : load()">Atualizar vídeos</button>
   </div>
 
@@ -189,9 +222,10 @@ function findRanges() {
   </form>
 
   <p v-if="error" class="error-banner youtube-channels-error" role="alert">{{ error }}</p>
-  <p v-if="loading && !loaded" class="tip youtube-channels-error" role="status">Carregando canais…</p>
-  <p v-else-if="loaded && !channels.length" class="empty-state compact">Nenhum canal acompanhado.</p>
-  <ul v-if="channels.length" class="youtube-channels-list">
+  <WorkspaceProgress v-if="loading && !loaded" message="Carregando canais acompanhados…" />
+  <WorkspaceProgress v-else-if="operation" :message="progressMessages[operation]" />
+  <p v-else-if="loaded && !channels.length" class="channel-empty">Nenhum canal acompanhado.</p>
+  <ul v-if="channels.length" class="youtube-channels-list" :aria-busy="busy || undefined">
     <li v-for="channel in channels" :key="channel.id" class="panel youtube-channel-card">
       <div class="youtube-channel-info">
         <h2><a :href="channelUrl(channel.id)" target="_blank" rel="noopener noreferrer">{{ channel.name }}</a></h2>
@@ -200,7 +234,7 @@ function findRanges() {
       <button class="button ghost" type="button" :disabled="busy" :aria-label="'Deixar de acompanhar ' + channel.name"
         @click="unfollow(channel.id)">Deixar de acompanhar</button>
       <details class="youtube-channel-details">
-        <summary>Ver detalhes<span class="sr-only"> de {{ channel.name }}</span></summary>
+        <summary>Vídeos e lives recentes<span class="sr-only"> de {{ channel.name }}</span></summary>
         <ol v-if="channel.videos.length" class="youtube-video-list" aria-label="Vídeos mais recentes">
           <li v-for="video in channel.videos" :key="video.id" class="youtube-video-row">
             <div class="youtube-channel-info">
@@ -225,4 +259,5 @@ function findRanges() {
   </ul>
   <LiveCutRangeDialog v-if="selectedVideo" :video="selectedVideo" :save="saveRange"
     :find-ranges="findRanges" @close="selectedVideo = null" />
+  </section>
 </template>

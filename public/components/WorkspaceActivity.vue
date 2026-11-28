@@ -1,6 +1,6 @@
 <script setup>
 import ConnectionIcon from './ConnectionIcon.js';
-defineProps(['events', 'icon', 'date']);
+defineProps(['events', 'date']);
 </script>
 
 <template>
@@ -19,7 +19,7 @@ defineProps(['events', 'icon', 'date']);
   <template v-else>
     <div class="empty-state compact">
       <div class="empty-symbol">
-        <ConnectionIcon name="history" :icon="icon" />
+        <ConnectionIcon name="history" />
       </div>
       <h3>Tudo pronto para começar</h3>
       <p>As verificações e os envios vão aparecer aqui assim que sua primeira rotina rodar.</p>

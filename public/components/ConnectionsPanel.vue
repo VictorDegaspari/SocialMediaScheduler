@@ -6,9 +6,9 @@ import TiktokConnection from './TiktokConnection.vue';
 import GoogleConnection from './GoogleConnection.vue';
 import PostizConnection from './PostizConnection.vue';
 import {vConnectionValue} from './connection-form.js';
-import type {ConnectionsState, ConnectionChannel, IconRenderer} from './connection-types.js';
+import type {ConnectionsState, ConnectionChannel} from './connection-types.js';
 
-const props = defineProps<{state: ConnectionsState; channels: ConnectionChannel[]; icon: IconRenderer}>();
+const props = defineProps<{state: ConnectionsState; channels: ConnectionChannel[]}>();
 const connections = computed(() => props.state.connections);
 const queue = computed(() => props.state.scheduler.queue);
 </script>
@@ -18,17 +18,17 @@ const queue = computed(() => props.state.scheduler.queue);
   <section class="connections-group" aria-labelledby="connections-publishing">
     <div class="connections-section-head"><h2 id="connections-publishing">Onde publicar</h2></div>
     <div class="connections-grid">
-      <YoutubeConnection v-if="connections.native.engine === 'local'" :connection="connections.native.youtube" :icon="icon" />
-      <PostizConnection v-else :connection="connections.postiz" :channels="channels" :icon="icon" />
-      <TiktokConnection :profiles="state.publishing?.browserProfiles || []" :mcp="connections.playwrightMcp || {configured: false, source: null}" :icon="icon" />
+      <YoutubeConnection v-if="connections.native.engine === 'local'" :connection="connections.native.youtube" />
+      <PostizConnection v-else :connection="connections.postiz" :channels="channels" />
+      <TiktokConnection :profiles="state.publishing?.browserProfiles || []" :mcp="connections.playwrightMcp || {configured: false, source: null}" />
     </div>
   </section>
   <section class="connections-group" aria-labelledby="connections-sources">
     <div class="connections-section-head"><h2 id="connections-sources">De onde vêm os vídeos</h2></div>
     <div class="connections-grid">
-      <GoogleConnection :connection="connections.google" :icon="icon" />
+      <GoogleConnection :connection="connections.google" />
       <section class="panel connection-card connection-service" aria-label="Conexão pastas locais">
-        <ConnectionTitle name="Pastas locais" icon-name="monitor" status="Disponível" tone="" :icon="icon" />
+        <ConnectionTitle name="Pastas locais" icon-name="monitor" status="Disponível" tone="" />
         <p class="connections-description">Use os vídeos que estão no seu computador.</p>
         <div class="connections-account"><span>Pasta de vídeos</span><code class="code">{{ connections.local.rootPath }}</code></div>
         <div class="connections-actions"><a class="button" href="#watches">Abrir minhas pastas</a></div>

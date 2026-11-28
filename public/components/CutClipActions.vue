@@ -1,7 +1,7 @@
 <script setup>
 import ConnectionIcon from './ConnectionIcon.js';
 import {computed} from 'vue';
-const props = defineProps(['clip', 'library', 'icon']);
+const props = defineProps(['clip', 'library']);
 const editable = computed(() => ['review','failed','publishing','posted'].includes(props.clip.status));
 const downloadable = computed(() => props.clip.hasMedia && ['review','publishing','posted','failed'].includes(props.clip.status));
 const finalReady = computed(() => downloadable.value && props.clip.finalReady !== false);
@@ -12,17 +12,17 @@ const exporting = computed(() => ['queued','rendering'].includes(props.clip.expo
   <div v-if="editable || downloadable" class="cuts-actions">
     <template v-if="finalReady">
       <button class="button primary small" data-cuts-action="publish" :data-id="clip.id" :aria-label="library ? 'Postar no YouTube' : undefined">
-        <ConnectionIcon :name="library?'youtube':'upload'" :icon="icon" />
+        <ConnectionIcon :name="library?'youtube':'upload'" />
         {{ library?'YouTube':'Postar' }}
       </button>
       <button class="button small" data-cuts-action="publish-tiktok" data-platform="tiktok" :data-id="clip.id" aria-label="Postar no TikTok">
-        <ConnectionIcon name="tiktok" :icon="icon" />
+        <ConnectionIcon name="tiktok" />
         {{ library?'TikTok':'Postar no TikTok' }}
       </button>
     </template>
     <template v-if="editable">
       <button class="button small" data-cuts-action="edit" :data-id="clip.id">
-        <ConnectionIcon name="edit" :icon="icon" />
+        <ConnectionIcon name="edit" />
         {{ clip.status==='failed'?'Ajustar e gerar novamente':'Ajustar' }}
       </button>
     </template>

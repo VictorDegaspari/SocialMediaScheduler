@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, onMounted, useTemplateRef} from 'vue';
+import {computed, onMounted, ref, useTemplateRef, watch} from 'vue';
 import {vRequestValue} from './request-form.js';
 import EditorialSettings from './EditorialSettings.vue';
 import type {EditorialPreviewApi} from './editorial-form.js';
@@ -9,6 +9,10 @@ const props = defineProps<{state: RequestsState; profile?: PublishingProfile; ed
 const publishing = computed(() => props.state.publishing);
 const defaults = computed(() => props.profile?.pack_defaults || {});
 const origin = computed(() => props.profile?.source_type || '');
+const source = ref(origin.value);
+watch(origin, (next, previous) => {
+  if (source.value === previous) source.value = next;
+});
 const folders = computed(() => (props.profile?.source_roots || []).map(id => 'https://drive.google.com/drive/folders/' + id).join('\n'));
 const editor = useTemplateRef<HTMLDetailsElement>('editor');
 onMounted(() => {if (editor.value) editor.value.open = Boolean(props.editing || !publishing.value.profiles.length);});
@@ -20,10 +24,10 @@ onMounted(() => {if (editor.value) editor.value.open = Boolean(props.editing || 
     <form id="publishing-profile-form" :data-profile-id="profile?.id || ''">
       <div class="field-row">
         <div class="form-field"><label for="profile-name">Nome do perfil</label><input id="profile-name" v-request-value="{value: profile?.name || ''}" name="name" maxlength="100" required placeholder="Bíblicos, GTA 6..."></div>
-        <div class="form-field"><label for="profile-source">Origem do perfil</label><select id="profile-source" v-request-value="{value: origin}" name="sourceType" :disabled="Boolean(profile?.watch_id)"><option value="">Definir depois</option><option value="gta6_pack">Site · Pack GTA 6</option><option value="google_drive">Pastas do Google Drive</option><option value="local">Pasta local</option></select></div>
+        <div class="form-field"><label for="profile-source">Origem do perfil</label><select id="profile-source" v-model="source" name="sourceType" :disabled="Boolean(profile?.watch_id)"><option value="">Definir depois</option><option value="gta6_pack">Site · Pack GTA 6</option><option value="google_drive">Pastas do Google Drive</option><option value="local">Pasta local</option></select></div>
       </div>
-      <div class="form-field" data-profile-source="google_drive" :hidden="origin !== 'google_drive'"><label for="profile-folders">Pastas do Drive (uma por linha)</label><textarea id="profile-folders" v-request-value="{value: folders}" name="folderUrls" :readonly="Boolean(profile?.watch_id)"></textarea><small>Inclui as subpastas e ignora arquivos repetidos.</small></div>
-      <div class="form-field" data-profile-source="local" :hidden="origin !== 'local'"><label for="profile-local">Pasta local</label><input id="profile-local" v-request-value="{value: origin === 'local' ? profile?.folder_url : state.connections.local.rootPath}" name="localPath" :readonly="Boolean(profile?.watch_id)"></div>
+      <div class="form-field" data-profile-source="google_drive" :hidden="source !== 'google_drive'"><label for="profile-folders">Pastas do Drive (uma por linha)</label><textarea id="profile-folders" v-request-value="{value: folders}" name="folderUrls" :readonly="Boolean(profile?.watch_id)"></textarea><small>Inclui as subpastas e ignora arquivos repetidos.</small></div>
+      <div class="form-field" data-profile-source="local" :hidden="source !== 'local'"><label for="profile-local">Pasta local</label><input id="profile-local" v-request-value="{value: origin === 'local' ? profile?.folder_url : state.connections.local.rootPath}" name="localPath" :readonly="Boolean(profile?.watch_id)"></div>
       <div class="field-row">
         <div class="form-field"><label for="profile-youtube">Canal YouTube</label><select id="profile-youtube" v-request-value="{value: profile?.youtube_id || ''}" name="youtubeId"><option value="">Vincular depois</option><option v-for="account in publishing.accounts.filter(account => account.identifier === 'youtube' && !account.disabled)" :key="account.id" :value="account.id">{{ account.name }}</option></select></div>
         <div class="form-field"><label for="profile-tiktok">Perfil TikTok</label><select id="profile-tiktok" v-request-value="{value: profile?.tiktok_profile_id || ''}" name="tiktokProfileId"><option value="">Vincular depois</option><option v-for="account in publishing.browserProfiles" :key="account.id" :value="account.id">{{ account.name }}</option></select></div>

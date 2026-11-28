@@ -2,15 +2,10 @@ import {mountConnectionsView} from './build/connections-view.js';
 
 let view=null;
 
-export function renderConnections(){
-  return '<div id="connections-panel"></div>';
-}
-
-export function updateConnections(state,channels,{icon}){
-  const root=document.querySelector('#connections-panel');if(!root)return;
+export function updateConnections(root,state,channels){
   if(view?.root!==root){
-    destroyConnections();view={root,...mountConnectionsView(root,state,channels,icon)};
-  }else view.update(state,channels,icon);
+    destroyConnections();view={root,...mountConnectionsView(root,state,channels)};
+  }else view.update(state,channels);
 }
 
 export function destroyConnections(){view?.destroy();view=null;}

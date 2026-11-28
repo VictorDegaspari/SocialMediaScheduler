@@ -2,7 +2,7 @@
 import ConnectionIcon from './ConnectionIcon.js';
 import StatusBadge from './StatusBadge.vue';
 import FolderSchedule from './FolderSchedule.vue';
-defineProps(['items', 'icon', 'date', 'scheduleApi', 'onScheduleChanged']);
+defineProps(['items', 'date', 'scheduleApi', 'onScheduleChanged']);
 function cadence(w){
   if(w.cadence==='daily')return (w.times||[]).join(' · ');
   const minutes=Number(w.interval_minutes)||0;
@@ -15,7 +15,7 @@ function cadence(w){
     <article v-for="w in items" :key="w.id" class="watch-card" :data-watch-id="w.id">
       <div class="watch-top">
         <div class="folder-icon">
-          <ConnectionIcon :name="w.source_type==='local'?'monitor':w.source_type==='gta6_pack'?'folder':'drive'" :icon="icon" />
+          <ConnectionIcon :name="w.source_type==='local'?'monitor':w.source_type==='gta6_pack'?'folder':'drive'" />
         </div>
         <div class="watch-info">
           <h3>
@@ -27,18 +27,18 @@ function cadence(w){
           <a v-else :href="'https://drive.google.com/drive/folders/' + encodeURIComponent(w.folder_id)" target="_blank" rel="noreferrer">
             Google Drive ·
             {{ w.folder_id.slice(-16) }}
-            <ConnectionIcon name="external" :icon="icon" />
+            <ConnectionIcon name="external" />
           </a>
         </div>
         <div class="watch-actions">
           <button class="icon-button" data-action="scan-watch" :data-id="w.id" :aria-label="'Verificar ' + (w.name) + ' agora'" title="Verificar agora">
-            <ConnectionIcon name="refresh" :icon="icon" />
+            <ConnectionIcon name="refresh" />
           </button>
           <button class="icon-button" data-action="edit-watch" :data-id="w.id" :aria-label="'Editar ' + (w.name)" title="Editar pasta">
-            <ConnectionIcon name="edit" :icon="icon" />
+            <ConnectionIcon name="edit" />
           </button>
           <button class="icon-button" data-action="toggle-watch" :data-id="w.id" :aria-label="(w.enabled?'Pausar':'Retomar') + ' ' + (w.name)" :title="w.enabled?'Pausar':'Retomar'">
-            <ConnectionIcon :name="w.enabled?'pause':'play'" :icon="icon" />
+            <ConnectionIcon :name="w.enabled?'pause':'play'" />
           </button>
         </div>
       </div>
@@ -100,12 +100,12 @@ function cadence(w){
   </div>
   <div v-else class="panel empty-state">
     <div class="empty-symbol">
-      <ConnectionIcon name="folder" :icon="icon" />
+      <ConnectionIcon name="folder" />
     </div>
     <h3>Sua primeira rotina começa com uma pasta</h3>
     <p>Adicione uma pasta local ou do Google Drive para organizar os envios.</p>
     <button class="button small" data-action="new-watch">
-      <ConnectionIcon name="plus" :icon="icon" />
+      <ConnectionIcon name="plus" />
       Adicionar minha primeira pasta
     </button>
   </div>

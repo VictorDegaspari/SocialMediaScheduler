@@ -36,7 +36,7 @@ export async function availableCutBytes(dir:string){
 
 // Run without a shell; terminate the process group, including FFmpeg children,
 // when downloads, transcription or renders exceed their resource budget.
-async function command(binary:string,args:string[],options:{cwd?:string;timeout:number;maxOutput?:number;diskError?:string}) {
+export async function command(binary:string,args:string[],options:{cwd?:string;timeout:number;maxOutput?:number;diskError?:string}) {
   const diskError=options.diskError;
   const directory=options.cwd??process.cwd();
   if(diskError&&await freeDiskBytes(directory)<=DISK_RESERVE_BYTES)throw new AppError(diskError);
@@ -182,10 +182,22 @@ export async function downloadCutSource(url:string,dir:string,requestedRange?:Cu
 }
 
 export async function transcribeCutSource(dir:string,language:string):Promise<Cue[]> {
+  return (await readCutSpeech(dir,language,false)).cues;
+}
+
+export function detectCutSpeech(dir:string) {
+  return readCutSpeech(dir,'auto',true);
+}
+
+async function readCutSpeech(dir:string,language:string,withLanguage:boolean):Promise<{language:string;cues:Cue[]}> {
   if(!/^(auto|[a-z]{2,3})$/.test(language))throw new AppError('Idioma de transcrição inválido.');
   try {
-    const output=await command(python(),[transcriptionScript,'--input',join(dir,'source.mp4'),'--language',language,'--cache-dir',join(dataDir,'speech-models')],{timeout:4*60*60_000,maxOutput:8*1024*1024});
-    const cues:unknown=JSON.parse(output);
+    const output=await command(python(),[transcriptionScript,'--input',join(dir,'source.mp4'),'--language',language,'--cache-dir',join(dataDir,'speech-models'),
+      ...(withLanguage?['--with-language']:[])],{timeout:4*60*60_000,maxOutput:8*1024*1024});
+    const parsed=JSON.parse(output);
+    const cues:unknown=withLanguage?parsed?.cues:parsed;
+    const detected=withLanguage?parsed?.language:language;
+    if(typeof detected!=='string'||(withLanguage&&!/^[a-z]{2,3}$/.test(detected)))throw new AppError('Não foi possível identificar o idioma da fala.');
     if(!Array.isArray(cues)||cues.length>50000||!cues.length)throw new AppError('Não foi encontrada fala suficiente para gerar legendas.');
     let previous=-1;
     for(const cue of cues){
@@ -196,7 +208,7 @@ export async function transcribeCutSource(dir:string,language:string):Promise<Cu
       })))throw new AppError('A transcrição retornou timestamps de palavras inválidos. Tente novamente.');
       previous=cue.start;
     }
-    return cues as Cue[];
+    return {language:detected,cues:cues as Cue[]};
   }catch(error){
     if(error instanceof AppError)throw error;
     throw new AppError('Não foi possível transcrever o áudio. Confira as dependências e o acesso ao download do modelo de fala; a primeira execução precisa de internet.');

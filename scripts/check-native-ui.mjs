@@ -28,7 +28,7 @@ const metadata={schemaVersion:1,ready:true,title:'Vídeo QA',description:'Descri
 const details=new Map([[yt,{id:yt,provider:'youtube',status:'review',hasMedia:true,payload:{metadata:structuredClone(metadata),channelName:'QA · Canal YouTube'}}],[tt,{id:tt,provider:'tiktok',status:'review',hasMedia:true,payload:{metadata:structuredClone(metadata),channelName:'QA · Conta TikTok'}}]]);
 function choose(id){const d=details.get(id);fixture.videos=[{id:'33333333-3333-4333-8333-333333333333',name:'video-qa.mp4',status:'sent',watch_name:'QA · Motor local',deliveries:[{id,provider:d.provider,status:d.status,engine:'local'}]}];}
 choose(yt);
-const video=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=90x160:d=1','-c:v','libx264','-pix_fmt','yuv420p','-movflags','frag_keyframe+empty_moov','-f','mp4','-']),approvals=[];
+const video=execFileSync('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=90x160:d=1','-c:v','libx264','-pix_fmt','yuv420p','-movflags','frag_keyframe+empty_moov','-f','mp4','-']),approvals=[],links=[];
 const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
 const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
@@ -36,9 +36,15 @@ await page.route('**/api/**',async route=>{
   const url=new URL(route.request().url()),path=url.pathname;
   if(path==='/api/state')return route.fulfill({json:fixture});
   if(path==='/api/integrations')return route.fulfill({json:[]});
-  const match=path.match(/^\/api\/native\/deliveries\/([^/]+)(?:\/(media|approve))?$/);
+  const match=path.match(/^\/api\/native\/deliveries\/([^/]+)(?:\/(media|approve|link))?$/);
   if(match){const d=details.get(match[1]);if(match[2]==='media')return route.fulfill({contentType:'video/mp4',body:video});
     if(match[2]==='approve'){assert.equal(route.request().headers()['x-watcher-request'],'1');const body=route.request().postDataJSON();approvals.push({id:d.id,body});d.status='pending';fixture.videos[0].deliveries[0].status='pending';return route.fulfill({json:{ok:true}});}
+    if(match[2]==='link'){
+      assert.equal(route.request().headers()['x-watcher-request'],'1');
+      links.push({id:d.id,body:route.request().postDataJSON()});
+      d.status='published';fixture.videos[0].deliveries[0].status='published';
+      return route.fulfill({json:{ok:true}});
+    }
     return route.fulfill({json:d});}
   throw new Error('Unexpected browser API request: '+path);
 });
@@ -61,6 +67,18 @@ try {
   await page.getByText('O JSON declara uso de IA.',{exact:false}).waitFor();
   await page.getByRole('checkbox',{name:/Autorizo o envio deste vídeo/}).check();await page.getByRole('button',{name:'Autorizar e enviar',exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector('#delivery-dialog').open);assert.equal(approvals.length,2);assert.equal(approvals[1].body.metadata.tiktok.madeWithAI,true);
+  details.get(yt).status='unknown';choose(yt);
+  await page.reload();
+  const link=page.getByRole('button',{name:'Vincular vídeo existente',exact:true});
+  const linkDialog=page.getByRole('dialog',{name:'Vincular vídeo do YouTube'});
+  await link.click();await linkDialog.getByLabel('ID do vídeo').fill('video-qa');
+  await linkDialog.getByRole('button',{name:'Cancelar'}).click();
+  await linkDialog.waitFor({state:'detached'});
+  assert.deepEqual(links,[]);
+  await link.click();await linkDialog.getByLabel('ID do vídeo').fill('  video-qa  ');
+  await linkDialog.getByRole('button',{name:'Vincular',exact:true}).click();
+  await linkDialog.waitFor({state:'detached'});
+  assert.deepEqual(links,[{id:yt,body:{postId:'video-qa'}}]);
   await page.getByRole('link',{name:'Conexões',exact:true}).click();
   await page.getByText('Configurações avançadas',{exact:true}).click();
   await page.getByRole('heading',{name:'Motor de publicação',exact:true}).waitFor();

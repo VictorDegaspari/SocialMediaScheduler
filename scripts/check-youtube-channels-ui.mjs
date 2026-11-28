@@ -22,6 +22,9 @@ const base = 'http://127.0.0.1:' + server.address().port;
 const id = 'UCabcdefghijklmnopqrstuv';
 const emptyId = 'UCabcdefghijklmnopqrstuw';
 const channels = [];
+const savedTiktoks = [];
+const trend = {url: 'https://www.tiktok.com/@example/video/7712345678901234567', title: 'Viral de teste', views: 1000000};
+const tiktokId = 'b04fa0f0-96a4-4fc5-a402-9dba0a51b3d2';
 const requests = [];
 const errors = [];
 const state = {
@@ -40,14 +43,48 @@ const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
 page.setDefaultTimeout(10_000);
 page.on('pageerror', error => errors.push(error.message));
 let failRefresh = true;
+let releaseTrends, releaseDub;
+const trendsReady = new Promise(resolve => { releaseTrends = resolve; });
+const dubReady = new Promise(resolve => { releaseDub = resolve; });
 await page.route('**/api/**', async route => {
   const request = route.request();
-  const path = new URL(request.url()).pathname;
+  const url = new URL(request.url());
+  const path = url.pathname;
   if (path === '/api/state') return route.fulfill({json: state});
   if (path === '/api/youtube-channels' && request.method() === 'GET') return route.fulfill({json: channels});
+  if (path === '/api/channel-videos' && request.method() === 'GET') {
+    assert.equal(url.searchParams.get('limit'), '6');
+    return route.fulfill({json: {items: savedTiktoks, pagination: {hasMore: false}, maxDubSeconds: 300, dubVersion: 2}});
+  }
+  if (path === '/api/channel-videos/trends') {
+    assert.equal(url.searchParams.get('market'), 'JP');
+    assert.equal(url.searchParams.get('days'), '30');
+    await trendsReady;
+    return route.fulfill({json: [trend]});
+  }
+  if (path === '/api/channel-videos/' + tiktokId + '/media/pt-br') {
+    return route.fulfill({status: 200, contentType: 'video/mp4', body: ''});
+  }
   assert.equal(request.headers()['x-watcher-request'], '1');
+  if (path === '/api/channel-videos/' + tiktokId + '/source') {
+    assert.equal(request.headers()['content-type'], 'video/mp4');
+    assert.equal(request.postDataBuffer().toString(), 'MP4 sintético');
+    Object.assign(savedTiktoks[0], {status: 'ready', duration: 18, error: null});
+    return route.fulfill({json: savedTiktoks[0]});
+  }
   const body = request.postDataJSON();
   requests.push({method: request.method(), path, body});
+  if (path === '/api/channel-videos') {
+    assert.deepEqual(body, {url: trend.url, title: trend.title});
+    const saved = {id: tiktokId, ...body, status: 'download_failed', duration: null, error: 'SSSTik indisponível.', dubVersion: null};
+    savedTiktoks.push(saved);
+    return route.fulfill({status: 202, json: saved});
+  }
+  if (path === '/api/channel-videos/' + tiktokId + '/dub') {
+    await dubReady;
+    savedTiktoks[0].status = 'dub_queued';
+    return route.fulfill({status: 202, json: savedTiktoks[0]});
+  }
   if (path === '/api/youtube-channels') {
     const followed = body.channel === '@somenteshorts'
       ? {id: emptyId, name: 'Somente Shorts', videos: []}
@@ -79,7 +116,43 @@ await page.route('**/api/**', async route => {
 
 try {
   await page.goto(base + '/#cuts');
-  await page.getByRole('link', {name: 'Canais do YouTube', exact: true}).click();
+  await page.getByRole('link', {name: 'Canais', exact: true}).click();
+  await page.getByRole('heading', {name: 'Canais', exact: true, level: 1}).waitFor();
+  const views = page.getByRole('group', {name: 'Seções de canais'});
+  const youtubeView = views.getByRole('button', {name: 'YouTube', exact: true});
+  const libraryView = views.getByRole('button', {name: 'Vídeos salvos', exact: true});
+  assert.equal(await page.getByLabel('Link de vídeo público do TikTok').isVisible(), true);
+  assert.equal(await page.getByRole('heading', {name: 'Canais do YouTube'}).isVisible(), false);
+  await page.getByLabel('País', {exact: true}).selectOption('JP');
+  await page.getByLabel('Período', {exact: true}).selectOption('30');
+  await page.getByRole('button', {name: 'Buscar vídeos virais'}).click();
+  await page.getByText('Consultando o ranking público do TikTok…', {exact: true}).waitFor();
+  releaseTrends();
+  await page.getByText('1.000.000 visualizações no período').waitFor();
+  await page.getByRole('button', {name: 'Baixar vídeo', exact: true}).click();
+  await page.getByText('SSSTik indisponível.').waitFor();
+  assert.equal(await libraryView.getAttribute('aria-pressed'), 'true');
+  await page.getByLabel('Importar MP4 original').setInputFiles({
+    name: 'original.mp4', mimeType: 'video/mp4', buffer: Buffer.from('MP4 sintético'),
+  });
+  await page.getByRole('link', {name: 'Baixar original'}).waitFor();
+  await page.getByRole('button', {name: 'Dublar em pt-BR'}).click();
+  await page.getByText('Enfileirando dublagem…', {exact: true}).waitFor();
+  releaseDub();
+  await page.getByText('Dublagem na fila', {exact: true}).waitFor();
+  Object.assign(savedTiktoks[0], {status: 'dubbed', dubVersion: 1});
+  await page.getByRole('link', {name: 'Baixar dublado'}).waitFor();
+  await page.getByRole('button', {name: 'Ouvir dublagem'}).click();
+  const preview = page.locator('video[aria-label="Prévia do vídeo dublado"]');
+  assert.match(await preview.getAttribute('src'), /\/media\/pt-br\?v=1$/);
+  await page.getByRole('button', {name: 'Refazer dublagem'}).click();
+  await page.getByText('Dublagem na fila', {exact: true}).waitFor();
+  assert.match(await preview.getAttribute('src'), /\/media\/pt-br\?v=1$/);
+  Object.assign(savedTiktoks[0], {status: 'dubbed', dubVersion: 2});
+  await page.waitForFunction(() => document.querySelector('.channel-tiktok-preview video')?.getAttribute('src')?.endsWith('?v=2'));
+  assert.equal(await page.getByRole('button', {name: 'Refazer dublagem'}).count(), 0);
+  await youtubeView.click();
+  assert.equal(await page.locator('video[aria-label="Prévia do vídeo dublado"]').count(), 0);
   await page.getByText('Nenhum canal acompanhado.', {exact: true}).waitFor();
   const channelInput = page.getByLabel('Canal do YouTube', {exact: true});
   const add = page.getByRole('button', {name: 'Acompanhar canal', exact: true});
@@ -114,6 +187,7 @@ try {
   assert.deepEqual(requests.filter(request => request.path === '/api/cuts'), [recordingRequest]);
   channels[0].needsRefresh = true;
   await page.reload();
+  await youtubeView.click();
   await page.getByText('YouTube temporariamente indisponível.', {exact: true}).waitFor();
   assert.equal(await page.locator('.youtube-channel-details[open]').count(), 0);
   await channel.locator('summary').click();
@@ -155,8 +229,10 @@ try {
   await page.getByRole('link', {name: 'Ver projeto na fila', exact: true}).click();
   await page.getByRole('heading', {name: 'Gerador de cortes', exact: true}).waitFor();
   assert.deepEqual(errors, []);
-  console.log('Canais do YouTube: cadastro, atualização, erro recuperável, corte explícito, remoção e layout móvel validados.');
+  console.log('Canais com tendências do TikTok, importação e dublagem, além dos fluxos do YouTube e layout móvel.');
 } finally {
+  releaseTrends();
+  releaseDub();
   await browser.close();
   await new Promise(done => server.close(done));
 }

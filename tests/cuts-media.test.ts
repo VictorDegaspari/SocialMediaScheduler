@@ -52,12 +52,13 @@ class Word:
 class Engine:
     def __init__(self, *args, **kwargs):
         assert kwargs['device'] == 'cpu' and kwargs['compute_type'] == 'int8'
+        assert kwargs['local_files_only'] == ('--with-language' in sys.argv)
     def transcribe(self, *args, **kwargs):
         assert kwargs['task'] == 'transcribe' and kwargs['word_timestamps'] and kwargs['vad_filter']
-        assert kwargs['language'] == 'pt' and 'initial_prompt' not in kwargs
-        return [types.SimpleNamespace(words=[Word(1.25,1.7,' Olá,'),Word(1.8,2.3,' você!'),Word(3,3.2,' Café'),Word(3.3,3.8,' com'),Word(3.9,4.2,' ação.')])], None
+        assert kwargs['language'] in ('pt', None) and 'initial_prompt' not in kwargs
+        return [types.SimpleNamespace(words=[Word(1.25,1.7,' Olá,'),Word(1.8,2.3,' você!'),Word(3,3.2,' Café'),Word(3.3,3.8,' com'),Word(3.9,4.2,' ação.')])], types.SimpleNamespace(language='pt')
 sys.modules['faster_whisper'] = types.SimpleNamespace(WhisperModel=Engine)
-sys.argv = ['transcribe-cuts.py','--input','source.mp4','--language','pt','--cache-dir','unused']
+sys.argv = ['transcribe-cuts.py','--input','source.mp4','--language','auto' if len(sys.argv)>1 else 'pt','--cache-dir','unused',*sys.argv[1:]]
 runpy.run_path('scripts/transcribe-cuts.py',run_name='__main__')
 `;
   const result=JSON.parse(execFileSync(process.env.CUTS_PYTHON||'python3',['-c',script],{encoding:'utf8'}));
@@ -65,4 +66,6 @@ runpy.run_path('scripts/transcribe-cuts.py',run_name='__main__')
   assert.deepEqual(result[0].words,[{start:1.25,end:1.7,text:'Olá,'},{start:1.8,end:2.3,text:'você!'}]);
   assert.equal(result[1].text,'Café com ação.');
   assert.equal(result[1].start,3);assert.equal(result[1].end,4.2);
+  const detected=JSON.parse(execFileSync(process.env.CUTS_PYTHON||'python3',['-c',script,'--with-language'],{encoding:'utf8'}));
+  assert.deepEqual(detected,{language:'pt',cues:result});
 });

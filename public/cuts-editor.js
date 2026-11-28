@@ -247,9 +247,15 @@ export function createCutEditor({clip,job,api}){
     caption.dataset.background=textStyle.background;caption.dataset.position=textStyle.position;
     if(cue){
       const words=cue.words,aligned=words?.length&&words.map(w=>w.text.trim()).join(' ').replace(/\s+/g,' ')===cue.text.replace(/\s+/g,' ').trim();
-      captionText.replaceChildren();
-      if(textStyle.animation==='karaoke'&&aligned){for(const [i,word] of words.entries()){const span=document.createElement('span');span.textContent=(i?' ':'')+word.text;span.style.color=time>=word.start&&time<word.end?textStyle.highlightColor:textStyle.color;captionText.append(span);}}
-      else captionText.textContent=cue.text;
+      const karaoke=textStyle.animation==='karaoke'&&aligned
+        ? words.map(word=>({text:word.text,active:time>=word.start&&time<word.end}))
+        : undefined;
+      const preview={text:cue.text,words:karaoke,color:textStyle.color,highlightColor:textStyle.highlightColor};
+      const previewKey=JSON.stringify(preview);
+      if(state.captionPreviewKey!==previewKey){
+        state.captionPreviewKey=previewKey;
+        drawWorkspace(captionText,'captionPreview',preview);
+      }
       const relative=Math.max(0,time-cue.start),remaining=Math.max(0,cue.end-time);
       captionText.style.opacity=textStyle.animation==='fade'?String(Math.min(1,relative/.12,remaining/.12)):textStyle.animation==='pop'?String(Math.min(1,relative/.04,remaining/.1)):'1';
       captionText.style.transform=textStyle.animation==='pop'?`scale(${.85+.15*Math.min(1,relative/.14)})`:'none';
@@ -429,6 +435,6 @@ export function createCutEditor({clip,job,api}){
         });if(body.captionStyle.enabled&&!body.captions.length)throw new Error('Adicione uma linha de legenda ou use a transcrição original.');for(const cue of body.captions)if(cue.end<=cue.start||cue.start<start||cue.end>end||!cue.text)throw new Error('Cada legenda precisa ter texto e tempos válidos dentro do intervalo do corte.');}
       return body;
     },
-    destroy(){state.alive=false;video.pause();cancelAnimationFrame(state.frame);if(state.videoFrame!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(state.videoFrame);observer.disconnect();splitEditor.destroy();controller.abort();clearWorkspace(cues);clearWorkspace(removals);clearWorkspace(replay);}
+    destroy(){state.alive=false;video.pause();cancelAnimationFrame(state.frame);if(state.videoFrame!==null&&video.cancelVideoFrameCallback)video.cancelVideoFrameCallback(state.videoFrame);observer.disconnect();splitEditor.destroy();controller.abort();clearWorkspace(cues);clearWorkspace(removals);clearWorkspace(replay);clearWorkspace(captionText);}
   };
 }

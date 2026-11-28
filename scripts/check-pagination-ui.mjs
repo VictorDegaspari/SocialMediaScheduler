@@ -123,6 +123,9 @@ async function poll(){
 try{
   await page.goto(base+'/#overview');await page.locator('.stat-number').first().waitFor();
   assert.deepEqual(await page.locator('.stat-number').allTextContents(),['45','80','222','07']);
+  const barHeights=await page.locator('.dashboard-column-track > span').evaluateAll(bars=>bars.map(bar=>bar.getBoundingClientRect().height));
+  assert(barHeights[1]>barHeights[0]&&barHeights[0]>barHeights[2]&&barHeights[2]>0,'bars use the global status counts');
+  assert.equal(await page.locator('.dashboard-ring-center strong').textContent(),'76%');
   checkQuery(calls[0]);await totals();
   for(const scope of scopes){
     await navigate(scope);const first=await assertRows(scope,0,20);
@@ -140,6 +143,7 @@ try{
   assert.equal(await pager('browser').locator('.pagination-label').textContent(),'Página 2','polling preserves the selected page');
   await page.locator('.sidebar [data-page="overview"]').click();await page.locator('.stat-number').first().waitFor();
   assert.deepEqual(await page.locator('.stat-number').allTextContents(),['45','80','222','07'],'overview totals remain global after browsing older pages');
+  assert.equal(await page.locator('.dashboard-ring-center strong').textContent(),'76%','the active ratio also remains global');
 
   await navigate('browser');failBrowserNext=true;
   const [failure]=await Promise.all([

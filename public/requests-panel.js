@@ -1,5 +1,6 @@
 import {mountRequestsView,requestViews as views} from './build/requests-view.js';
 import {readCommaSeparated,readEditorialOptions} from './build/editorial-view.js';
+import {drawWorkspace,clearWorkspace} from './build/workspace-view.js';
 import {nativeScheduleModel,readNativeSchedule} from './native-schedule.js';
 import {paginationView,resetPagination} from './pagination.js';
 
@@ -9,19 +10,18 @@ const editorialApi=(path,body)=>apiClient(path,body);
 const clearedForms=new Set();
 const schedule=nativeScheduleModel({},'request');
 
-export function renderRequests(state) {
-  return state.publishing?'<div id="requests-panel"></div>':'<p>Reinicie o serviço para carregar os pedidos.</p>';
-}
-
-export function updateRequests(state,{date}) {
-  const root=document.querySelector('#requests-panel');if(!root)return;
-  if(!state.publishing){destroyRequests();root.outerHTML=renderRequests(state);return;}
+export function updateRequests(root,state,date) {
+  if(!state.publishing){
+    destroyRequests();
+    drawWorkspace(root,'notice',{message:'Reinicie o serviço para carregar os pedidos.'});
+    return;
+  }
   const profileForm=root.querySelector('#publishing-profile-form');
   if(profileForm&&profileForm.dataset.profileId!==(editing||''))clearedForms.add('publishing-profile-form');
   const pagination={requests:paginationView(state.publishing.pagination?.requests,'requests'),actions:paginationView(state.publishing.pagination?.actions,'actions')};
   const next={state,editing,view,pagination,schedule,date,api:editorialApi};
-  if(mounted?.root!==root){destroyRequests();mounted={root,...mountRequestsView(root,next)};syncProfileSource();}
-  else void mounted.update(next,[...clearedForms]).then(syncProfileSource);
+  if(mounted?.root!==root){destroyRequests();clearWorkspace(root);mounted={root,...mountRequestsView(root,next)};}
+  else void mounted.update(next,[...clearedForms]);
   clearedForms.clear();
 }
 
@@ -30,11 +30,6 @@ export function destroyRequests(){mounted?.destroy();mounted=null;}
 function selectView(next) {
   if(!views.some(([id])=>id===next))return;
   view=next;mounted?.selectView(next);
-}
-
-function syncProfileSource() {
-  const source=document.querySelector('#profile-source');if(!source)return;
-  for(const field of document.querySelectorAll('[data-profile-source]'))field.hidden=field.dataset.profileSource!==source.value;
 }
 
 export function bindRequests({api,refresh,toast}) {
@@ -54,7 +49,6 @@ export function bindRequests({api,refresh,toast}) {
     else return;
     event.preventDefault();selectView(views[next][0]);document.querySelector('#requests-tab-'+view).focus();
   });
-  document.addEventListener('change',event=>{if(event.target.id==='profile-source')syncProfileSource();});
   document.addEventListener('invalid',event=>{
     if(!event.target.closest('#requests-panel'))return;
     for(let parent=event.target.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;

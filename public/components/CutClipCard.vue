@@ -5,7 +5,7 @@ import {computed} from 'vue';
 import {formatSourceTimecode, formatTimecode} from '../cuts-time.js';
 import CutPublications from './CutPublications.vue';
 import CutClipActions from './CutClipActions.vue';
-const props = defineProps(['clip', 'job', 'library', 'icon', 'safeLink']);
+const props = defineProps(['clip', 'job', 'library', 'safeLink']);
 const stamp = value => formatTimecode(Number(value) || 0, {precision: 2});
 const clipLabels = {queued:'Na fila',rendering:'Atualizando prévia',review:'Revisar corte',publishing:'Envio solicitado',posted:'Enviado',discarded:'Descartado',failed:'Precisa de atenção'};
 const deliveryLabels = {pending:'Na fila de envio',retry:'Aguardando nova tentativa',submitting:'Enviando ao YouTube',processing:'Processando no YouTube',published:'Publicado no YouTube',scheduled:'Agendado no YouTube',private:'Privado no YouTube',unlisted:'Não listado no YouTube',unknown:'Conferir envio no histórico',failed:'Confira o envio no histórico',cancelled:'Envio cancelado'};
@@ -22,7 +22,7 @@ const duration = computed(() => {const {clip} = props; return clip.output_durati
       </template>
       <template v-else>
         <div class="cuts-player-empty">
-          <ConnectionIcon :name="clip.status==='posted'?'check':'play'" :icon="icon" />
+          <ConnectionIcon :name="clip.status==='posted'?'check':'play'" />
           <span>
             <template v-if="clip.status==='posted'">Arquivo local indisponível</template>
             <template v-else>{{ clip.status==='discarded'?'Arquivo excluído':'A prévia aparecerá aqui' }}</template>
@@ -48,7 +48,7 @@ const duration = computed(() => {const {clip} = props; return clip.output_durati
         </div>
         <div class="cuts-library-meta">
           <span>
-            <ConnectionIcon name="clock" :icon="icon" />
+            <ConnectionIcon name="clock" />
             {{ formatTimecode(Math.round(duration)) }}
           </span>
           <span>{{ format==='video'?'Vídeo · 16:9':'Shorts · 9:16' }}</span>
@@ -56,13 +56,13 @@ const duration = computed(() => {const {clip} = props; return clip.output_durati
         <template v-if="clip.error">
           <p class="error-banner">{{ clip.error }}</p>
         </template>
-        <CutClipActions :clip="clip" :library="true" :icon="icon" />
+        <CutClipActions :clip="clip" :library="true" />
         <details class="cuts-library-details" :data-cut-details="clip.id">
           <summary>
             Detalhes e publicações
             <template v-if="clip.render_warnings?.length">
               <span class="cuts-library-alert">
-                <ConnectionIcon name="alert" :icon="icon" />
+                <ConnectionIcon name="alert" />
                 {{ clip.render_warnings.length }}
                 {{ clip.render_warnings.length===1?'aviso':'avisos' }}
               </span>
@@ -84,7 +84,7 @@ const duration = computed(() => {const {clip} = props; return clip.output_durati
           <template v-if="clip.release_url&&!clip.publications?.length">
             <a class="section-link" :href="safeLink(clip.release_url)" target="_blank" rel="noreferrer">
               Abrir no YouTube
-              <ConnectionIcon name="external" :icon="icon" />
+              <ConnectionIcon name="external" />
             </a>
           </template>
           <template v-if="clip.delivery_id">
@@ -128,12 +128,12 @@ const duration = computed(() => {const {clip} = props; return clip.output_durati
         <template v-if="clip.error">
           <p class="error-banner">{{ clip.error }}</p>
         </template>
-        <CutClipActions :clip="clip" :library="false" :icon="icon" />
+        <CutClipActions :clip="clip" :library="false" />
         <CutPublications :publications="clip.publications || []" :safe-link="safeLink" />
         <template v-if="clip.release_url&&!clip.publications?.length">
           <a class="section-link" :href="safeLink(clip.release_url)" target="_blank" rel="noreferrer">
             Abrir no YouTube
-            <ConnectionIcon name="external" :icon="icon" />
+            <ConnectionIcon name="external" />
           </a>
         </template>
         <template v-if="clip.delivery_id">

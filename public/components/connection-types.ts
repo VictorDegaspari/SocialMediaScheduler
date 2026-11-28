@@ -7,8 +7,6 @@ export type GoogleConnection = {configured: boolean; connected: boolean; clientI
 export type PostizConnection = {configured: boolean; baseUrl: string; youtubeSchedulingApproved: boolean};
 export type ConnectionChannel = {id: string; name: string; identifier: string; disabled: boolean};
 export type BrowserProfile = {id: string; profileSaved: boolean};
-export type ConnectionIconName = 'youtube' | 'tiktok' | 'drive' | 'monitor' | 'link';
-export type IconRenderer = (name: ConnectionIconName) => string;
 
 export type ConnectionsState = {
   connections: {

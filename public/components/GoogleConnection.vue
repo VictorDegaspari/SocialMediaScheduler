@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import ConnectionTitle from './ConnectionTitle.vue';
 import {vConnectionValue} from './connection-form.js';
-import type {GoogleConnection, IconRenderer} from './connection-types.js';
+import type {GoogleConnection} from './connection-types.js';
 
-defineProps<{connection: GoogleConnection; icon: IconRenderer}>();
+defineProps<{connection: GoogleConnection}>();
 </script>
 
 <template>
   <section class="panel connection-card connection-service" aria-label="Conexão Google Drive">
-    <ConnectionTitle name="Google Drive" icon-name="drive" :status="connection.connected ? 'Conectado' : connection.configured ? 'Autorização pendente' : 'Não conectado'" :tone="connection.connected ? '' : connection.configured ? 'amber' : 'gray'" :icon="icon" />
+    <ConnectionTitle name="Google Drive" icon-name="drive" :status="connection.connected ? 'Conectado' : connection.configured ? 'Autorização pendente' : 'Não conectado'" :tone="connection.connected ? '' : connection.configured ? 'amber' : 'gray'" />
     <p class="connections-description">Busque vídeos nas suas pastas do Drive.</p>
     <div class="connections-account"><p>{{ connection.connected ? 'Suas pastas podem ser usadas nos perfis e nas rotinas.' : connection.configured ? 'Autorize o acesso para buscar os vídeos das pastas cadastradas.' : 'Conecte sua conta para usar vídeos salvos na nuvem.' }}</p></div>
     <div class="connections-actions">

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import ConnectionTitle from './ConnectionTitle.vue';
 import {vConnectionValue} from './connection-form.js';
-import type {YoutubeConnection, IconRenderer} from './connection-types.js';
+import type {YoutubeConnection} from './connection-types.js';
 
-defineProps<{connection: YoutubeConnection; icon: IconRenderer}>();
+defineProps<{connection: YoutubeConnection}>();
 </script>
 
 <template>
   <section class="panel connection-card platform-card connection-service" data-platform="youtube" aria-label="Conexão YouTube">
-    <ConnectionTitle name="YouTube" icon-name="youtube" :status="connection.connected ? 'Conectado' : connection.configured ? 'Autorização pendente' : 'Não conectado'" :tone="connection.connected ? '' : connection.configured ? 'amber' : 'gray'" :icon="icon" />
+    <ConnectionTitle name="YouTube" icon-name="youtube" :status="connection.connected ? 'Conectado' : connection.configured ? 'Autorização pendente' : 'Não conectado'" :tone="connection.connected ? '' : connection.configured ? 'amber' : 'gray'" />
     <p class="connections-description">Publique e agende vídeos nos seus canais.</p>
     <div class="connections-account">
       <template v-if="connection.connected"><span>Canal conectado</span><strong>{{ connection.account || 'YouTube' }}</strong></template>

@@ -2,7 +2,7 @@
 import CollectionPagination from './CollectionPagination.vue';
 import CutImportButton from './CutImportButton.vue';
 import CutClipCard from './CutClipCard.vue';
-defineProps(["groups","pagination","scope","icon","safeLink","importFile"]);
+defineProps(["groups","pagination","scope","safeLink","importFile"]);
 </script>
 
 <template>
@@ -17,7 +17,7 @@ defineProps(["groups","pagination","scope","icon","safeLink","importFile"]);
     <div id="cut-library-jobs">
       <template v-if="groups.length">
         <div v-for="job in groups" :key="job.id" class="cuts-library-project" :data-cut-job="job.id">
-          <CutClipCard v-for="clip in job.clips" :key="clip.id" :clip="clip" :job="job" :library="true" :icon="icon" :safe-link="safeLink" />
+          <CutClipCard v-for="clip in job.clips" :key="clip.id" :clip="clip" :job="job" :library="true" :safe-link="safeLink" />
         </div>
       </template>
       <template v-else>

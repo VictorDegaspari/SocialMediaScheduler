@@ -1,14 +1,21 @@
 <script setup>
+import {ref} from 'vue';
 import ConnectionIcon from './ConnectionIcon.js';
 import StatusBadge from './StatusBadge.vue';
 import PackDefaultsFields from './PackDefaultsFields.vue';
 import NativeScheduleFields from './NativeScheduleFields.vue';
 import {nativeScheduleModel} from '../native-schedule.js';
 import CollectionPagination from './CollectionPagination.vue';
-const props = defineProps(['state', 'icon', 'date', 'pagination']);
+import {vRequestValue} from './request-form.js';
+const props = defineProps(['state', 'date', 'pagination']);
 const b=props.state.browser;
 const tokenReady=!!props.state.connections.playwrightMcp?.configured;
 const c = b?.config;
+const packDefaults = c?.packDefaults || {};
+const schedule = nativeScheduleModel(c?.nativeSchedule || {}, 'tiktok');
+const source = ref(c?.sourceType === 'gta6_pack' ? 'gta6_pack' : 'local');
+const mode = ref(c?.mode === 'native_schedule' ? 'native_schedule' : 'review');
+const cadence = ref(c?.cadence || 'daily');
 const a = b?.agent;
 const busy = Boolean(b?.active || a?.externalBusy);
 const canAct = tokenReady && b?.configured && a?.online && a.desktop && !busy;
@@ -27,7 +34,7 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
         <p class="subtitle">Escolha a pasta e os horários para preparar vídeos ou preencher o agendador do TikTok.</p>
       </div>
       <button class="button" data-browser-action="refresh">
-        <ConnectionIcon name="refresh" :icon="icon" />
+        <ConnectionIcon name="refresh" />
         Atualizar status
       </button>
     </div>
@@ -44,7 +51,7 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
         <p>Escolha um corte do aplicativo ou um vídeo de suas pastas, confira a prévia e publique no TikTok sem agendar.</p>
       </div>
       <button class="button primary" type="button" data-immediate-action="open" :disabled="!(tokenReady)">
-        <ConnectionIcon name="tiktok" :icon="icon" />
+        <ConnectionIcon name="tiktok" />
         Postar agora no TikTok
       </button>
     </section>
@@ -52,7 +59,7 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
       <section class="panel connection-card platform-card browser-status-card" data-platform="tiktok">
         <div class="connection-title">
           <div class="folder-icon">
-            <ConnectionIcon name="tiktok" :icon="icon" />
+            <ConnectionIcon name="tiktok" />
           </div>
           <h2>Sua conexão com o Chrome</h2>
           <StatusBadge :label="a.online?'Agente conectado':'Desconectado'" :tone="a.online?'':'gray'" />
@@ -79,7 +86,7 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
           <div class="notice browser-progress">
             <div class="browser-progress-heading">
               <template v-if="active.status==='pending'">
-                <ConnectionIcon name="clock" :icon="icon" />
+                <ConnectionIcon name="clock" />
               </template>
               <template v-else>
                 <span class="cuts-spinner" aria-hidden="true"></span>
@@ -113,11 +120,11 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
         </template>
         <div class="form-actions">
           <button class="button primary" data-browser-action="login" :disabled="!(canAct)">
-            <ConnectionIcon name="link" :icon="icon" />
+            <ConnectionIcon name="link" />
             Abrir login do TikTok
           </button>
           <button class="button" data-browser-action="run" :disabled="!(canAct&&a.profileSaved&&!state.scheduler.paused)">
-            <ConnectionIcon name="upload" :icon="icon" />
+            <ConnectionIcon name="upload" />
             {{ c.mode==='native_schedule'?'Agendar próximo agora':'Enviar próximo agora' }}
           </button>
           <template v-if="active">
@@ -133,21 +140,21 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
       <section class="panel connection-card browser-config-card">
         <div class="connection-title">
           <div class="folder-icon">
-            <ConnectionIcon name="clock" :icon="icon" />
+            <ConnectionIcon name="clock" />
           </div>
           <h2>Pasta e horários</h2>
         </div>
         <form id="browser-config-form">
           <div class="form-field">
             <label for="browser-mode">Como processar os vídeos?</label>
-            <select id="browser-mode" name="mode">
-              <option value="review" :selected="c.mode!=='native_schedule'">Preparar um vídeo para revisão no Chrome</option>
-              <option value="native_schedule" :selected="c.mode==='native_schedule'">Agendar lote dentro do TikTok Studio</option>
+            <select id="browser-mode" v-model="mode" name="mode">
+              <option value="review">Preparar um vídeo para revisão no Chrome</option>
+              <option value="native_schedule">Agendar lote dentro do TikTok Studio</option>
             </select>
             <small>O lote respeita os horários abaixo e só registra agendamentos confirmados pelo TikTok.</small>
           </div>
-          <div id="browser-native-fields" :hidden="!(c.mode==='native_schedule')">
-            <NativeScheduleFields :model="nativeScheduleModel(c.nativeSchedule||{}, 'tiktok')" prefix="tiktok" :revision="0" />
+          <div id="browser-native-fields" :hidden="mode !== 'native_schedule'">
+            <NativeScheduleFields :model="schedule" prefix="tiktok" :revision="0" />
             <p class="tip">
               Ative os envios automáticos para preencher o lote até o teto. Use JSON com
               <code>tiktok.privacyLevel: "PUBLIC_TO_EVERYONE"</code>
@@ -156,17 +163,17 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
           </div>
           <div class="form-field">
             <label for="browser-source">Origem dos vídeos do TikTok</label>
-            <select id="browser-source" name="sourceType">
-              <option value="local" :selected="c.sourceType!=='gta6_pack'">Pasta local</option>
-              <option value="gta6_pack" :selected="c.sourceType==='gta6_pack'">Site · Pack GTA 6</option>
+            <select id="browser-source" v-model="source" name="sourceType">
+              <option value="local">Pasta local</option>
+              <option value="gta6_pack">Site · Pack GTA 6</option>
             </select>
           </div>
-          <div id="browser-pack-fields" :hidden="!(c.sourceType==='gta6_pack')">
-            <PackDefaultsFields :value="c.packDefaults||{}" prefix="browser" />
+          <div id="browser-pack-fields" :hidden="source !== 'gta6_pack'">
+            <PackDefaultsFields :value="packDefaults" prefix="browser" />
           </div>
-          <div id="browser-local-folder" class="form-field" :hidden="c.sourceType==='gta6_pack'">
+          <div id="browser-local-folder" class="form-field" :hidden="source === 'gta6_pack'">
             <label for="browser-folder">Pasta dos vídeos para o TikTok</label>
-            <input id="browser-folder" name="folder" :value="c.folder" required maxlength="4096">
+            <input id="browser-folder" name="folder" v-request-value="{value: c.folder}" required maxlength="4096">
             <small>
               Use esta pasta ou uma subpasta:
               <code>{{ b.rootPath }}</code>
@@ -175,30 +182,30 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
           </div>
           <div class="form-field">
             <label for="browser-cadence">Quando enviar pelo navegador?</label>
-            <select id="browser-cadence" name="cadence">
-              <option value="daily" :selected="c.cadence==='daily'">Em horários fixos, todos os dias</option>
-              <option value="interval" :selected="c.cadence==='interval'">A cada intervalo</option>
+            <select id="browser-cadence" v-model="cadence" name="cadence">
+              <option value="daily">Em horários fixos, todos os dias</option>
+              <option value="interval">A cada intervalo</option>
             </select>
           </div>
-          <div id="browser-daily" class="form-field" :hidden="!(c.cadence==='daily')">
+          <div id="browser-daily" class="form-field" :hidden="cadence !== 'daily'">
             <label for="browser-times">Horários do TikTok</label>
-            <input id="browser-times" name="times" :value="c.times.join(', ')" placeholder="08:00, 20:00" required>
+            <input id="browser-times" name="times" v-request-value="{value: c.times.join(', ')}" placeholder="08:00, 20:00" required>
             <small>America/Sao_Paulo. Separe os horários por vírgula.</small>
           </div>
-          <div id="browser-interval" class="form-field" :hidden="!(c.cadence==='interval')">
+          <div id="browser-interval" class="form-field" :hidden="cadence !== 'interval'">
             <label for="browser-minutes">Intervalo entre envios (minutos)</label>
-            <input id="browser-minutes" name="intervalMinutes" type="number" min="1" max="43200" :value="c.intervalMinutes" required>
+            <input id="browser-minutes" name="intervalMinutes" type="number" min="1" max="43200" v-request-value="{value: c.intervalMinutes}" required>
             <small>Por exemplo, 120 para um vídeo a cada duas horas.</small>
           </div>
           <label class="checkbox">
-            <input type="checkbox" name="stripMetadata" :checked="c.stripMetadata">
+            <input type="checkbox" name="stripMetadata" v-request-value="{value: c.stripMetadata}">
             <span>
               Remover metadados do vídeo
               <small>Prepara uma cópia sem tags descritivas. Preserva o original, o JSON e a declaração de IA.</small>
             </span>
           </label>
           <label class="checkbox">
-            <input type="checkbox" name="enabled" :checked="c.enabled">
+            <input type="checkbox" name="enabled" v-request-value="{value: c.enabled}">
             <span>
               Ativar envios automáticos pelo navegador
               <small>No modo lote, preenche o agendador até o teto. No modo revisão, prepara um vídeo por oportunidade.</small>
@@ -206,7 +213,7 @@ const labels = {scheduled:'Agendado no TikTok',completed:'Publicado no TikTok',d
           </label>
           <div class="form-actions">
             <button class="button primary" type="submit" :disabled="!(tokenReady)">
-              <ConnectionIcon name="check" :icon="icon" />
+              <ConnectionIcon name="check" />
               Salvar rotina do navegador
             </button>
             <template v-if="c.enabled">

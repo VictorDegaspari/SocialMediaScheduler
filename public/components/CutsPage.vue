@@ -5,7 +5,7 @@ import CollectionPagination from './CollectionPagination.vue';
 import CutImportButton from './CutImportButton.vue';
 import CutJobCard from './CutJobCard.vue';
 import CutsDependencies from './CutsDependencies.vue';
-const props = defineProps(['jobs','dependencies','pagination','icon','date','safeLink','createDisabled','view','importFile']);
+const props = defineProps(['jobs','dependencies','pagination','date','safeLink','createDisabled','view','importFile']);
 const tabs = [
   {id: 'projects', label: 'Projetos', href: '#cuts'},
   {id: 'create', label: 'Criar novos cortes', href: '#cuts/new'},
@@ -44,7 +44,7 @@ function navigateTabs(event) {
       <div class="form-actions">
         <CutImportButton :import-file="importFile" />
         <button class="button" data-cuts-action="refresh">
-          <ConnectionIcon name="refresh" :icon="icon" />
+          <ConnectionIcon name="refresh" />
           Atualizar
         </button>
       </div>
@@ -58,7 +58,7 @@ function navigateTabs(event) {
       <section class="panel cuts-create">
         <div class="connection-title">
           <div class="folder-icon">
-            <ConnectionIcon name="youtube" :icon="icon" />
+            <ConnectionIcon name="youtube" />
           </div>
           <h2>Criar novos cortes</h2>
         </div>
@@ -97,7 +97,7 @@ function navigateTabs(event) {
           </div>
           <div class="form-actions">
             <button class="button primary" type="submit" :disabled="createDisabled">
-              <ConnectionIcon name="play" :icon="icon" />
+              <ConnectionIcon name="play" />
               Gerar cortes
             </button>
             <button class="button" type="submit" data-cut-source-range :disabled="createDisabled">Escolher trecho</button>
@@ -133,7 +133,7 @@ function navigateTabs(event) {
     <section v-show="view === 'projects'" id="cuts-view-projects" ref="projects" role="tabpanel" aria-labelledby="cuts-tab-projects">
       <div id="cuts-jobs">
         <template v-if="jobs.length">
-          <CutJobCard v-for="job in jobs" :key="job.id" :job="job" :icon="icon" :date="date" :safe-link="safeLink" />
+          <CutJobCard v-for="job in jobs" :key="job.id" :job="job" :date="date" :safe-link="safeLink" />
         </template>
         <template v-else>
           <div class="panel empty-state cuts-empty">

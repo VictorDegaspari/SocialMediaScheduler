@@ -8,13 +8,6 @@ export function bindBrowserPanel({api,refresh,toast}){
     return {sourceType:f.get('sourceType'),packDefaults:readPackDefaults(form),mode:f.get('mode'),nativeSchedule:readNativeSchedule(form),folder:f.get('folder'),cadence:f.get('cadence'),intervalMinutes:Number(f.get('intervalMinutes')),
       times:String(f.get('times')).split(',').map(v=>v.trim()).filter(Boolean),stripMetadata:f.has('stripMetadata'),enabled:f.has('enabled')};
   }
-  document.addEventListener('change',event=>{
-    if(event.target.id==='browser-source'){const pack=event.target.value==='gta6_pack';document.querySelector('#browser-pack-fields').hidden=!pack;document.querySelector('#browser-local-folder').hidden=pack;}
-    if(event.target.id==='browser-mode')document.querySelector('#browser-native-fields').hidden=event.target.value!=='native_schedule';
-    if(event.target.id!=='browser-cadence')return;
-    document.querySelector('#browser-daily').hidden=event.target.value!=='daily';
-    document.querySelector('#browser-interval').hidden=event.target.value!=='interval';
-  });
   document.addEventListener('submit',async event=>{
     if(event.target.id!=='browser-config-form')return;
     event.preventDefault();const button=event.target.querySelector('[type="submit"]');button.disabled=true;

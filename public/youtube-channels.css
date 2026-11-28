@@ -3,7 +3,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-12) var(--space-20);
-  padding: var(--space-20);
+  padding: var(--space-12) var(--space-16);
 }
 
 .youtube-follow-form {
@@ -21,7 +21,7 @@
 .youtube-channels-list {
   display: grid;
   gap: var(--space-12);
-  margin: var(--space-20) 0 0;
+  margin: var(--space-12) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -47,7 +47,7 @@
   flex-basis: 100%;
   min-width: 0;
   border-top: 1px solid var(--border);
-  padding-top: var(--space-12);
+  padding-top: var(--space-8);
 }
 
 .youtube-channel-details summary {
@@ -67,7 +67,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-8) var(--space-16);
-  padding: var(--space-12) 0;
+  padding: var(--space-8) 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -94,3 +94,100 @@
 .youtube-channels-error {
   margin: var(--space-12) 0;
 }
+
+.page-head.channels-heading, .channel-follow-section > .page-head {
+  margin-bottom: var(--space-12);
+}
+
+.channel-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  margin-bottom: var(--space-16);
+}
+
+.channel-navigation .button {
+  min-height: 38px;
+}
+
+.channel-navigation .button[aria-pressed="true"] {
+  box-shadow: inset 0 -2px var(--focus), var(--shadow-control);
+}
+
+.channel-tiktok-panel {
+  padding: var(--space-16);
+}
+
+.channel-tiktok-panel h2 {
+  margin-bottom: var(--space-12);
+}
+
+.channel-tiktok-form,
+.channel-tiktok-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-8) var(--space-12);
+}
+
+.channel-tiktok-form .form-field {
+  flex: 1 1 145px;
+  min-width: 0;
+  margin: 0;
+}
+
+.channel-tiktok-form .channel-tiktok-url {
+  flex-basis: 320px;
+}
+
+.channel-tiktok-actions .button {
+  min-height: 34px;
+  padding: var(--space-6) var(--space-10);
+}
+
+.channel-tiktok-import {
+  margin-top: var(--space-12);
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--border);
+}
+
+.channel-tiktok-detail,
+.channel-tiktok-link {
+  display: block;
+  font-size: var(--text-xs);
+}
+
+.channel-tiktok-detail, .channel-empty { color: var(--muted); }
+.channel-video-status { margin-block: var(--space-4); }
+.channel-empty, .channel-tiktok-panel > .workspace-progress, .channel-follow-section > .workspace-progress {
+  margin-top: var(--space-12);
+}
+.channel-tiktok-panel > .error-banner { margin-top: var(--space-12); }
+
+.channel-tiktok-link {
+  color: var(--green);
+  text-decoration: underline;
+  margin-top: var(--space-12);
+}
+
+.channel-tiktok-preview {
+  flex-basis: 100%;
+}
+
+.channel-tiktok-preview video {
+  display: block;
+  max-width: 100%;
+  max-height: 55vh;
+  background: #151a17;
+  border-radius: var(--radius-md);
+}
+
+.channel-file-label {
+  cursor: pointer;
+}
+
+.channel-tiktok-actions input:focus-visible + label {
+  outline: 3px solid #a9c47c;
+  outline-offset: 3px;
+}
+

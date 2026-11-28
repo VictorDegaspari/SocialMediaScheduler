@@ -11,20 +11,28 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--language", default="pt")
     parser.add_argument("--cache-dir", required=True)
+    parser.add_argument("--with-language", action="store_true")
     args = parser.parse_args()
     from faster_whisper import WhisperModel
 
     # Small is a practical multilingual CPU default. The first run downloads
     # the model once into the application's persistent volume.
-    model = WhisperModel(
-        os.environ.get("CUTS_WHISPER_MODEL", "small"),
+    model_name = os.environ.get("CUTS_WHISPER_MODEL", "small")
+    model_options = dict(
         device="cpu",
         compute_type="int8",
         cpu_threads=max(1, min(8, int(os.environ.get("CUTS_CPU_THREADS", "4")))),
         num_workers=1,
         download_root=args.cache_dir,
     )
-    segments, _ = model.transcribe(
+    try:
+        model = WhisperModel(model_name, local_files_only=args.with_language, **model_options)
+    except (OSError, RuntimeError):
+        # The dubbing flow can reuse an offline cache or resume a partial download.
+        if not args.with_language or os.path.isdir(model_name):
+            raise
+        model = WhisperModel(model_name, **model_options)
+    segments, info = model.transcribe(
         args.input,
         task="transcribe",
         language=None if args.language == "auto" else args.language,
@@ -65,7 +73,8 @@ def main():
             if word.word.rstrip().endswith((".", "?", "!", "…")):
                 flush()
         flush()
-    json.dump(cues, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+    result = {"language": info.language, "cues": cues} if args.with_language else cues
+    json.dump(result, sys.stdout, ensure_ascii=False, separators=(",", ":"))
 
 
 if __name__ == "__main__":

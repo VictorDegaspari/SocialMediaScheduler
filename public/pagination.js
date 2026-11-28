@@ -50,10 +50,20 @@ export function bindPagination({refresh,toast}){
       const cursor=button.dataset.paginationCursor;if(!cursor)return;
       current.cursors=current.cursors.slice(0,current.index+1);current.cursors.push(cursor);current.index++;
     }
-    busy=true;button.disabled=true;
+    const label=button.parentElement.querySelector('.pagination-label');
+    const previousLabel=label?.textContent;
+    busy=true;button.disabled=true;button.setAttribute('aria-busy','true');
+    if(label)label.textContent='Carregando página…';
     try{
       if(await refresh(true)===false)throw new Error('Não foi possível carregar esta página. Tente novamente.');
     }catch(error){histories.set(scope,before);toast?.(error.message,true);}
-    finally{busy=false;if(button.isConnected)button.disabled=false;}
+    finally{
+      busy=false;
+      if(button.isConnected){
+        button.disabled=false;
+        button.removeAttribute('aria-busy');
+        if(label?.isConnected)label.textContent=previousLabel;
+      }
+    }
   });
 }

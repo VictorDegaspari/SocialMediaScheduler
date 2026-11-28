@@ -4,7 +4,7 @@ import {computed} from 'vue';
 import {formatSourceTimecode, formatTimecode} from '../cuts-time.js';
 import CutReplayGraph from './CutReplayGraph.vue';
 import CutClipCard from './CutClipCard.vue';
-const props = defineProps(['job', 'icon', 'date', 'safeLink']);
+const props = defineProps(['job', 'date', 'safeLink']);
 const clips = computed(() => props.job.clips || []);
 const stamp = value => formatTimecode(Number(value) || 0, {precision: 2});
 const jobLabels = {queued:'Na fila',downloading:'Baixando vídeo',transcribing:'Transcrevendo áudio',selecting:'Selecionando momentos',rendering:'Gerando prévias',review:'Pronto para revisar',failed:'Precisa de atenção',discarded:'Descartado',completed:'Concluído'};
@@ -52,7 +52,7 @@ const jobLabels = {queued:'Na fila',downloading:'Baixando vídeo',transcribing:'
     <template v-if="clips.length">
       <div class="cuts-clips">
         <template v-for="c in clips" :key="c.id">
-          <CutClipCard :clip="c" :job="job" :icon="icon" :safe-link="safeLink" />
+          <CutClipCard :clip="c" :job="job" :safe-link="safeLink" />
         </template>
       </div>
     </template>

@@ -2,9 +2,9 @@
 import {computed, onMounted, useTemplateRef} from 'vue';
 import ConnectionTitle from './ConnectionTitle.vue';
 import {vConnectionValue} from './connection-form.js';
-import type {BrowserProfile, PlaywrightMcpConnection, IconRenderer} from './connection-types.js';
+import type {BrowserProfile, PlaywrightMcpConnection} from './connection-types.js';
 
-const props = defineProps<{profiles: BrowserProfile[]; mcp: PlaywrightMcpConnection; icon: IconRenderer}>();
+const props = defineProps<{profiles: BrowserProfile[]; mcp: PlaywrightMcpConnection}>();
 const saved = computed(() => props.profiles.filter(profile => profile.profileSaved).length);
 const setup = useTemplateRef<HTMLDetailsElement>('setup');
 onMounted(() => {if (setup.value) setup.value.open = !props.mcp.configured;});
@@ -12,7 +12,7 @@ onMounted(() => {if (setup.value) setup.value.open = !props.mcp.configured;});
 
 <template>
   <section class="panel connection-card platform-card connection-service" data-platform="tiktok" aria-label="Conexão TikTok">
-    <ConnectionTitle name="TikTok" icon-name="tiktok" :status="!mcp.configured ? 'Token obrigatório' : saved ? 'Sessão salva' : profiles.length ? 'Login necessário' : 'Não configurado'" :tone="!mcp.configured ? 'amber' : saved ? '' : profiles.length ? 'amber' : 'gray'" :icon="icon" />
+    <ConnectionTitle name="TikTok" icon-name="tiktok" :status="!mcp.configured ? 'Token obrigatório' : saved ? 'Sessão salva' : profiles.length ? 'Login necessário' : 'Não configurado'" :tone="!mcp.configured ? 'amber' : saved ? '' : profiles.length ? 'amber' : 'gray'" />
     <p class="connections-description">Use seu login no Chrome para publicar vídeos.</p>
     <div class="connections-account"><span>Contas no navegador</span><strong>{{ profiles.length ? `${saved} de ${profiles.length} com sessão salva` : 'Nenhuma conta adicionada' }}</strong></div>
     <div class="connections-actions"><a class="button primary" href="#browser">Abrir TikTok navegador</a><a class="button" href="#requests" data-requests-view="accounts">Gerenciar contas</a></div>
