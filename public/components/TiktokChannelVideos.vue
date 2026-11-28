@@ -2,6 +2,7 @@
 import {onBeforeUnmount, onMounted, reactive, ref} from 'vue';
 import type {TikTokTrend, TikTokTrendQuery} from '../../src/channel-video-source.js';
 import type {SavedChannelVideo} from '../../src/channel-videos.js';
+import type {DubVoice} from '../../src/channel-dubbing.js';
 import type {PageMetadata} from '../../src/pagination.js';
 import WorkspaceProgress from './WorkspaceProgress.vue';
 
@@ -17,6 +18,8 @@ type Library = {
   pagination: PageMetadata;
   maxDubSeconds: number;
   dubVersion: number;
+  dubVoices: {id: DubVoice; label: string}[];
+  defaultDubVoice: DubVoice;
 };
 const path = '/channel-videos';
 const markets = {US: 'Estados Unidos', JP: 'Japão', VN: 'Vietnã', TH: 'Tailândia', ID: 'Indonésia'};
@@ -49,6 +52,7 @@ const listError = ref('');
 const loadingList = ref(false);
 const cursors = ref<string[]>([]);
 const changing = reactive(new Map<string, string>());
+const voiceSelections = reactive(new Map<string, DubVoice>());
 const previewId = ref<string>();
 let active = true;
 let timer: ReturnType<typeof setInterval>;
@@ -57,7 +61,10 @@ let listPending = false;
 
 const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Não foi possível concluir a operação.';
 const mediaUrl = (id: string, variant: 'original' | 'pt-br') => '/api' + path + '/' + id + '/media/' + variant;
-const dubbedUrl = (video: SavedChannelVideo) => mediaUrl(video.id, 'pt-br') + '?v=' + video.dubVersion;
+const dubbedUrl = (video: SavedChannelVideo) => mediaUrl(video.id, 'pt-br') + '?v=' + video.dubVersion +
+  (video.dubVoice ? '&voice=' + video.dubVoice : '');
+const selectedDubVoice = (video: SavedChannelVideo) =>
+  voiceSelections.get(video.id) ?? video.requestedDubVoice ?? video.dubVoice ?? library.value?.defaultDubVoice;
 const isUpdating = (status: SavedChannelVideo['status']) =>
   ['download_queued', 'downloading', 'dub_queued', 'dubbing'].includes(status);
 
@@ -140,12 +147,19 @@ async function updateVideo(video: SavedChannelVideo, action: 'retry' | 'dub' | '
       });
       if (!response.ok) throw new Error((await response.json()).error);
     } else {
-      await props.api(endpoint, {});
+      await props.api(endpoint, action === 'dub' ? {voice: selectedDubVoice(video)} : {});
+      if (action === 'dub') voiceSelections.delete(video.id);
     }
     if (active) await loadLibrary(cursors.value, true);
   } catch (cause) {
     if (active) props.toast(message(cause), true);
   } finally { changing.delete(video.id); }
+}
+
+function selectDubVoice(id: string, event: Event) {
+  const value = (event.currentTarget as HTMLSelectElement).value;
+  const voice = library.value?.dubVoices.find(option => option.id === value);
+  if (voice) voiceSelections.set(id, voice.id);
 }
 
 function importOriginal(video: SavedChannelVideo, event: Event) {
@@ -224,6 +238,7 @@ function togglePreview(id: string) {
                 red: video.status === 'download_failed' || video.status === 'dub_failed',
               }">{{ statuses[video.status] }}</span>
             </div>
+            <small v-if="video.dubVoice" class="channel-tiktok-detail">Voz disponível · {{ library.dubVoices.find(voice => voice.id === video.dubVoice)?.label }}</small>
             <p v-if="video.error" class="channel-tiktok-detail">{{ video.error }}</p>
             <small v-if="video.duration && video.duration > library.maxDubSeconds" class="channel-tiktok-detail">A dublagem aceita até 5 minutos.</small>
           </div>
@@ -240,8 +255,15 @@ function togglePreview(id: string) {
               {{ previewId === video.id ? 'Fechar prévia' : 'Ouvir dublagem' }}
             </button>
             <a v-if="video.dubVersion !== null" class="button primary" :href="dubbedUrl(video) + '&download=1'">Baixar dublado</a>
+            <div v-if="video.duration <= library.maxDubSeconds" class="form-field channel-dub-voice">
+              <label :for="'dub-voice-' + video.id">Voz da dublagem</label>
+              <select :id="'dub-voice-' + video.id" :value="selectedDubVoice(video)"
+                :disabled="changing.has(video.id) || isUpdating(video.status)" @change="selectDubVoice(video.id, $event)">
+                <option v-for="voice in library.dubVoices" :key="voice.id" :value="voice.id">{{ voice.label }}</option>
+              </select>
+            </div>
             <button v-if="video.duration <= library.maxDubSeconds && (video.status === 'ready' || video.status === 'dub_failed' ||
-              (video.status === 'dubbed' && video.dubVersion !== library.dubVersion))"
+              (video.status === 'dubbed' && (video.dubVersion !== library.dubVersion || video.dubVoice !== selectedDubVoice(video))))"
               class="button" :class="{primary: video.dubVersion === null}" type="button" :disabled="changing.has(video.id)" @click="updateVideo(video, 'dub')">
               {{ video.status === 'ready' ? 'Dublar em pt-BR' : video.status === 'dubbed' ? 'Refazer dublagem' : 'Repetir dublagem' }}
             </button>

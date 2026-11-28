@@ -10,19 +10,23 @@ import {validateVideo} from './media.js';
 import {cursorFields, keysetClause, pageLimit, paginateRows, parsePagination} from './pagination.js';
 import {resolveTikTokVideo, tiktokSourceKey, tiktokTrendQuery, tiktokTrends} from './channel-video-source.js';
 import {downloadChannelVideo, writeChannelVideo} from './ssstik-download.js';
-import {dubChannelVideo, dubFilename, dubVersion, maxDubSeconds} from './channel-dubbing.js';
+import {defaultDubVoice, dubChannelVideo, dubFilename, dubVersion, dubVoices, maxDubSeconds, type DubVoice} from './channel-dubbing.js';
 
 export type ChannelVideoStatus = 'download_queued' | 'downloading' | 'download_failed' | 'ready' |
   'dub_queued' | 'dubbing' | 'dub_failed' | 'dubbed';
 export type SavedChannelVideo = {
   id: string; url: string; title: string | null; status: ChannelVideoStatus;
   duration: number | null; error: string | null; dubVersion: number | null;
+  dubVoice: DubVoice | null; requestedDubVoice: DubVoice | null;
 };
-const fields = 'id,url,title,status,duration,error,dub_version AS "dubVersion"';
+const fields = 'id,url,title,status,duration,error,dub_version AS "dubVersion",dub_voice AS "dubVoice",requested_dub_voice AS "requestedDubVoice"';
 const directory = (id: string) => join(dataDir, 'channel-videos', id);
 const apiPath = '/api/channel-videos';
 const idSchema = z.string().uuid();
 const newVideo = z.object({url: z.string().trim().min(1).max(500), title: z.string().trim().min(1).max(500).optional()}).strict();
+const voiceSchema = z.enum(dubVoices.map(voice => voice.id));
+const dubRequest = z.object({voice: voiceSchema.optional()}).strict();
+const dubMediaQuery = z.object({v: z.coerce.number().int().min(1).max(dubVersion).optional(), voice: voiceSchema.optional()});
 const missing = () => new AppError('Vídeo não encontrado.', 404);
 const hasFile = async (path: string) => (await stat(path).catch(() => null))?.isFile() ?? false;
 
@@ -95,13 +99,14 @@ export class ChannelVideoWorker {
 
   private async processJob(db: PoolClient, job: SavedChannelVideo) {
     const dub = job.status === 'dub_queued' || job.status === 'dubbing';
+    const voice = job.requestedDubVoice ?? defaultDubVoice;
     await db.query('UPDATE channel_videos SET status=$2,error=NULL,updated_at=now() WHERE id=$1',
       [job.id, dub ? 'dubbing' : 'downloading']);
     let duration = job.duration;
     try {
       if (dub) {
         const folder = directory(job.id);
-        if (!await hasFile(join(folder, dubFilename(dubVersion)))) await this.operations.dub(folder, duration!);
+        if (!await hasFile(join(folder, dubFilename(dubVersion, voice)))) await this.operations.dub(folder, duration!, voice);
       } else {
         duration = (await saveDownload(job, this.operations)).duration;
       }
@@ -111,8 +116,9 @@ export class ChannelVideoWorker {
         [job.id, dub ? 'dub_failed' : 'download_failed', error]);
       return;
     }
-    await db.query('UPDATE channel_videos SET status=$2,duration=$3,dub_version=$4,updated_at=now() WHERE id=$1',
-      [job.id, dub ? 'dubbed' : 'ready', duration, dub ? dubVersion : null]);
+    await db.query(`UPDATE channel_videos SET status=$2,duration=$3,dub_version=$4,dub_voice=$5,
+      requested_dub_voice=NULL,updated_at=now() WHERE id=$1`,
+      [job.id, dub ? 'dubbed' : 'ready', duration, dub ? dubVersion : null, dub ? voice : null]);
   }
 }
 
@@ -130,7 +136,7 @@ channelVideoRoutes.get(apiPath, async (req, res) => {
     SELECT ${fields},${cursorFields('created_at', 'id')} FROM channel_videos WHERE true
     ${keysetClause(page, 'created_at', 'id', values)} ORDER BY created_at DESC,id DESC ${pageLimit(page, values)}
   `, values);
-  res.json({...paginateRows(rows, page), maxDubSeconds, dubVersion});
+  res.json({...paginateRows(rows, page), maxDubSeconds, dubVersion, dubVoices, defaultDubVoice});
 });
 
 channelVideoRoutes.post(apiPath, async (req, res) => {
@@ -156,15 +162,23 @@ channelVideoRoutes.post(apiPath + '/:id/retry', async (req, res) => {
 
 channelVideoRoutes.post(apiPath + '/:id/dub', async (req, res) => {
   const id = idSchema.parse(req.params.id);
+  const {voice} = dubRequest.parse(req.body ?? {});
   const {rows: [current]} = await pool.query<SavedChannelVideo>(`SELECT ${fields} FROM channel_videos WHERE id=$1`, [id]);
   if (!current) throw missing();
   if (!current.duration) throw new AppError('Baixe ou importe o MP4 antes de dublar.', 409);
   if (current.duration > maxDubSeconds) throw new AppError('A dublagem aceita vídeos de até 5 minutos.');
   const {rows: [updated]} = await pool.query<SavedChannelVideo>(`
-    UPDATE channel_videos SET status='dub_queued',error=NULL,updated_at=now()
-    WHERE id=$1 AND (status IN ('ready','dub_failed') OR (status='dubbed' AND dub_version<$2)) RETURNING ${fields}
-  `, [id, dubVersion]);
-  res.status(202).json(updated ?? current);
+    UPDATE channel_videos SET status='dub_queued',error=NULL,updated_at=now(),
+      requested_dub_voice=COALESCE($3,requested_dub_voice,dub_voice,$4)
+    WHERE id=$1 AND (status IN ('ready','dub_failed') OR (status='dubbed' AND
+      (dub_version<$2 OR dub_voice IS DISTINCT FROM COALESCE($3,dub_voice,$4)))) RETURNING ${fields}
+  `, [id, dubVersion, voice, defaultDubVoice]);
+  if (updated) return res.status(202).json(updated);
+  const {rows: [latest]} = await pool.query<SavedChannelVideo>(`SELECT ${fields} FROM channel_videos WHERE id=$1`, [id]);
+  if (!latest) throw missing();
+  if (voice && (latest.status === 'dub_queued' || latest.status === 'dubbing') &&
+    voice !== (latest.requestedDubVoice ?? defaultDubVoice)) throw new AppError('Aguarde a dublagem que já está em andamento.', 409);
+  return res.status(202).json(latest);
 });
 
 channelVideoRoutes.post(apiPath + '/:id/source', async (req, res) => {
@@ -204,9 +218,16 @@ channelVideoRoutes.get(apiPath + '/:id/media/:variant', async (req, res, next) =
   const variant = z.enum(['original', 'pt-br']).parse(req.params.variant);
   const {rows: [video]} = await pool.query<SavedChannelVideo>(`SELECT ${fields} FROM channel_videos WHERE id=$1`, [id]);
   const dubbed = variant === 'pt-br';
-  if (!video || (dubbed ? video.dubVersion === null : !video.duration)) throw missing();
-  const path = join(directory(id), dubbed ? dubFilename(video.dubVersion!) : 'source.mp4');
+  if (!video?.duration) throw missing();
+  let filename = 'source.mp4';
+  if (dubbed) {
+    if (video.dubVersion === null) throw missing();
+    const selection = dubMediaQuery.parse(req.query);
+    const voice = selection.voice ?? (selection.v === undefined ? video.dubVoice : null) ?? defaultDubVoice;
+    filename = dubFilename(selection.v ?? video.dubVersion, voice);
+  }
+  const path = join(directory(id), filename);
   if (!await hasFile(path)) throw new AppError('O arquivo MP4 não está disponível.', 404);
-  if (req.query.download === '1') res.attachment('tiktok-' + id + (dubbed ? '-pt-br.mp4' : '-original.mp4'));
+  if (req.query.download === '1') res.attachment('tiktok-' + id + '-' + (dubbed ? filename.replace(/-v\d+/, '') : 'original.mp4'));
   res.sendFile(path, {cacheControl: false}, error => { if (error) next(error); });
 });

@@ -6,8 +6,20 @@ import {command, detectCutSpeech, type Cue} from './cuts-media.js';
 import {validateVideo} from './media.js';
 
 export const maxDubSeconds = 300;
-export const dubVersion = 2;
-export const dubFilename = (version: number) => version === 1 ? 'pt-br.mp4' : `pt-br-v${version}.mp4`;
+export const dubVersion = 3;
+export const dubVoices = [
+  {id: 'pf_dora', label: 'Dora (feminina)'},
+  {id: 'pm_alex', label: 'Alex (masculina)'},
+  {id: 'pm_santa', label: 'Santa (masculina)'},
+] as const;
+export type DubVoice = typeof dubVoices[number]['id'];
+export const defaultDubVoice = dubVoices[0].id;
+
+export function dubFilename(version: number, voice: DubVoice = defaultDubVoice) {
+  if (version === 1) return 'pt-br.mp4';
+  const suffix = voice === defaultDubVoice ? '' : '-' + voice;
+  return `pt-br-v${version}${suffix}.mp4`;
+}
 const diskError = 'Espaço insuficiente para gerar a dublagem.';
 const dubScript = resolve('scripts/dub-channel-video.py');
 const durationsSchema = z.object({durations: z.array(z.number().positive().max(120))});
@@ -42,9 +54,9 @@ function groupSpeech(cues: Cue[], duration: number, language: string): Speech[] 
   });
 }
 
-async function synthesizeLocally(work: string, language: string, phrases: Speech[]): Promise<number[]> {
+async function synthesizeLocally(work: string, language: string, phrases: Speech[], voice: DubVoice): Promise<number[]> {
   const input = join(work, 'input.json');
-  await writeFile(input, JSON.stringify({language, phrases: phrases.map(({text, end, earliest}) => ({text, window: end - earliest}))}));
+  await writeFile(input, JSON.stringify({language, voice, phrases: phrases.map(({text, end, earliest}) => ({text, window: end - earliest}))}));
   try {
     const output = await command(process.env.CUTS_PYTHON || 'python3', [
       dubScript, '--input', input, '--cache-dir', join(dataDir, 'dubbing-models'),
@@ -101,26 +113,27 @@ async function renderDub(source: string, output: string, duration: number, track
   ], {timeout: 10 * 60_000, diskError});
 }
 
-export async function dubChannelVideo(directory: string, duration: number, dependencies = {
+export async function dubChannelVideo(directory: string, duration: number, voice: DubVoice = defaultDubVoice, dependencies = {
   transcribe: detectCutSpeech, synthesize: synthesizeLocally,
 }) {
   const workspace = join(directory, 'dub-work');
-  const work = join(workspace, `v${dubVersion}`);
+  const versionWork = join(workspace, `v${dubVersion}`);
+  const work = join(versionWork, voice);
   await mkdir(work, {recursive: true});
-  const {language, phrases} = await cached(join(work, 'transcript.json'), async () => {
+  const {language, phrases} = await cached(join(versionWork, 'transcript.json'), async () => {
     const transcript = await dependencies.transcribe(directory);
     return {language: transcript.language, phrases: groupSpeech(transcript.cues, duration, transcript.language)};
   });
   if (!phrases.length) throw new AppError('Não foi encontrada fala suficiente para dublar este vídeo.');
   if (phrases.length > 180) throw new AppError('Há falas demais neste vídeo. Use um trecho menor para dublar.');
-  const durations = await cached(join(work, 'durations.json'), () => dependencies.synthesize(work, language, phrases));
+  const durations = await cached(join(work, 'durations.json'), () => dependencies.synthesize(work, language, phrases, voice));
   const tracks = phrases.map(({start, earliest, end}, index) =>
     ({file: join(work, index + '.wav'), start, earliest, end, duration: durations[index]}));
   const part = join(directory, 'pt-br.part');
   try {
     await renderDub(join(directory, 'source.mp4'), part, duration, tracks);
     await validateVideo(part, 'any', duration + 0.5);
-    await rename(part, join(directory, dubFilename(dubVersion)));
+    await rename(part, join(directory, dubFilename(dubVersion, voice)));
   } catch {
     throw new AppError('Não foi possível montar o vídeo dublado. Confira o espaço em disco e tente novamente.');
   } finally {

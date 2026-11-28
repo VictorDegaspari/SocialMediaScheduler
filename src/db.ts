@@ -92,7 +92,10 @@ export async function initDb() {
       created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
     );
     ALTER TABLE channel_videos ADD COLUMN IF NOT EXISTS dub_version smallint;
+    ALTER TABLE channel_videos ADD COLUMN IF NOT EXISTS dub_voice text;
+    ALTER TABLE channel_videos ADD COLUMN IF NOT EXISTS requested_dub_voice text;
     UPDATE channel_videos SET dub_version=1 WHERE status='dubbed' AND dub_version IS NULL;
+    UPDATE channel_videos SET dub_voice='pf_dora' WHERE dub_version=2 AND dub_voice IS NULL;
     CREATE INDEX IF NOT EXISTS channel_videos_library ON channel_videos(created_at DESC,id DESC);
     CREATE INDEX IF NOT EXISTS channel_videos_queue ON channel_videos(updated_at,id)
       WHERE status IN ('download_queued','downloading','dub_queued','dubbing');

@@ -3,3 +3,12 @@ faster-whisper==1.2.1
 yt-dlp[default]==2026.10.26
 kokoro-onnx==0.6.1
 sentencepiece==0.2.3
+
+# Keep the pre-release Portuguese normalizer and its language data on tested versions.
+text2spoken[pt]==0.0.2a178
+tugalex==2.5.9a1
+linguatag==0.13.1a4
+numtag==0.50.0a3
+ovos-number-parser==0.31.7a1
+ovos-date-parser==0.41.6a2
+chronologia==0.48.6a2

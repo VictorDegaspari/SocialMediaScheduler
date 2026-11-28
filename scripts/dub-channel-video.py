@@ -4,34 +4,13 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import sys
-import unicodedata
 import wave
 
+from dub_portuguese import spoken_portuguese
 
 TRANSLATOR = ("VoragoStudios/gct-m2m100-1.2b-ct2", "d99c594e2558b39d3fafa6f0e5375fa982dbcc3a")
 KOKORO = ("ExNihilus/kokoro-onnx", "9f31909e46def1b473b178c9fd330e00801fa1f4")
-VOICE = "pf_dora"
-BRAZILIAN_TERMS = {
-    "actualmente": "atualmente", "autocarro": "ônibus", "autocarros": "ônibus",
-    "casa de banho": "banheiro", "casas de banho": "banheiros",
-    "ecrã": "tela", "ecrãs": "telas", "equipa": "equipe", "equipas": "equipes",
-    "ficheiro": "arquivo", "ficheiros": "arquivos", "pequeno-almoço": "café da manhã",
-    "funcionou como um charme": "funcionou direitinho", "funciona como um charme": "funciona direitinho",
-    "telemóvel": "celular", "telemóveis": "celulares", "utilizador": "usuário",
-    "utilizadores": "usuários",
-}
-SPOKEN_INITIALISMS = {
-    "CPF": "cê pê efe", "CNPJ": "cê ene pê jota", "DNA": "dê ene á",
-    "GPS": "gê pê esse", "IA": "i á", "PDF": "pê dê efe", "USB": "u esse bê",
-}
-TERMS = re.compile(r"\b(?:" + "|".join(BRAZILIAN_TERMS) + r")\b", re.IGNORECASE)
-INITIALISMS = re.compile(r"\b(?:" + "|".join(SPOKEN_INITIALISMS) + r")\b")
-PROGRESSIVE = re.compile(
-    r"\b(estou|estás|está|estamos|estão|estava|estavam|estávamos|estive|esteve|estiveram) a "
-    r"([a-záéíóúâêôãõç]+(?:ar|er|ir)|pôr|ir)\b", re.IGNORECASE
-)
 
 
 class DubbingError(Exception):
@@ -79,30 +58,7 @@ def translate(language: str, phrases: list[str], cache: Path, threads: int) -> l
     return translated
 
 
-def spoken_portuguese(text: str) -> str:
-    def term(match: re.Match) -> str:
-        original = match[0]
-        brazilian = BRAZILIAN_TERMS[original.lower()]
-        return brazilian.capitalize() if original[0].isupper() else brazilian
-
-    def gerund(match: re.Match) -> str:
-        verb = match[2].lower()
-        return match[1] + " " + ({"pôr": "pondo", "ir": "indo"}.get(verb) or verb[:-1] + "ndo")
-
-    text = unicodedata.normalize("NFC", text)
-    text = TERMS.sub(term, text)
-    text = PROGRESSIVE.sub(gerund, text)
-    text = INITIALISMS.sub(lambda match: SPOKEN_INITIALISMS[match[0]], text)
-    text = re.sub(r"(?:—|\s+–\s+)", ", ", text)
-    text = re.sub(r"(?<=[a-zà-ÿ]{2})([.!?])(?=[A-ZÀ-Þ])", r"\1 ", text)
-    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
-    text = " ".join(text.split()).strip(" ,;:")
-    if text and text[-1].isalnum():
-        text += "."
-    return text
-
-
-def synthesize(phrases: list[str], windows: list[float], cache: Path, work: Path, threads: int) -> list[float]:
+def synthesize(phrases: list[str], windows: list[float], cache: Path, work: Path, threads: int, profile: str) -> list[float]:
     import numpy as np
     import onnxruntime
     from kokoro_onnx import Kokoro
@@ -117,11 +73,11 @@ def synthesize(phrases: list[str], windows: list[float], cache: Path, work: Path
     durations = []
     for index, (phrase, window) in enumerate(zip(phrases, windows, strict=True)):
         text = spoken_portuguese(phrase)
-        samples, rate = voice.create(text, VOICE, lang="pt-br")
+        samples, rate = voice.create(text, profile, lang="pt-br")
         duration = len(samples) / rate
         if duration > window * 1.08:
             # Keep the model close to its natural speaking rate before final timeline fitting.
-            faster, _ = voice.create(text, VOICE, lang="pt-br", speed=min(1.18, duration / window))
+            faster, _ = voice.create(text, profile, lang="pt-br", speed=min(1.18, duration / window))
             if 0 < len(faster) < len(samples):
                 samples = faster
         if not len(samples):
@@ -150,7 +106,8 @@ def main() -> None:
     try:
         phrases = request["phrases"]
         text = translate(request["language"], [phrase["text"] for phrase in phrases], args.cache_dir, threads)
-        durations = synthesize(text, [phrase["window"] for phrase in phrases], args.cache_dir, args.input.parent, threads)
+        durations = synthesize(text, [phrase["window"] for phrase in phrases], args.cache_dir,
+                               args.input.parent, threads, request["voice"])
         result = {"durations": durations}
     except DubbingError as error:
         result = {"error": str(error)}

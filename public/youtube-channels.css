@@ -145,6 +145,16 @@
   padding: var(--space-6) var(--space-10);
 }
 
+.channel-dub-voice.form-field {
+  gap: var(--space-4);
+  margin: 0;
+}
+
+.channel-dub-voice.form-field select {
+  min-height: 34px;
+  padding: var(--space-6) var(--space-8);
+}
+
 .channel-tiktok-import {
   margin-top: var(--space-12);
   padding-top: var(--space-12);

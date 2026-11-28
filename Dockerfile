@@ -21,6 +21,8 @@ COPY public ./public
 COPY --from=build /app/public/build ./public/build
 COPY scripts/transcribe-cuts.py ./scripts/transcribe-cuts.py
 COPY scripts/dub-channel-video.py ./scripts/dub-channel-video.py
+COPY scripts/dub_portuguese.py ./scripts/dub_portuguese.py
+COPY scripts/dubbing ./scripts/dubbing
 RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node
 EXPOSE 4317

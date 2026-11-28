@@ -54,7 +54,11 @@ await page.route('**/api/**', async route => {
   if (path === '/api/youtube-channels' && request.method() === 'GET') return route.fulfill({json: channels});
   if (path === '/api/channel-videos' && request.method() === 'GET') {
     assert.equal(url.searchParams.get('limit'), '6');
-    return route.fulfill({json: {items: savedTiktoks, pagination: {hasMore: false}, maxDubSeconds: 300, dubVersion: 2}});
+    return route.fulfill({json: {items: savedTiktoks, pagination: {hasMore: false}, maxDubSeconds: 300, dubVersion: 3,
+      defaultDubVoice: 'pf_dora', dubVoices: [
+        {id: 'pf_dora', label: 'Dora (feminina)'}, {id: 'pm_alex', label: 'Alex (masculina)'}, {id: 'pm_santa', label: 'Santa (masculina)'},
+      ],
+    }});
   }
   if (path === '/api/channel-videos/trends') {
     assert.equal(url.searchParams.get('market'), 'JP');
@@ -76,13 +80,14 @@ await page.route('**/api/**', async route => {
   requests.push({method: request.method(), path, body});
   if (path === '/api/channel-videos') {
     assert.deepEqual(body, {url: trend.url, title: trend.title});
-    const saved = {id: tiktokId, ...body, status: 'download_failed', duration: null, error: 'SSSTik indisponível.', dubVersion: null};
+    const saved = {id: tiktokId, ...body, status: 'download_failed', duration: null, error: 'SSSTik indisponível.',
+      dubVersion: null, dubVoice: null, requestedDubVoice: null};
     savedTiktoks.push(saved);
     return route.fulfill({status: 202, json: saved});
   }
   if (path === '/api/channel-videos/' + tiktokId + '/dub') {
     await dubReady;
-    savedTiktoks[0].status = 'dub_queued';
+    Object.assign(savedTiktoks[0], {status: 'dub_queued', requestedDubVoice: body.voice});
     return route.fulfill({status: 202, json: savedTiktoks[0]});
   }
   if (path === '/api/youtube-channels') {
@@ -136,21 +141,32 @@ try {
     name: 'original.mp4', mimeType: 'video/mp4', buffer: Buffer.from('MP4 sintético'),
   });
   await page.getByRole('link', {name: 'Baixar original'}).waitFor();
+  const voice = page.getByRole('combobox', {name: 'Voz da dublagem'});
+  assert.equal(await voice.inputValue(), 'pf_dora');
+  await voice.selectOption({label: 'Alex (masculina)'});
   await page.getByRole('button', {name: 'Dublar em pt-BR'}).click();
   await page.getByText('Enfileirando dublagem…', {exact: true}).waitFor();
   releaseDub();
   await page.getByText('Dublagem na fila', {exact: true}).waitFor();
-  Object.assign(savedTiktoks[0], {status: 'dubbed', dubVersion: 1});
+  assert.equal(await voice.isDisabled(), true);
+  assert.equal(savedTiktoks[0].requestedDubVoice, 'pm_alex');
+  Object.assign(savedTiktoks[0], {status: 'dubbed', dubVersion: 3, dubVoice: 'pm_alex', requestedDubVoice: null});
   await page.getByRole('link', {name: 'Baixar dublado'}).waitFor();
   await page.getByRole('button', {name: 'Ouvir dublagem'}).click();
   const preview = page.locator('video[aria-label="Prévia do vídeo dublado"]');
-  assert.match(await preview.getAttribute('src'), /\/media\/pt-br\?v=1$/);
+  assert.match(await preview.getAttribute('src'), /\/media\/pt-br\?v=3&voice=pm_alex$/);
+  assert.equal(await page.getByRole('button', {name: 'Refazer dublagem'}).count(), 0);
+  await voice.selectOption({label: 'Santa (masculina)'});
   await page.getByRole('button', {name: 'Refazer dublagem'}).click();
   await page.getByText('Dublagem na fila', {exact: true}).waitFor();
-  assert.match(await preview.getAttribute('src'), /\/media\/pt-br\?v=1$/);
-  Object.assign(savedTiktoks[0], {status: 'dubbed', dubVersion: 2});
-  await page.waitForFunction(() => document.querySelector('.channel-tiktok-preview video')?.getAttribute('src')?.endsWith('?v=2'));
+  assert.match(await preview.getAttribute('src'), /\/media\/pt-br\?v=3&voice=pm_alex$/);
+  assert.equal(savedTiktoks[0].requestedDubVoice, 'pm_santa');
+  Object.assign(savedTiktoks[0], {status: 'dubbed', dubVoice: 'pm_santa', requestedDubVoice: null});
+  await page.waitForFunction(() => document.querySelector('.channel-tiktok-preview video')?.getAttribute('src')?.endsWith('&voice=pm_santa'));
   assert.equal(await page.getByRole('button', {name: 'Refazer dublagem'}).count(), 0);
+  await page.setViewportSize({width: 320, height: 844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.setViewportSize({width: 1440, height: 1000});
   await youtubeView.click();
   assert.equal(await page.locator('video[aria-label="Prévia do vídeo dublado"]').count(), 0);
   await page.getByText('Nenhum canal acompanhado.', {exact: true}).waitFor();
